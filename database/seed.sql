@@ -632,10 +632,16 @@ UNLOCK TABLES;
 -- --------------------------------------------------------
 -- Dumping data for table `users`
 -- --------------------------------------------------------
-LOCK TABLES `users` WRITE;
-INSERT INTO `users` (`id`, `username`, `emp_id`, `email`, `password_hash`, `full_name`, `phone`, `role_id`, `avatar`, `department`, `production_unit_id`, `warehouse_id`, `shop_id`, `reports_access`, `is_active`, `must_change_password`, `last_login`, `created_at`, `updated_at`) VALUES
-('1', 'admin', 'EMP-001', 'admin@grm.com', '$2y$10$WXeV9abEWzjWySfggVzhTOp4j7pzF7UuFNUJ1lrLbWe9NDL7Cz7UC', 'System Administrator', '9876543210', '1', NULL, 'ADMINISTRATION', NULL, NULL, NULL, 'ALL', '1', '0', '2026-09-23 16:47:40', '2026-09-23 16:46:57', '2026-09-23 16:47:40');
-UNLOCK TABLES;
+INSERT INTO `users` (`username`, `emp_id`, `email`, `password_hash`, `full_name`, `phone`, `role_id`, `department`, `production_unit_id`, `warehouse_id`, `shop_id`, `channel_id`, `reports_access`, `is_active`, `must_change_password`, `last_login`, `created_at`, `updated_at`, `avatar`)
+SELECT 'admin', 'EMP-001', 'admin@grm.com', '$2y$10$WXeV9abEWzjWySfggVzhTOp4j7pzF7UuFNUJ1lrLbWe9NDL7Cz7UC', 'System Administrator', '9876543210', `roles`.`id`, 'ADMINISTRATION', NULL, NULL, NULL, NULL, 'ALL', 1, 0, '2026-09-23 16:47:40', '2026-09-23 16:46:57', '2026-09-23 16:47:40', NULL
+FROM `roles`
+WHERE `roles`.`slug` = 'super-admin'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM `users` AS `existing_admin`
+      WHERE `existing_admin`.`username` = 'admin'
+         OR `existing_admin`.`email` = 'admin@grm.com'
+  );
 
 -- --------------------------------------------------------
 -- Dumping data for table `products`

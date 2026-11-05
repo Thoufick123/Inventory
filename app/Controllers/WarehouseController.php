@@ -2737,14 +2737,20 @@ class WarehouseController {
                 }
                 $tagCode = trim($it['tag_code'] ?? '');
                 $packInfo = Database::fetchOne(
-                    "SELECT pv.qr_code, pv.series_start_code, pv.series_end_code, pv.qr_type, pv.pack_quantity,
+                    "SELECT pv.qr_code, pv.sku, p.code AS product_code, p.qr_code_prefix,
+                            (SELECT scan_qr.qr_code
+                             FROM warehouse_qr_codes scan_qr
+                             WHERE scan_qr.variant_id = pv.id
+                               AND UPPER(scan_qr.qr_code) = UPPER(?)
+                             LIMIT 1) AS stored_qr_code,
+                            pv.series_start_code, pv.series_end_code, pv.qr_type, pv.pack_quantity,
                             pv.is_complementary, p.is_complementary AS product_is_complementary,
                             wc.category_type
                      FROM product_variants pv
                      JOIN products p ON p.id = pv.product_id
                      LEFT JOIN warehouse_categories wc ON wc.id = p.warehouse_category_id
                      WHERE pv.id = ?",
-                    [$variantId]
+                    [$tagCode, $variantId]
                 );
                 $isPackProduct = $packInfo && (
                     strtoupper((string)($packInfo['qr_type'] ?? '')) === 'SERIES_BATCH'
@@ -2755,9 +2761,23 @@ class WarehouseController {
                     || !empty($packInfo['product_is_complementary'])
                 );
                 $isPackMasterTag = $isPackProduct && $tagCode !== ''
-                    && !empty($packInfo['qr_code'])
-                    && strcasecmp($tagCode, trim((string)$packInfo['qr_code'])) === 0;
-                if ($qty > 1 && !$isPackMasterTag) {
+                    && (
+                        (!empty($packInfo['qr_code'])
+                            && strcasecmp($tagCode, trim((string)$packInfo['qr_code'])) === 0)
+                        || !empty($packInfo['stored_qr_code'])
+                    );
+                $isVariantIdentifier = false;
+                foreach (array_filter([
+                    trim((string)($packInfo['sku'] ?? '')),
+                    trim((string)($packInfo['product_code'] ?? '')),
+                    trim((string)($packInfo['qr_code_prefix'] ?? '')),
+                ]) as $identifier) {
+                    if ($tagCode !== '' && strcasecmp($tagCode, $identifier) === 0) {
+                        $isVariantIdentifier = true;
+                        break;
+                    }
+                }
+                if ($qty > 1 && !$isPackMasterTag && !$isVariantIdentifier) {
                     $tagsArray = array_filter(array_map('trim', explode(',', $tagCode)));
                     if (count($tagsArray) < $qty) {
                         $vInfo = Database::fetchOne("
@@ -2789,7 +2809,10 @@ class WarehouseController {
                         $tagCode = implode(', ', $tagsArray);
                     }
                 }
-                foreach (array_filter(array_map('trim', explode(',', $tagCode))) as $tag) {
+                $tagsToValidate = ($isVariantIdentifier && !$isPackMasterTag)
+                    ? []
+                    : array_filter(array_map('trim', explode(',', $tagCode)));
+                foreach ($tagsToValidate as $tag) {
                     $allocatedTag = $this->findAllocatedWarehouseTag($tag);
                     if ($allocatedTag) {
                         $reason = (int)$allocatedTag['variant_id'] !== $variantId
@@ -3033,8 +3056,13 @@ class WarehouseController {
                     OR p.code = ?
                     OR p.qr_code_prefix = ?
                     OR (pv.id = ? AND ? > 0)
+                    OR EXISTS (
+                        SELECT 1 FROM warehouse_qr_codes scan_qr
+                        WHERE scan_qr.variant_id = pv.id
+                          AND UPPER(scan_qr.qr_code) = UPPER(?)
+                    )
                  LIMIT 1",
-                [$c, $c, $c, $c, is_numeric($c) ? (int)$c : 0, is_numeric($c) ? (int)$c : 0]
+                [$c, $c, $c, $c, is_numeric($c) ? (int)$c : 0, is_numeric($c) ? (int)$c : 0, $c]
             );
             if ($variant) break;
         }
@@ -3222,7 +3250,7 @@ class WarehouseController {
         }
 
         // Resolve individual tags within a configured series range before trying fuzzy product matching.
-        if (!$variant && preg_match('/^(.+?)(\d+)$/', trim($extractedTag), $scannedSeriesTag)) {
+        if (!$variant && preg_match('/^(.*?)(\d+)$/', trim($extractedTag), $scannedSeriesTag)) {
             $rangeStockLocationClause = $warehouseId > 0 ? ' AND available_sb.location_id = ?' : '';
             $rangeParams = [];
             if ($warehouseId > 0) {
@@ -3263,14 +3291,12 @@ class WarehouseController {
             );
 
             foreach ($rangeVariants as $rangeVariant) {
-                if (!preg_match('/^(.+?)(\d+)$/', trim((string)$rangeVariant['series_start_code']), $rangeStart)
-                    || !preg_match('/^(.+?)(\d+)$/', trim((string)$rangeVariant['series_end_code']), $rangeEnd)) {
+                if (!preg_match('/^(.*?)(\d+)$/', trim((string)$rangeVariant['series_start_code']), $rangeStart)
+                    || !preg_match('/^(.*?)(\d+)$/', trim((string)$rangeVariant['series_end_code']), $rangeEnd)) {
                     continue;
                 }
                 if (strcasecmp($rangeStart[1], $rangeEnd[1]) !== 0
-                    || strcasecmp($rangeStart[1], $scannedSeriesTag[1]) !== 0
-                    || strlen($rangeStart[2]) !== strlen($rangeEnd[2])
-                    || strlen($rangeStart[2]) !== strlen($scannedSeriesTag[2])) {
+                    || strcasecmp($rangeStart[1], $scannedSeriesTag[1]) !== 0) {
                     continue;
                 }
 
@@ -3502,18 +3528,40 @@ class WarehouseController {
             || !empty($damageScanInfo['product_is_complementary']);
         $isPackProduct = $isSeriesProduct || $isComplementaryProduct
             || (int)($damageScanInfo['pack_quantity'] ?? 1) > 1;
+        $storedWarehouseQr = !empty($extractedTag) ? Database::fetchOne(
+            "SELECT qr_code FROM warehouse_qr_codes
+             WHERE variant_id = ? AND UPPER(qr_code) = UPPER(?)
+             LIMIT 1",
+            [(int)$variant['id'], trim((string)$extractedTag)]
+        ) : null;
         $isMasterPackScan = $isPackProduct
-            && !empty($damageScanInfo['qr_code'])
-            && strcasecmp(trim((string)$extractedTag), trim((string)$damageScanInfo['qr_code'])) === 0;
+            && (
+                (!empty($damageScanInfo['qr_code'])
+                    && strcasecmp(trim((string)$extractedTag), trim((string)$damageScanInfo['qr_code'])) === 0)
+                || !empty($storedWarehouseQr['qr_code'])
+            );
         $packQuantity = max(1, (int)($damageScanInfo['pack_quantity'] ?? 1));
         if ($isSeriesProduct && $packQuantity === 1
-            && preg_match('/^(.+?)(\d+)$/', trim((string)($damageScanInfo['series_start_code'] ?? '')), $seriesStart)
-            && preg_match('/^(.+?)(\d+)$/', trim((string)($damageScanInfo['series_end_code'] ?? '')), $seriesEnd)
+            && preg_match('/^(.*?)(\d+)$/', trim((string)($damageScanInfo['series_start_code'] ?? '')), $seriesStart)
+            && preg_match('/^(.*?)(\d+)$/', trim((string)($damageScanInfo['series_end_code'] ?? '')), $seriesEnd)
             && strcasecmp($seriesStart[1], $seriesEnd[1]) === 0
-            && strlen($seriesStart[2]) === strlen($seriesEnd[2])) {
+        ) {
             $packQuantity = max(1, (int)$seriesEnd[2] - (int)$seriesStart[2] + 1);
         }
         $damageQuantity = $isMasterPackScan ? $packQuantity : 1;
+        $variantIdentifiers = array_filter([
+            trim((string)($variant['sku'] ?? '')),
+            trim((string)($variant['product_code'] ?? '')),
+            trim((string)($variant['qr_code_prefix'] ?? '')),
+        ]);
+        $isVariantIdentifierScan = false;
+        foreach ($variantIdentifiers as $identifier) {
+            if (strcasecmp(trim((string)$extractedTag), $identifier) === 0) {
+                $isVariantIdentifierScan = true;
+                break;
+            }
+        }
+        $tagIsUnique = $isMasterPackScan || !$isVariantIdentifierScan;
 
         // Fetch Stock Balances in this warehouse
         $stockSql = "SELECT 
@@ -3544,7 +3592,7 @@ class WarehouseController {
             exit;
         }
 
-        if (!empty($extractedTag)) {
+        if (!empty($extractedTag) && (!$isVariantIdentifierScan || $isMasterPackScan)) {
             $allocatedTag = $this->findAllocatedWarehouseTag($extractedTag);
             if ($allocatedTag) {
                 echo json_encode([
@@ -3623,6 +3671,7 @@ class WarehouseController {
                 'is_pack_product'      => $isPackProduct,
                 'pack_quantity'        => $packQuantity,
                 'damage_quantity'      => $damageQuantity,
+                'tag_is_unique'        => $tagIsUnique,
                 'available_stock'      => (int)($stock['available_qty'] ?? 0),
                 'damaged_stock'        => (int)($stock['damaged_qty'] ?? 0),
                 'reserved_stock'       => (int)($stock['reserved_qty'] ?? 0),

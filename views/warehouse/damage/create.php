@@ -354,7 +354,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const warehouseId = warehouseSelect.value;
         
         // Show loading status
-        scanFeedback.classList.remove('d-none', 'alert-danger', 'alert-success', 'alert-secondary');
+        scanFeedback.classList.remove('d-none', 'alert-danger', 'alert-success', 'alert-secondary', 'alert-warning');
         scanFeedback.classList.add('alert-info');
         scanSpinner.classList.remove('d-none');
         scanFeedbackMsg.innerText = 'Looking up code: ' + query + '...';
@@ -368,11 +368,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     const v = data.variant;
                     
                     // Add or increment in queue
-                    addItemToQueue(v);
-
-                    scanFeedback.classList.remove('alert-info', 'alert-danger');
-                    scanFeedback.classList.add('alert-success');
-                    scanFeedbackMsg.innerHTML = '<i class="bi bi-check-circle-fill text-success me-1"></i> Added to list: <strong>' + v.product_name + '</strong> (SKU: <code>' + v.sku + '</code> | Available: <strong>' + v.available_stock + ' pcs</strong>)' + (v.tag_code ? ' [Tag: <strong>' + v.tag_code + '</strong>]' : '');
+                    if (addItemToQueue(v)) {
+                        scanFeedback.classList.remove('alert-info', 'alert-danger', 'alert-warning', 'alert-secondary');
+                        scanFeedback.classList.add('alert-success');
+                        scanFeedbackMsg.innerHTML = '<i class="bi bi-check-circle-fill text-success me-1"></i> Added to list: <strong>' + v.product_name + '</strong> (SKU: <code>' + v.sku + '</code> | Available: <strong>' + v.available_stock + ' pcs</strong>)' + (v.tag_code ? ' [Tag: <strong>' + v.tag_code + '</strong>]' : '');
+                    }
                 } else {
                     scanFeedback.classList.remove('alert-info', 'alert-success');
                     scanFeedback.classList.add('alert-danger');
@@ -389,23 +389,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add Item to queue
     function addItemToQueue(variant) {
-        // If unique piece tag exists, check if already present in queue
-        if (variant.tag_code) {
+        const tagCode = variant.tag_code || '';
+        const tagIsUnique = Boolean(tagCode) && variant.tag_is_unique !== false;
+        const qty = Math.max(1, parseInt(variant.damage_quantity, 10) || 1);
+        const availableStock = Number(variant.available_stock) || 0;
+
+        if (tagIsUnique) {
             const existingTagIdx = queue.findIndex(item => item.tag_code && item.tag_code.toUpperCase() === variant.tag_code.toUpperCase());
             if (existingTagIdx !== -1) {
-                scanFeedback.classList.remove('alert-info', 'alert-danger');
+                scanFeedback.classList.remove('alert-info', 'alert-danger', 'alert-success', 'alert-secondary');
                 scanFeedback.classList.add('alert-warning');
                 scanFeedbackMsg.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning me-1"></i> Piece tag <strong>' + variant.tag_code + '</strong> is already added to the queue (Row #' + (existingTagIdx + 1) + ').';
-                return;
-            }
-        } else {
-            // If no unique piece tag, check if same variant_id exists -> increment quantity
-            const existingVariantIdx = queue.findIndex(item => !item.tag_code && item.variant_id === variant.id);
-            if (existingVariantIdx !== -1) {
-                queue[existingVariantIdx].quantity += 1;
-                queue[existingVariantIdx].total_loss = queue[existingVariantIdx].quantity * queue[existingVariantIdx].cost_per_unit;
-                renderQueue();
-                return;
+                return false;
             }
         }
 
@@ -415,13 +410,25 @@ document.addEventListener('DOMContentLoaded', function() {
             (variant.mrp > 0 ? variant.mrp : 
             (variant.purchase_price || 0)))
         ) || 0;
-        const qty = Math.max(1, parseInt(variant.damage_quantity, 10) || 1);
-        const availableStock = Number(variant.available_stock) || 0;
-        if (qty > availableStock) {
-            scanFeedback.classList.remove('alert-info', 'alert-success');
+        const queuedQty = queue
+            .filter(item => item.variant_id === variant.id)
+            .reduce((total, item) => total + (Number(item.quantity) || 0), 0);
+        if (queuedQty + qty > availableStock) {
+            scanFeedback.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-secondary');
             scanFeedback.classList.add('alert-danger');
-            scanFeedbackMsg.innerText = `This scan represents ${qty} pcs, but only ${availableStock} pcs are available in the selected warehouse.`;
-            return;
+            scanFeedbackMsg.innerText = `This scan would add ${qty} pcs. The queue already contains ${queuedQty} pcs and only ${availableStock} pcs are available in the selected warehouse.`;
+            return false;
+        }
+
+        if (!tagIsUnique) {
+            const existingVariantIdx = queue.findIndex(item => !item.tag_is_unique && item.variant_id === variant.id);
+            if (existingVariantIdx !== -1) {
+                queue[existingVariantIdx].quantity += qty;
+                queue[existingVariantIdx].available_stock = availableStock;
+                queue[existingVariantIdx].total_loss = queue[existingVariantIdx].quantity * queue[existingVariantIdx].cost_per_unit;
+                renderQueue();
+                return true;
+            }
         }
 
         queue.push({
@@ -431,7 +438,8 @@ document.addEventListener('DOMContentLoaded', function() {
             sku: variant.sku,
             size_name: variant.size_name || 'Free',
             color_name: variant.color_name || 'Std',
-            tag_code: variant.tag_code || '',
+            tag_code: tagCode,
+            tag_is_unique: tagIsUnique,
             category_name: variant.category_name || '',
             subcategory_name: variant.subcategory_name || '',
             sub_subcategory_name: variant.sub_subcategory_name || '',
@@ -451,6 +459,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         renderQueue();
+        return true;
     }
 
     // Render Queue Table
