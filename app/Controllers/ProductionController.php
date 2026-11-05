@@ -10030,47 +10030,58 @@ class ProductionController {
             return;
         }
 
-        $itemName = trim($_POST['item_name'] ?? '');
-        $quantity = max(0.01, (float)($_POST['quantity'] ?? 1.0));
-        $unitCost = max(0.0, (float)($_POST['unit_cost'] ?? 0.0));
-        $totalCost = max(0.0, (float)($_POST['total_cost'] ?? round($quantity * $unitCost, 2)));
-        if ($totalCost <= 0.0 && $quantity > 0 && $unitCost > 0) {
-            $totalCost = round($quantity * $unitCost, 2);
-        }
-
-        if (empty($itemName)) {
-            Session::flash('error', 'Expense Type is required.');
+        $itemNames = $_POST['item_name'] ?? [];
+        $quantities = $_POST['quantity'] ?? [];
+        $unitCosts = $_POST['unit_cost'] ?? [];
+        if (!is_array($itemNames) || !is_array($quantities) || !is_array($unitCosts)) {
+            Session::flash('error', 'Invalid expense items submitted.');
             Response::back();
             return;
         }
 
-        // Auto-register item into production_expense_items
-        try {
-            $existingItem = Database::fetchOne("SELECT id FROM production_expense_items WHERE name = ?", [$itemName]);
-            if (!$existingItem) {
-                Database::execute(
-                    "INSERT INTO production_expense_items (name, category, unit_type, default_rate) VALUES (?, 'GENERAL', 'PCS', ?)",
-                    [$itemName, $unitCost]
-                );
+        $expenseLines = [];
+        foreach ($itemNames as $index => $submittedName) {
+            $itemName = trim((string)$submittedName);
+            $quantityValue = $quantities[$index] ?? null;
+            $unitCostValue = $unitCosts[$index] ?? null;
+            if ($itemName === '' || !is_numeric($quantityValue) || !is_finite((float)$quantityValue)
+                || !is_numeric($unitCostValue) || !is_finite((float)$unitCostValue)) {
+                Session::flash('error', 'Each expense item must have a type, quantity, and valid price.');
+                Response::back();
+                return;
             }
-        } catch (\Throwable $e) {
-            // Ignore duplicate
+
+            $quantity = (float)$quantityValue;
+            $unitCost = (float)$unitCostValue;
+            if ($quantity <= 0 || $unitCost < 0) {
+                Session::flash('error', 'Expense quantities must be greater than zero and prices cannot be negative.');
+                Response::back();
+                return;
+            }
+
+            $expenseLines[] = [
+                'item_name' => $itemName,
+                'quantity' => $quantity,
+                'unit_cost' => $unitCost,
+                'total_cost' => round($quantity * $unitCost, 2),
+            ];
+        }
+
+        if (!$expenseLines) {
+            Session::flash('error', 'Add at least one expense item.');
+            Response::back();
+            return;
         }
 
         $productionUnit = trim($_POST['production_unit'] ?? 'PRODUCTION_1');
         $category = 'GENERAL';
         $unitType = 'PCS';
         $vendorName = 'Direct';
-        $paidAmount = $totalCost;
         $paymentStatus = 'PAID';
         $paymentMethod = 'CASH';
         $expenseDate = trim($_POST['expense_date'] ?? date('Y-m-d'));
 
         // Generate sequential expense number e.g. EXP-2026-0001
-        $count = Database::fetchOne("SELECT COUNT(*) as cnt FROM production_expenses");
-        $nextSeq = (int)($count['cnt'] ?? 0) + 1;
-        $expenseNumber = 'EXP-' . date('Y') . '-' . sprintf("%04d", $nextSeq);
-
         $userId = (int)(Session::get('user_id') ?? 1);
 
         // Handle photo / receipt / bill image upload
@@ -10096,36 +10107,56 @@ class ProductionController {
         }
 
         try {
-            Database::execute(
-                "INSERT INTO production_expenses
-                    (expense_number, production_unit, category, item_name,
-                     quantity, unit_type, unit_cost, total_cost, paid_amount, payment_status,
-                     payment_method, vendor_name, expense_date, photo_url, created_by, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
-                [
-                    $expenseNumber,
-                    $productionUnit,
-                    $category,
-                    $itemName,
-                    $quantity,
-                    $unitType,
-                    $unitCost,
-                    $totalCost,
-                    $paidAmount,
-                    $paymentStatus,
-                    $paymentMethod,
-                    $vendorName,
-                    $expenseDate,
-                    $photoUrl,
-                    $userId
-                ]
-            );
+            if (!Database::beginTransaction()) {
+                throw new \RuntimeException('Could not start expense transaction.');
+            }
+            $count = Database::fetchOne("SELECT COUNT(*) as cnt FROM production_expenses");
+            $nextSeq = (int)($count['cnt'] ?? 0) + 1;
+            $expenseNumbers = [];
 
-            $expenseId = (int)Database::lastInsertId();
+            foreach ($expenseLines as $line) {
+                $expenseNumber = 'EXP-' . date('Y') . '-' . sprintf("%04d", $nextSeq++);
+                Database::execute(
+                    "INSERT INTO production_expenses
+                        (expense_number, production_unit, category, item_name,
+                         quantity, unit_type, unit_cost, total_cost, paid_amount, payment_status,
+                         payment_method, vendor_name, expense_date, photo_url, created_by, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                    [
+                        $expenseNumber,
+                        $productionUnit,
+                        $category,
+                        $line['item_name'],
+                        $line['quantity'],
+                        $unitType,
+                        $line['unit_cost'],
+                        $line['total_cost'],
+                        $line['total_cost'],
+                        $paymentStatus,
+                        $paymentMethod,
+                        $vendorName,
+                        $expenseDate,
+                        $photoUrl,
+                        $userId
+                    ]
+                );
+                $expenseNumbers[] = $expenseNumber;
 
-            Session::flash('success', "Expense {$expenseNumber} ({$itemName} - Qty: {$quantity}, Price: ₹" . number_format($totalCost, 2) . ") recorded successfully.");
+                Database::execute(
+                    "INSERT INTO production_expense_items (name, category, unit_type, default_rate)
+                     VALUES (?, 'GENERAL', 'PCS', ?)
+                     ON DUPLICATE KEY UPDATE name = VALUES(name)",
+                    [$line['item_name'], $line['unit_cost']]
+                );
+            }
+
+            if (!Database::commit()) {
+                throw new \RuntimeException('Could not commit expense items.');
+            }
+            Session::flash('success', count($expenseLines) . ' expense item(s) recorded successfully (' . implode(', ', $expenseNumbers) . ').');
             Response::redirect(url('production/expenses'));
         } catch (\Exception $e) {
+            Database::rollBack();
             Session::flash('error', 'Error recording production expense: ' . $e->getMessage());
             Response::back();
         }

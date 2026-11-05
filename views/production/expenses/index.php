@@ -418,7 +418,7 @@
 <!-- 1. RECORD EXPENSE MODAL (Streamlined: Expense Type + Qty & Price)         -->
 <!-- ========================================================================= -->
 <div class="modal fade" id="recordExpenseModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content shadow-lg border-0 rounded-4 overflow-hidden">
             <div class="modal-header bg-primary text-white py-3 px-4">
                 <h5 class="modal-title fw-bold fs-6">
@@ -429,18 +429,18 @@
             <form method="POST" action="<?= url('production/expenses/store') ?>" id="recordExpenseForm" enctype="multipart/form-data">
                 <?= CSRF::field() ?>
                 <div class="modal-body p-4">
+                    <div id="expenseLineItems" class="d-flex flex-column gap-2 mb-3"></div>
+                    <div id="expenseItemsTotal" class="d-none p-2 bg-primary-subtle rounded-3 text-end fw-bold text-primary mb-3"></div>
                     <!-- 1. Expense Type Input with Side (+) Button -->
                     <div class="mb-3">
                         <label class="form-label fw-bold text-dark required mb-1">Expense Type</label>
                         <div class="input-group input-group-lg">
                             <input type="text" 
-                                   name="item_name" 
                                    id="newItemName" 
                                    class="form-control fw-bold fs-6" 
                                    list="expenseTypesList" 
                                    placeholder="Select or enter expense type..." 
                                    autocomplete="off" 
-                                   required 
                                    oninput="onExpenseTypeSelect(this.value)">
                             <button type="button" 
                                     class="btn btn-primary px-3 fw-bold" 
@@ -485,11 +485,9 @@
                             <input type="number" 
                                    step="any" 
                                    min="0.01" 
-                                   name="quantity" 
                                    id="newQuantity" 
                                    class="form-control form-control-lg fw-bold text-center" 
                                    value="1" 
-                                   required 
                                    oninput="calculateNewExpenseTotal()">
                         </div>
 
@@ -501,11 +499,9 @@
                                 <input type="number" 
                                        step="any" 
                                        min="0" 
-                                       name="unit_cost" 
                                        id="newUnitCost" 
                                        class="form-control fw-bold text-primary" 
                                        placeholder="0.00" 
-                                       required 
                                        oninput="calculateNewExpenseTotal()">
                             </div>
                         </div>
@@ -519,6 +515,12 @@
                             <span class="fs-3 fw-bolder text-primary font-monospace" id="newDisplayTotal">0.00</span>
                             <input type="hidden" name="total_cost" id="newTotalCost" value="0.00">
                         </div>
+                    </div>
+
+                    <div class="d-flex justify-content-end mb-3">
+                        <button type="button" class="btn btn-outline-primary fw-bold" onclick="addExpenseLineItem()">
+                            <i class="bi bi-plus-circle me-1"></i>Add Expense Item
+                        </button>
                     </div>
 
                     <!-- 4. Image Upload Input with Live Preview -->
@@ -542,7 +544,7 @@
                 <div class="modal-footer bg-light py-2 px-4 border-top">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-primary px-4 fw-bold shadow-sm">
-                        <i class="bi bi-check-circle me-1"></i> Save Expense
+                        <i class="bi bi-check-circle me-1"></i> Save Expenses
                     </button>
                 </div>
             </form>
@@ -730,6 +732,22 @@
 <script>
 let expenseTypesMaster = <?= json_encode($expenseItems ?? []) ?>;
 
+document.getElementById('recordExpenseForm')?.addEventListener('submit', function(event) {
+    if (!document.querySelector('#expenseLineItems input[name="item_name[]"]')) {
+        event.preventDefault();
+        alert('Add at least one expense item before saving.');
+        return;
+    }
+
+    const itemName = document.getElementById('newItemName').value.trim();
+    const quantity = document.getElementById('newQuantity').value;
+    const unitCost = document.getElementById('newUnitCost').value;
+    if (itemName || quantity !== '1' || unitCost !== '') {
+        event.preventDefault();
+        alert('Add or clear the current expense item before saving.');
+    }
+});
+
 function toggleQuickAddTypeBox(forceState) {
     const box = document.getElementById('quickAddTypeDrawer');
     if (!box) return;
@@ -830,6 +848,75 @@ function onExpenseTypeSelect(val) {
             qtyInput.select();
         }
     }
+}
+
+function addExpenseLineItem() {
+    const nameInput = document.getElementById('newItemName');
+    const quantityInput = document.getElementById('newQuantity');
+    const costInput = document.getElementById('newUnitCost');
+    const name = nameInput.value.trim();
+    const quantity = parseFloat(quantityInput.value);
+    const unitCost = parseFloat(costInput.value);
+
+    if (!name || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) {
+        alert('Enter an expense type, a quantity greater than zero, and a valid price.');
+        return;
+    }
+
+    const total = quantity * unitCost;
+    const row = document.createElement('div');
+    row.className = 'd-flex justify-content-between align-items-center gap-3 p-3 border rounded-3 bg-white';
+
+    const details = document.createElement('div');
+    details.className = 'min-w-0';
+    const title = document.createElement('div');
+    title.className = 'fw-bold text-dark text-break';
+    title.textContent = name;
+    const amount = document.createElement('div');
+    amount.className = 'small text-muted';
+    amount.textContent = `Qty ${quantity} × ₹${unitCost.toFixed(2)} = ₹${total.toFixed(2)}`;
+    details.append(title, amount);
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn btn-outline-danger btn-sm flex-shrink-0';
+    deleteButton.title = 'Delete expense item';
+    deleteButton.setAttribute('aria-label', `Delete ${name}`);
+    deleteButton.innerHTML = '<i class="bi bi-trash"></i>';
+    deleteButton.addEventListener('click', function() {
+        row.remove();
+        updateExpenseItemsTotal();
+    });
+
+    const values = { 'item_name[]': name, 'quantity[]': quantity, 'unit_cost[]': unitCost };
+    Object.entries(values).forEach(([fieldName, value]) => {
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = fieldName;
+        hidden.value = value;
+        row.appendChild(hidden);
+    });
+    row.prepend(details, deleteButton);
+    document.getElementById('expenseLineItems').appendChild(row);
+    updateExpenseItemsTotal();
+
+    nameInput.value = '';
+    quantityInput.value = '1';
+    costInput.value = '';
+    calculateNewExpenseTotal();
+    nameInput.focus();
+}
+
+function updateExpenseItemsTotal() {
+    const rows = document.querySelectorAll('#expenseLineItems input[name="item_name[]"]');
+    const total = Array.from(rows).reduce((sum, nameInput) => {
+        const row = nameInput.closest('#expenseLineItems > div');
+        return sum + (parseFloat(row.querySelector('input[name="quantity[]"]').value) || 0)
+            * (parseFloat(row.querySelector('input[name="unit_cost[]"]').value) || 0);
+    }, 0);
+    const display = document.getElementById('expenseItemsTotal');
+    display.textContent = `Total for ${rows.length} item${rows.length === 1 ? '' : 's'}: ₹${total.toFixed(2)}`;
+    display.classList.toggle('d-none', rows.length === 0);
 }
 
 function calculateNewExpenseTotal() {
