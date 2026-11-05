@@ -290,7 +290,7 @@
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="btn-group btn-group-sm">
-                                            <a href="<?= url('production/programs?unit_id=' . $unit['id']) ?>" class="btn btn-outline-secondary" title="View Programs">
+                                            <a href="<?= url('production/dashboard') ?>" class="btn btn-outline-secondary" title="View Production Dashboard">
                                                 <i class="bi bi-eye"></i>
                                             </a>
                                             <button type="button" class="btn btn-outline-primary" title="Edit Unit" 
@@ -387,6 +387,9 @@
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="btn-group btn-group-sm">
+                                            <a href="<?= url('warehouse/dashboard') ?>" class="btn btn-outline-secondary" title="View Warehouse Dashboard">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
                                             <a href="<?= url('warehouse/stock?warehouse_id=' . $wh['id']) ?>" class="btn btn-outline-secondary" title="View Stock">
                                                 <i class="bi bi-boxes"></i>
                                             </a>
@@ -488,6 +491,9 @@
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="btn-group btn-group-sm">
+                                            <a href="<?= url('shop/dashboard') ?>" class="btn btn-outline-secondary" title="View Retail Shop Dashboard">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
                                             <?php if (hasPermission('pos', 'view') || hasPermission('pos', 'create')): ?>
                                             <a href="<?= url('shop/pos') ?>" class="btn btn-outline-success" title="Launch POS Terminal">
                                                 <i class="bi bi-receipt"></i>
@@ -571,6 +577,9 @@
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="btn-group btn-group-sm">
+                                            <a href="<?= url('warehouse/whatsapp-orders') ?>" class="btn btn-outline-secondary" title="View WhatsApp Dashboard">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
                                             <button type="button" class="btn btn-outline-primary" title="Edit Channel" onclick="editChannel(<?= htmlspecialchars(json_encode($chan), ENT_QUOTES, 'UTF-8') ?>)">
                                                 <i class="bi bi-pencil"></i>
                                             </button>
@@ -640,6 +649,9 @@
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="btn-group btn-group-sm">
+                                            <a href="<?= url('warehouse/website-orders') ?>" class="btn btn-outline-secondary" title="View Website Dashboard">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
                                             <button type="button" class="btn btn-outline-primary" title="Edit Channel" onclick="editChannel(<?= htmlspecialchars(json_encode($chan), ENT_QUOTES, 'UTF-8') ?>)">
                                                 <i class="bi bi-pencil"></i>
                                             </button>
