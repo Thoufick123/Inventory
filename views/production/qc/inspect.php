@@ -171,7 +171,7 @@
                 <div class="col-md-8">
                     <div class="input-group">
                         <span class="input-group-text bg-light border-primary"><i class="bi bi-upc-scan text-primary fs-5"></i></span>
-                        <input type="text" id="qrScanInput" class="form-control form-control-lg border-primary fw-bold" placeholder="Scan QR sticker tag (e.g. <?= $allPieces[0]['tag_code'] ?? ($catalogPrefix . $monthStr . $yearStr . '01') ?>)..." autofocus onkeyup="if(event.key==='Enter') handleQRScanInput()">
+                        <input type="text" id="qrScanInput" class="form-control form-control-lg border-primary fw-bold" placeholder="Scan QR sticker tag (e.g. <?= $allPieces[0]['tag_code'] ?? ($catalogPrefix . $monthStr . $yearStr . '01') ?>)..." autofocus onkeydown="if(event.key==='Enter'){event.preventDefault();handleQRScanInput();}">
                         <button type="button" class="btn btn-primary btn-lg fw-semibold px-4" onclick="handleQRScanInput()">
                             <i class="bi bi-search me-1"></i>Scan &amp; Locate
                         </button>
