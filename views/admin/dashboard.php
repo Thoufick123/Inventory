@@ -721,33 +721,8 @@
         </div>
     </div>
 
-    <!-- Quick Actions & Low Stock Alerts -->
+    <!-- Low Stock Alerts -->
     <div class="col-lg-4">
-        <!-- Quick Actions Card -->
-        <div class="card border-0 shadow-sm rounded-3 mb-3">
-            <div class="card-header bg-white border-bottom p-3">
-                <h6 class="mb-0 fw-700 text-dark"><i class="bi bi-lightning-charge me-2 text-warning"></i>Operations Shortcuts</h6>
-            </div>
-            <div class="card-body p-3">
-                <div class="d-grid gap-2">
-                    <?php if (hasPermission('pos', 'view') || hasPermission('pos', 'create')): ?>
-                    <a href="<?= url('shop/pos') ?>" class="btn btn-primary shadow-sm text-start py-2">
-                        <i class="bi bi-receipt me-2"></i> Launch POS Terminal
-                    </a>
-                    <?php endif; ?>
-                    <a href="<?= url('production/programs/create') ?>" class="btn btn-outline-primary text-start py-2">
-                        <i class="bi bi-calendar2-plus me-2"></i> New Production Program
-                    </a>
-                    <a href="<?= url('warehouse/inward') ?>" class="btn btn-outline-success text-start py-2">
-                        <i class="bi bi-qr-code-scan me-2"></i> Inward GRN Scanner
-                    </a>
-                    <a href="<?= url('warehouse/allocation/create') ?>" class="btn btn-outline-secondary text-start py-2">
-                        <i class="bi bi-boxes me-2"></i> Warehouse Stock Allocation
-                    </a>
-                </div>
-            </div>
-        </div>
-
         <!-- Low Stock Alerts -->
         <div class="card border-0 shadow-sm rounded-3">
             <div class="card-header bg-white border-bottom p-3 d-flex align-items-center justify-content-between">
