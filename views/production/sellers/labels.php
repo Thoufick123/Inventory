@@ -380,7 +380,7 @@
                                 <div class="spec-item"><strong>Design:</strong> <?= e($stk['design_name']) ?></div>
                             <?php endif; ?>
                             <?php if ($stk['weight'] > 0): ?>
-                                <div class="spec-item"><strong>Total Roll Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
+                                <div class="spec-item weight-item"><strong>Piece Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -838,6 +838,29 @@ function submitAddExtraLabel() {
 
         if (data.new_stickers && data.new_stickers.length > 0) {
             const grid = document.getElementById('stickersGrid');
+            const firstNewSticker = data.new_stickers[0];
+            const unitWeight = Number(firstNewSticker.weight) || 0;
+            stickersData.forEach((sticker, index) => {
+                if (String(sticker.roll_id) !== String(rollId)) return;
+                sticker.weight = unitWeight;
+                sticker.roll_weight = Number(firstNewSticker.roll_weight) || 0;
+                sticker.qr_payload = `${sticker.code}|${sticker.supplier_name}|${sticker.roll_number}|${sticker.color}|${sticker.design_name}|${unitWeight}KG`;
+                renderQRCodeForIndex(index, sticker.qr_payload);
+                const card = document.getElementById('card_' + index);
+                const weightItem = card ? card.querySelector('.weight-item') : null;
+                if (weightItem) {
+                    weightItem.innerHTML = `<strong>Piece Weight:</strong> ${unitWeight.toFixed(2)} kg`;
+                } else if (card && unitWeight > 0) {
+                    const row = card.querySelector('.spec-row');
+                    if (row) {
+                        const item = document.createElement('div');
+                        item.className = 'spec-item weight-item';
+                        item.innerHTML = `<strong>Piece Weight:</strong> ${unitWeight.toFixed(2)} kg`;
+                        row.appendChild(item);
+                    }
+                }
+            });
+
             data.new_stickers.forEach(stk => {
                 const newIdx = stickersData.length;
                 stickersData.push(stk);
@@ -854,7 +877,7 @@ function submitAddExtraLabel() {
 
                 const safeColor = stk.color ? `<div class="spec-item"><strong>Color:</strong> ${stk.color}</div>` : '';
                 const safeDesign = stk.design_name ? `<div class="spec-item"><strong>Design:</strong> ${stk.design_name}</div>` : '';
-                const safeWeight = stk.weight > 0 ? `<div class="spec-item"><strong>Total Roll Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : '';
+                const safeWeight = stk.weight > 0 ? `<div class="spec-item weight-item"><strong>Piece Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : '';
 
                 card.innerHTML = `
                     <div class="sticker-card-toolbar no-print">

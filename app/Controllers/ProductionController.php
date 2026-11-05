@@ -1571,7 +1571,8 @@ class ProductionController {
         $rollNum = $roll['roll_number'] ?: 'ROLL';
         $color = mb_strtoupper(trim($roll['color'] ?? ''));
         $design = mb_strtoupper(trim($roll['design_name'] ?? ''));
-        $weight = (float)($roll['weight'] ?? 0);
+        $rollWeight = (float)($roll['weight'] ?? 0);
+        $pieceWeight = $newQty > 0 ? round($rollWeight / $newQty, 2) : 0.0;
         $price = (float)($roll['price'] ?? 0);
         $photo = !empty($roll['photo_url']) ? $roll['photo_url'] : ($seller['roll_photo'] ?? null);
 
@@ -1579,7 +1580,7 @@ class ProductionController {
         for ($i = 0; $i < $count; $i++) {
             $seq = $newStartSeq + $i;
             $code = sprintf('%s%02d', $prefix, $seq);
-            $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$weight}KG";
+            $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$pieceWeight}KG";
             $pieceIndex = $currentQty + $i + 1;
 
             $newStickers[] = [
@@ -1591,7 +1592,8 @@ class ProductionController {
                 'roll_number'   => $rollNum,
                 'color'         => $color,
                 'design_name'   => $design,
-                'weight'        => $weight,
+                'weight'        => $pieceWeight,
+                'roll_weight'   => $rollWeight,
                 'price'         => $price,
                 'photo_url'     => $photo,
                 'supplier_name' => $supplierName,
@@ -1876,10 +1878,11 @@ class ProductionController {
                     $activeSequences[] = $seq;
                 }
             }
+            $pieceWeight = count($activeSequences) > 0 ? round($weight / count($activeSequences), 2) : 0.0;
 
             foreach ($activeSequences as $i => $seq) {
                 $code = sprintf('%s%02d', $prefix, $seq);
-                $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$weight}KG";
+                $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$pieceWeight}KG";
 
                 $stickers[] = [
                     'code'          => $code,
@@ -1890,7 +1893,8 @@ class ProductionController {
                     'roll_number'   => $rollNum,
                     'color'         => $color,
                     'design_name'   => $design,
-                    'weight'        => $weight,
+                    'weight'        => $pieceWeight,
+                    'roll_weight'   => $weight,
                     'price'         => $price,
                     'photo_url'     => $photo,
                     'supplier_name' => $supplierName,
