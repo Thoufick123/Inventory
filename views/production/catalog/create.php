@@ -449,11 +449,12 @@
             </div>
             <div class="modal-body">
                 <div class="mb-3">
-                    <label class="form-label fw-semibold">Size Code / Label <span class="text-danger">*</span></label>
-                    <input type="text" id="modalSizeCode" class="form-control text-uppercase" placeholder="E.G. M, L, XL, 32, 34, FREE SIZE" required>
+                    <label class="form-label fw-semibold">Size Code(s) <span class="text-danger">*</span></label>
+                    <input type="text" id="modalSizeCode" class="form-control text-uppercase" placeholder="E.G. S, M, L, XL" required>
+                    <small class="form-text text-muted">Enter comma-separated sizes to add each as a separate option.</small>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-semibold">Size Description <small class="text-muted">(Optional)</small></label>
+                    <label class="form-label fw-semibold">Size Description <small class="text-muted">(Optional; applies when adding one size)</small></label>
                     <input type="text" id="modalSizeName" class="form-control text-uppercase" placeholder="E.G. MEDIUM, 32 INCHES">
                 </div>
             </div>
@@ -1552,53 +1553,88 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    document.getElementById('btnSaveQuickSize').addEventListener('click', function() {
-        const code = document.getElementById('modalSizeCode').value.trim().toUpperCase();
-        const name = document.getElementById('modalSizeName').value.trim().toUpperCase() || code;
-        if (!code) {
-            alert('Please enter a Size code / label (e.g. M, L, XL, 32).');
+    async function addQuickSize(code, name) {
+        const existing = Array.from(sizeContainer.querySelectorAll('.size-checkbox'))
+            .find(input => input.dataset.code.toUpperCase() === code);
+        if (existing) {
+            existing.checked = true;
             return;
         }
 
         const formData = new FormData();
         formData.append('code', code);
         formData.append('name', name);
-
-        fetch(`${baseUrl}/api/sizes/quick-add`, {
+        const response = await fetch(`${baseUrl}/api/sizes/quick-add`, {
             method: 'POST',
             body: formData
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
-                const emptyPrompt = document.getElementById('emptySizePrompt');
-                if (emptyPrompt) emptyPrompt.remove();
-
-                const chipGroup = document.createElement('div');
-                chipGroup.className = 'btn-group btn-group-sm size-chip-group';
-                chipGroup.id = `size-chip-${data.id}`;
-                chipGroup.innerHTML = `
-                    <label class="btn btn-outline-dark size-check-btn d-flex align-items-center gap-1" style="cursor: pointer;">
-                        <input type="checkbox" name="sizes[]" class="form-check-input me-1 size-checkbox" value="${data.id}" data-code="${data.code}" data-name="${data.name}" checked>
-                        <span class="fw-bold">${data.code}</span>
-                        ${data.name !== data.code ? `<small class="text-muted">(${data.name})</small>` : ''}
-                    </label>
-                    <button type="button" class="btn btn-outline-danger btn-delete-size p-1 px-2" data-id="${data.id}" data-name="${data.code}" title="Delete size attribute">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                `;
-                sizeContainer.appendChild(chipGroup);
-                bootstrap.Modal.getInstance(document.getElementById('modalAddSize')).hide();
-                document.getElementById('modalSizeCode').value = '';
-                document.getElementById('modalSizeName').value = '';
-            } else {
-                alert(data.message || 'Error adding size.');
-            }
-        })
-        .catch(err => {
-            console.error('Error adding size:', err);
-            alert('Server error while adding size.');
         });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.message || `Could not add size ${code}.`);
+        }
+
+        const emptyPrompt = document.getElementById('emptySizePrompt');
+        if (emptyPrompt) emptyPrompt.remove();
+
+        const chipGroup = document.createElement('div');
+        chipGroup.className = 'btn-group btn-group-sm size-chip-group';
+        chipGroup.id = `size-chip-${data.id}`;
+        const label = document.createElement('label');
+        label.className = 'btn btn-outline-dark size-check-btn d-flex align-items-center gap-1';
+        label.style.cursor = 'pointer';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.name = 'sizes[]';
+        checkbox.className = 'form-check-input me-1 size-checkbox';
+        checkbox.value = data.id;
+        checkbox.dataset.code = data.code;
+        checkbox.dataset.name = data.name;
+        checkbox.checked = true;
+        const codeText = document.createElement('span');
+        codeText.className = 'fw-bold';
+        codeText.textContent = data.code;
+        label.append(checkbox, codeText);
+        if (data.name !== data.code) {
+            const nameText = document.createElement('small');
+            nameText.className = 'text-muted';
+            nameText.textContent = `(${data.name})`;
+            label.appendChild(nameText);
+        }
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'btn btn-outline-danger btn-delete-size p-1 px-2';
+        deleteButton.dataset.id = data.id;
+        deleteButton.dataset.name = data.code;
+        deleteButton.title = 'Delete size attribute';
+        deleteButton.innerHTML = '<i class="bi bi-trash"></i>';
+        chipGroup.append(label, deleteButton);
+        sizeContainer.appendChild(chipGroup);
+    }
+
+    document.getElementById('btnSaveQuickSize').addEventListener('click', async function() {
+        const codes = [...new Set(document.getElementById('modalSizeCode').value
+            .split(',')
+            .map(code => code.trim().toUpperCase())
+            .filter(Boolean))];
+        const description = document.getElementById('modalSizeName').value.trim().toUpperCase();
+        if (!codes.length) {
+            alert('Please enter one or more size codes (for example S, M, L).');
+            return;
+        }
+
+        for (const code of codes) {
+            try {
+                await addQuickSize(code, codes.length === 1 && description ? description : code);
+            } catch (error) {
+                console.error('Error adding size:', error);
+                alert(error.message || `Server error while adding size "${code}". Earlier sizes, if any, were added.`);
+                return;
+            }
+        }
+
+        bootstrap.Modal.getInstance(document.getElementById('modalAddSize')).hide();
+        document.getElementById('modalSizeCode').value = '';
+        document.getElementById('modalSizeName').value = '';
     });
 
     // Delegated delete for sizes

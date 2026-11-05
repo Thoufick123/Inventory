@@ -4,9 +4,6 @@
         <span class="text-muted">Update program details, raw material rolls, per-roll 3-tier category hierarchies, and schedule dates for <strong><?= e($program['program_number']) ?></strong></span>
     </div>
     <div class="d-flex gap-2">
-        <a href="<?= url('production/programs/view/' . $program['id']) ?>" class="btn btn-outline-secondary">
-            <i class="bi bi-eye me-1"></i> View Program
-        </a>
         <a href="<?= url('production/programs') ?>" class="btn btn-outline-secondary">
             <i class="bi bi-arrow-left me-1"></i> Back to Programs
         </a>

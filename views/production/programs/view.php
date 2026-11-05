@@ -38,23 +38,11 @@
         </span>
     </div>
     <div class="d-flex gap-2">
-        <a href="<?= url('production/programs/edit/' . $program['id']) ?>" class="btn btn-outline-secondary">
-            <i class="bi bi-pencil me-1"></i> Edit
-        </a>
-
         <?php if ($program['status'] === 'APPROVED' || $program['status'] === 'IN_PROGRESS'): ?>
             <a href="<?= url('production/cutting/create?program_id=' . $program['id']) ?>" class="btn btn-primary">
                 <i class="bi bi-scissors me-1"></i> New Cutting Batch
             </a>
         <?php endif; ?>
-
-        <!-- Delete Program Form -->
-        <form method="POST" action="<?= url('production/programs/delete/' . $program['id']) ?>" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this production program?');">
-            <?= CSRF::field() ?>
-            <button type="submit" class="btn btn-outline-danger" title="Delete Program">
-                <i class="bi bi-trash me-1"></i> Delete
-            </button>
-        </form>
     </div>
 </div>
 
