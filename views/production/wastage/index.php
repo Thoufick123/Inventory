@@ -11,9 +11,6 @@
             <span class="text-muted small">Maintain selling prices, link cutting module scrap batches, track buyers, and record waste revenue</span>
         </div>
         <div class="d-flex gap-2">
-            <a href="<?= url('production/cutting') ?>" class="btn btn-outline-secondary btn-sm">
-                <i class="bi bi-scissors me-1"></i>Cutting Module
-            </a>
             <?php if (hasPermission('wastage', 'create')): ?>
             <button type="button" class="btn btn-success btn-sm fw-semibold shadow-sm px-3" data-bs-toggle="modal" data-bs-target="#recordWastageModal">
                 <i class="bi bi-plus-circle me-1"></i> Record Wastage Sale

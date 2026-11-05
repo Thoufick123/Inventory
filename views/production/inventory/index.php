@@ -8,9 +8,6 @@
         <span class="text-muted">QC-passed inventory, outward dispatches, rework, and rejected quantities shown separately</span>
     </div>
     <div class="d-flex gap-2">
-        <a href="<?= url('production/qc') ?>" class="btn btn-outline-secondary">
-            <i class="bi bi-clipboard-check me-1"></i> QC Inspections
-        </a>
         <?php if (hasPermission('batches', 'create')): ?>
         <a href="<?= url('production/batches/create') ?>" class="btn btn-success">
             <i class="bi bi-box-seam me-1"></i> Create Packing Batch
@@ -160,10 +157,6 @@
         <?php if (!empty($search) || !empty($categoryFilter)): ?>
             <a href="<?= url('production/inventory') ?>" class="btn btn-sm btn-outline-primary">
                 <i class="bi bi-arrow-counterclockwise me-1"></i> Clear All Filters
-            </a>
-        <?php else: ?>
-            <a href="<?= url('production/qc') ?>" class="btn btn-sm btn-primary">
-                <i class="bi bi-clipboard-check me-1"></i> Go to QC Inspections
             </a>
         <?php endif; ?>
     </div>

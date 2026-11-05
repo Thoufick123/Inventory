@@ -11,9 +11,6 @@
             <span class="text-muted small">Maintain machinery assets, sewing consumables (threads, zips, needles), machine repairs, and costs for Production Unit 1 &amp; Unit 2</span>
         </div>
         <div class="d-flex gap-2">
-            <a href="<?= url('production/dashboard') ?>" class="btn btn-outline-secondary btn-sm">
-                <i class="bi bi-speedometer2 me-1"></i>Production Dashboard
-            </a>
             <?php if (hasPermission('production_expenses', 'create')): ?>
             <button type="button" class="btn btn-primary btn-sm fw-semibold shadow-sm px-3" data-bs-toggle="modal" data-bs-target="#recordExpenseModal">
                 <i class="bi bi-plus-circle me-1"></i> Record Production Expense / Asset

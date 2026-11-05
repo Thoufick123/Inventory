@@ -11,9 +11,6 @@
             <span class="text-muted small">Maintain selling prices, track scrap buyers, and record revenue from sewing thread, cut bits, and trim scrap</span>
         </div>
         <div class="d-flex gap-2">
-            <a href="<?= url('production/stitching') ?>" class="btn btn-outline-secondary btn-sm">
-                <i class="bi bi-gear-wide-connected me-1"></i>Stitching Module
-            </a>
             <?php if (hasPermission('stitching_wastage', 'create')): ?>
             <button type="button" class="btn btn-warning text-dark btn-sm fw-semibold shadow-sm px-3" data-bs-toggle="modal" data-bs-target="#recordStitchingWastageModal">
                 <i class="bi bi-plus-circle me-1"></i> Record Stitching Wastage Sale

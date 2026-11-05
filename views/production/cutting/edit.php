@@ -485,7 +485,7 @@ function removeCuttingRollRow(btn) {
 function calculateRollTotals() {
     let totalWeight = 0;
     let totalPrice = 0;
-    let rollCount = 0;
+    const selectedRollIds = new Set();
     let firstRollId = '';
 
     document.querySelectorAll('.cutting-roll-row').forEach(row => {
@@ -494,7 +494,7 @@ function calculateRollTotals() {
         const priceInput = row.querySelector('.cutting-roll-price');
 
         if (select && select.value) {
-            rollCount++;
+            selectedRollIds.add(String(select.value));
             if (!firstRollId) firstRollId = select.value;
             const w = parseFloat(weightInput ? weightInput.value : 0) || 0;
             const p = parseFloat(priceInput ? priceInput.value : 0) || 0;
@@ -515,7 +515,8 @@ function calculateRollTotals() {
 
     const badge = document.getElementById('rollStatusBadge');
     if (badge) {
-        badge.innerText = rollCount > 0 ? `${rollCount} Roll(s) (${totalWeight.toFixed(2)} kg)` : 'Choose Roll';
+        const rollCount = selectedRollIds.size;
+        badge.innerText = rollCount > 0 ? `${rollCount} ${rollCount === 1 ? 'Roll' : 'Rolls'} (${totalWeight.toFixed(2)} kg)` : 'Choose Roll';
     }
 
     renderRollWastageRows();
