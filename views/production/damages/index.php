@@ -345,58 +345,19 @@
                 <div class="modal-body p-4">
                     <div class="row g-3">
                         <div class="col-12">
-                            <label for="damageRollQrScan" class="form-label fw-bold">Scan Exact Fabric Piece QR</label>
-                            <input type="text" id="damageRollQrScan" class="form-control form-control-lg" placeholder="Scan or enter one piece QR code, then press Enter" autocomplete="off">
+                            <label for="damageRollQrScan" class="form-label fw-bold">Scan Fabric Piece QR Labels</label>
+                            <input type="text" id="damageRollQrScan" class="form-control form-control-lg" placeholder="Scan a QR and press Enter; repeat for labels from any roll" autocomplete="off">
                             <div id="damageRollScanStatus" class="small mt-1" role="status" aria-live="polite"></div>
-                            <div id="damageScannedLabel" class="alert alert-success py-2 mt-2 mb-0 d-none">
-                                <i class="bi bi-qr-code-scan me-1"></i>
-                                Scanned item <strong id="damageScannedCode"></strong>
-                                <span class="ms-2">Piece weight: <strong id="damageScannedWeight"></strong> kg</span>
-                            </div>
-                        </div>
-
-                        <!-- Supplier Selection -->
-                        <div class="col-md-6">
-                            <label class="form-label fw-bold required">Material Supplier / Mill</label>
-                            <select id="modalSellerSelect" class="form-select form-select-lg" disabled>
-                                <option value="">-- Choose Supplier --</option>
-                                <?php foreach ($sellers as $s): ?>
-                                    <option value="<?= $s['id'] ?>">
-                                        <?= e($s['name']) ?><?= !empty($s['company']) ? ' (' . e($s['company']) . ')' : '' ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-
-                        <!-- Roll Selection (Dynamically Loaded) -->
-                        <div class="col-md-6">
-                            <label class="form-label fw-bold required">Defective Fabric Roll</label>
-                            <select id="modalRollSelect" class="form-select form-select-lg" disabled>
-                                <option value="">-- Select Supplier First --</option>
-                            </select>
-                        </div>
-                        <input type="hidden" name="seller_id" id="damageSellerId">
-                        <input type="hidden" name="seller_roll_id" id="damageSellerRollId">
-                        <input type="hidden" name="qr_code" id="damageScannedQrCode">
-                        <input type="hidden" name="damaged_quantity" value="1">
-
-                        <!-- Roll Info Callout (Dynamic) -->
-                        <div class="col-12" id="rollInfoBox" style="display: none;">
-                            <div class="p-3 bg-light rounded border d-flex justify-content-between align-items-center flex-wrap gap-2">
-                                <div>
-                                    <span class="small text-muted d-block">SELECTED ROLL SPECIFICATION</span>
-                                    <strong class="text-dark fs-6" id="infoRollCode">ROLL-01</strong>
-                                    <span class="text-muted mx-2">•</span>
-                                    <span class="badge bg-info-subtle text-info border" id="infoRollColor">Color</span>
-                                    <span class="badge bg-warning-subtle text-warning border" id="infoRollDesign">Design</span>
-                                    <div class="mt-1 d-flex gap-1 flex-wrap" id="infoRollRates"></div>
+                            <div class="border rounded mt-2 p-2">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>Scanned labels</strong>
+                                    <span id="damageScannedCount" class="badge bg-secondary">0 pieces</span>
                                 </div>
-                                <div class="text-end">
-                                    <span class="small text-muted d-block">DAMAGEABLE BALANCE</span>
-                                    <div id="infoRollBalance">0.00 kg</div>
-                                    <small class="text-muted d-block" id="infoRollPrice">₹0.00</small>
+                                <div id="damageScannedLabels" class="list-group small">
+                                    <div class="list-group-item text-muted" id="damageScannedEmpty">No labels scanned yet.</div>
                                 </div>
                             </div>
+                            <div id="damageQrInputs"></div>
                         </div>
 
                         <!-- Damage Reason (Either Reason or Notes is required) -->
@@ -731,55 +692,9 @@
 </div>
 
 <script>
-let loadedRollsMap = {};
 let loadedEditRollsMap = {};
-
-function loadSupplierRolls(sellerId, selectedRollId = null) {
-    const rollSelect = document.getElementById('modalRollSelect');
-    const infoBox = document.getElementById('rollInfoBox');
-    if (!sellerId) {
-        rollSelect.innerHTML = '<option value="">-- Select Supplier First --</option>';
-        if (infoBox) infoBox.style.display = 'none';
-        return Promise.resolve();
-    }
-
-    rollSelect.innerHTML = '<option value="">Loading rolls...</option>';
-
-    return fetch('<?= url('api/sellers') ?>/' + sellerId + '/rolls')
-        .then(res => res.json())
-        .then(data => {
-            rollSelect.innerHTML = '<option value="">-- Choose Fabric Roll --</option>';
-            loadedRollsMap = {};
-
-            if (data.rolls && data.rolls.length > 0) {
-                data.rolls.forEach(r => {
-                    loadedRollsMap[r.id] = r;
-                    const opt = document.createElement('option');
-                    opt.value = r.id;
-                    const availWt = parseFloat(r.available_weight) || 0;
-                    const totalWt = parseFloat(r.weight) || 0;
-                    const availQty = parseInt(r.available_quantity, 10) || 0;
-                    const usedQty = parseInt(r.used_quantity, 10) || 0;
-                    opt.textContent = `${r.roll_number} (${r.color || 'No Color'} - ${r.design_name || 'No Design'}) • Damageable: ${availQty} pcs / ${availWt.toFixed(2)} kg${usedQty > 0 ? ` • ${usedQty} pcs assigned` : ''}`;
-                    if (selectedRollId && parseInt(selectedRollId) === parseInt(r.id)) {
-                        opt.selected = true;
-                    }
-                    rollSelect.appendChild(opt);
-                });
-
-                if (selectedRollId) {
-                    handleRollSelectionChange(rollSelect);
-                }
-            } else {
-                rollSelect.innerHTML = '<option value="">No rolls found for this supplier</option>';
-            }
-        })
-        .catch(err => {
-            console.error('Error fetching rolls:', err);
-            rollSelect.innerHTML = '<option value="">Failed to load rolls</option>';
-            return false;
-        });
-}
+let damageScannedLabels = [];
+let damageScanInProgress = false;
 
 function setDamageRollScanStatus(message, isError = false) {
     const status = document.getElementById('damageRollScanStatus');
@@ -789,24 +704,88 @@ function setDamageRollScanStatus(message, isError = false) {
 }
 
 function clearDamageRollSelection() {
-    loadedRollsMap = {};
-    document.getElementById('damageSellerId').value = '';
-    document.getElementById('damageSellerRollId').value = '';
-    document.getElementById('damageScannedQrCode').value = '';
-    document.getElementById('modalSellerSelect').value = '';
-    document.getElementById('modalRollSelect').innerHTML = '<option value="">-- Scan Fabric Roll QR First --</option>';
-    document.getElementById('rollInfoBox').style.display = 'none';
-    document.getElementById('damageScannedLabel').classList.add('d-none');
+    damageScannedLabels = [];
+    renderDamageScannedLabels();
     document.getElementById('inputDamagedWeight').value = '';
     document.getElementById('inputEstimatedLoss').value = '';
+}
+
+function renderDamageScannedLabels() {
+    const list = document.getElementById('damageScannedLabels');
+    const inputs = document.getElementById('damageQrInputs');
+    if (!list || !inputs) return;
+
+    list.replaceChildren();
+    inputs.replaceChildren();
+    const count = document.getElementById('damageScannedCount');
+    if (count) count.textContent = `${damageScannedLabels.length} ${damageScannedLabels.length === 1 ? 'piece' : 'pieces'}`;
+
+    if (damageScannedLabels.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-group-item text-muted';
+        empty.textContent = 'No labels scanned yet.';
+        list.appendChild(empty);
+    }
+
+    let totalWeight = 0;
+    let totalLoss = 0;
+    damageScannedLabels.forEach((item, index) => {
+        totalWeight += item.weight;
+        totalLoss += item.loss;
+
+        const row = document.createElement('div');
+        row.className = 'list-group-item d-flex justify-content-between align-items-center gap-2';
+        const details = document.createElement('div');
+        details.className = 'text-break';
+        const code = document.createElement('strong');
+        code.textContent = item.code;
+        const metadata = document.createElement('div');
+        metadata.className = 'text-muted';
+        metadata.textContent = `${item.sellerName} • ${item.rollNumber} • ${item.weight.toFixed(2)} kg`;
+        details.append(code, metadata);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn btn-sm btn-outline-danger flex-shrink-0';
+        remove.textContent = 'Remove';
+        remove.setAttribute('aria-label', `Remove ${item.code}`);
+        remove.addEventListener('click', () => {
+            damageScannedLabels.splice(index, 1);
+            renderDamageScannedLabels();
+        });
+        row.append(details, remove);
+        list.appendChild(row);
+
+        const hiddenCode = document.createElement('input');
+        hiddenCode.type = 'hidden';
+        hiddenCode.name = 'qr_codes[]';
+        hiddenCode.value = item.code;
+        inputs.appendChild(hiddenCode);
+    });
+
+    document.getElementById('inputDamagedWeight').value = totalWeight.toFixed(2);
+    document.getElementById('inputEstimatedLoss').value = totalLoss.toFixed(2);
+    const weightHelp = document.getElementById('reportWeightHelp');
+    if (weightHelp) weightHelp.textContent = `${damageScannedLabels.length} scanned piece(s)`;
+    const rateBadge = document.getElementById('reportRateBadge');
+    if (rateBadge) rateBadge.textContent = totalWeight > 0 ? `₹${(totalLoss / totalWeight).toFixed(2)} / kg` : '₹0.00 / kg';
+    const lossHelp = document.getElementById('reportLossCalcHelp');
+    if (lossHelp) lossHelp.textContent = `Estimated loss for ${damageScannedLabels.length} scanned piece(s): ₹${totalLoss.toFixed(2)}`;
 }
 
 function scanDamageRollQr() {
     const scanInput = document.getElementById('damageRollQrScan');
     const scannedCode = scanInput ? scanInput.value.trim() : '';
-    if (!scannedCode) return;
+    if (!scannedCode || damageScanInProgress) return;
 
-    clearDamageRollSelection();
+    const normalizedCode = scannedCode.split('|', 1)[0].trim().toUpperCase();
+    if (damageScannedLabels.some(item => item.code === normalizedCode)) {
+        setDamageRollScanStatus(`QR label ${normalizedCode} is already in this damage list.`, true);
+        scanInput.select();
+        return;
+    }
+
+    damageScanInProgress = true;
     setDamageRollScanStatus('Looking up fabric roll…');
     fetch('<?= url('api/production/damages/scan-roll') ?>?code=' + encodeURIComponent(scannedCode))
         .then(async response => {
@@ -817,36 +796,28 @@ function scanDamageRollQr() {
             return data;
         })
         .then(data => {
-            const sellerSelect = document.getElementById('modalSellerSelect');
-            sellerSelect.value = String(data.seller_id);
-            if (sellerSelect.value !== String(data.seller_id)) {
-                throw new Error('Supplier for this QR code is not available in the supplier list.');
-            }
-            return loadSupplierRolls(data.seller_id, data.roll_id).then(() => data);
-        })
-        .then(data => {
-            const roll = loadedRollsMap[data.roll_id];
-            if (!roll) {
-                throw new Error('The roll was found, but its details could not be loaded.');
-            }
-            const m = getRollMetrics(roll);
-            if (m.availQty < 1) {
-                throw new Error('This roll has no remaining undamaged labels available.');
-            }
-            const pieceWeight = m.weightPerPc;
-            document.getElementById('damageSellerId').value = data.seller_id;
-            document.getElementById('damageSellerRollId').value = data.roll_id;
-            document.getElementById('damageScannedQrCode').value = data.code;
-            document.getElementById('damageScannedCode').textContent = data.code;
-            document.getElementById('damageScannedWeight').textContent = pieceWeight.toFixed(2);
-            document.getElementById('damageScannedLabel').classList.remove('d-none');
-            document.getElementById('inputDamagedWeight').value = pieceWeight.toFixed(2);
-            updateReportCalculations(m, 1, pieceWeight);
-            setDamageRollScanStatus(`Found ${data.code} — ${data.roll_number}. Only this QR label will be marked damaged.`);
+            const quantity = Math.max(1, parseInt(data.quantity, 10) || 1);
+            const rollWeight = parseFloat(data.weight) || 0;
+            const rollPrice = parseFloat(data.price) || 0;
+            const pieceWeight = Math.round((rollWeight / quantity) * 100) / 100;
+            const loss = Math.round(pieceWeight * (rollWeight > 0 ? rollPrice / rollWeight : 0) * 100) / 100;
+            damageScannedLabels.push({
+                code: data.code,
+                sellerName: data.seller_name,
+                rollNumber: data.roll_number,
+                weight: pieceWeight,
+                loss
+            });
+            renderDamageScannedLabels();
+            setDamageRollScanStatus(`Added ${data.code} — ${data.seller_name}, ${data.roll_number}. Scan another label or submit.`);
+            scanInput.value = '';
+            scanInput.focus();
         })
         .catch(error => {
-            clearDamageRollSelection();
             setDamageRollScanStatus(error.message || 'Unable to scan this fabric roll.', true);
+        })
+        .finally(() => {
+            damageScanInProgress = false;
         });
 }
 
@@ -940,62 +911,6 @@ function syncEditReasonAndNotes() {
         if (notesStatus) notesStatus.textContent = '(Required if no dropdown reason selected)';
         if (reasonStar) reasonStar.style.display = '';
     }
-}
-
-function updateReportCalculations(m, qty, weight) {
-    if (!m) return;
-    const lossVal = weight * m.ratePerKg;
-    
-    const lossInput = document.getElementById('inputEstimatedLoss');
-    if (lossInput) lossInput.value = lossVal.toFixed(2);
-
-    const rateBadge = document.getElementById('reportRateBadge');
-    if (rateBadge) rateBadge.textContent = `₹${m.ratePerKg.toFixed(2)} / kg`;
-
-    const weightHelp = document.getElementById('reportWeightHelp');
-    if (weightHelp) weightHelp.textContent = `Rate: ₹${m.ratePerKg.toFixed(2)} / kg`;
-
-    const lossHelp = document.getElementById('reportLossCalcHelp');
-    if (lossHelp) lossHelp.textContent = `Calculated: ${weight.toFixed(2)} kg × ₹${m.ratePerKg.toFixed(2)}/kg = ₹${lossVal.toFixed(2)}`;
-}
-
-function handleRollSelectionChange(selectEl) {
-    const rollId = selectEl.value;
-    const infoBox = document.getElementById('rollInfoBox');
-    if (!rollId || !loadedRollsMap[rollId]) {
-        if (infoBox) infoBox.style.display = 'none';
-        return;
-    }
-
-    const r = loadedRollsMap[rollId];
-    const m = getRollMetrics(r);
-
-    document.getElementById('infoRollCode').textContent = r.roll_number;
-    document.getElementById('infoRollColor').textContent = r.color || 'Standard';
-    document.getElementById('infoRollDesign').textContent = r.design_name || 'Plain';
-    
-    document.getElementById('infoRollRates').innerHTML = 
-        `<span class="badge bg-success-subtle text-success border me-1">1 kg = ₹${m.ratePerKg.toFixed(2)}</span>` +
-        `<span class="badge bg-primary-subtle text-primary border">1 pc = ${m.weightPerPc.toFixed(2)} kg (₹${m.pricePerPc.toFixed(2)})</span>`;
-
-    if (m.availWeight > 0) {
-        document.getElementById('infoRollBalance').innerHTML = `<span class="text-success fw-bold">${m.availWeight.toFixed(2)} kg damageable</span> <small class="text-muted">(${m.availQty} pcs damageable / ${m.totWeight.toFixed(2)} kg total${m.usedQty ? ` • ${m.usedQty} pcs assigned` : ''})</small>`;
-    } else {
-        document.getElementById('infoRollBalance').innerHTML = `<span class="text-dark fw-bold">No damageable balance</span> <small class="text-muted">(${m.usedQty || 0} pcs assigned / ${m.totQty} pcs total)</small>`;
-    }
-    document.getElementById('infoRollPrice').textContent = `Total Lot: ₹${m.totPrice.toFixed(2)}`;
-
-    const defaultWeight = m.weightPerPc;
-    const weightInput = document.getElementById('inputDamagedWeight');
-    if (weightInput) {
-        weightInput.value = defaultWeight.toFixed(2);
-        weightInput.max = m.availWeight.toFixed(2);
-    }
-
-    updateReportCalculations(m, 1, defaultWeight);
-    syncReportReasonAndNotes();
-
-    if (infoBox) infoBox.style.display = '';
 }
 
 function updateEditCalculations(m, qty, weight) {
@@ -1240,19 +1155,15 @@ document.addEventListener('DOMContentLoaded', () => {
             scanInput.value = '';
             setDamageRollScanStatus('');
         });
-        scanInput.addEventListener('input', () => {
-            if (document.getElementById('damageScannedQrCode').value) {
-                clearDamageRollSelection();
-                setDamageRollScanStatus('Press Enter after scanning the QR to confirm that exact label.');
-            }
-        });
         scanInput.addEventListener('keydown', function(event) {
             if (event.key === 'Enter') {
                 event.preventDefault();
                 scanDamageRollQr();
             }
         });
-        scanInput.addEventListener('input', () => setDamageRollScanStatus(''));
+        scanInput.addEventListener('input', () => {
+            if (!damageScanInProgress) setDamageRollScanStatus('');
+        });
     }
 
     const resolveForm = document.getElementById('resolveDamageForm');
@@ -1277,15 +1188,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const reportForm = document.getElementById('reportDamageForm');
     if (reportForm) {
         reportForm.addEventListener('submit', function(e) {
-            const sellerId = document.getElementById('damageSellerId').value;
-            const rollId = document.getElementById('damageSellerRollId').value;
-            const qrCode = document.getElementById('damageScannedQrCode').value;
             const reason = document.getElementById('reportReasonSelect').value.trim();
             const notes = document.getElementById('reportDefectNotes').value.trim();
             const photoInput = document.getElementById('reportPhotoInput');
 
-            if (!qrCode || !sellerId || !rollId) {
-                alert('Scan a valid fabric QR label first. Only the scanned item will be marked damaged.');
+            if (damageScannedLabels.length === 0) {
+                alert('Scan at least one valid fabric QR label first.');
+                e.preventDefault();
+                return false;
+            }
+            if (damageScanInProgress) {
+                alert('Please wait for the current QR scan to finish.');
                 e.preventDefault();
                 return false;
             }

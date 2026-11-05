@@ -1190,7 +1190,8 @@ class ProductionController {
         $prefix = $matches[1];
         $sequence = (int)$matches[2];
         $rolls = Database::fetchAll(
-            "SELECT sr.id, sr.seller_id, sr.roll_number, sr.start_seq, sr.end_seq, sr.start_code, sr.end_code,
+            "SELECT sr.id, sr.seller_id, sr.roll_number, sr.color, sr.design_name, sr.quantity, sr.weight, sr.price,
+                    sr.start_seq, sr.end_seq, sr.start_code, sr.end_code,
                     s.name as seller_name, s.company as seller_company
              FROM seller_rolls sr
              JOIN sellers s ON s.id = sr.seller_id
@@ -1244,6 +1245,11 @@ class ProductionController {
             'seller_name' => $roll['seller_name'],
             'roll_id' => (int)$roll['id'],
             'roll_number' => $roll['roll_number'],
+            'color' => $roll['color'],
+            'design_name' => $roll['design_name'],
+            'quantity' => (int)$roll['quantity'],
+            'weight' => (float)$roll['weight'],
+            'price' => (float)$roll['price'],
             'code' => $scanCode,
         ]);
     }
@@ -2041,15 +2047,25 @@ class ProductionController {
             return;
         }
 
-        $sellerId = !empty($_POST['seller_id']) ? (int)$_POST['seller_id'] : null;
-        $sellerRollId = !empty($_POST['seller_roll_id']) ? (int)$_POST['seller_roll_id'] : null;
-        $qrCode = strtoupper(trim(explode('|', trim((string)($_POST['qr_code'] ?? '')), 2)[0]));
+        $submittedQrCodes = $_POST['qr_codes'] ?? [];
+        if (!is_array($submittedQrCodes)) {
+            $submittedQrCodes = [];
+        }
+        if (empty($submittedQrCodes) && !empty($_POST['qr_code'])) {
+            $submittedQrCodes = [$_POST['qr_code']];
+        }
+        $qrCodes = [];
+        foreach ($submittedQrCodes as $submittedCode) {
+            $code = strtoupper(trim(explode('|', trim((string)$submittedCode), 2)[0]));
+            if ($code !== '' && !in_array($code, $qrCodes, true)) {
+                $qrCodes[] = $code;
+            }
+        }
         $damageReason = trim($_POST['damage_reason'] ?? '');
         $defectNotes = trim($_POST['defect_notes'] ?? '');
-        $damagedQty = 1;
 
-        if (!$sellerId || !$sellerRollId || !preg_match('/^([A-Z]{2}\d{4})(\d+)$/', $qrCode, $qrMatches)) {
-            Session::flash('error', 'Scan a valid fabric QR label before recording damage.');
+        if (empty($qrCodes)) {
+            Session::flash('error', 'Scan at least one valid fabric QR label before recording damage.');
             Response::back();
             return;
         }
@@ -2072,87 +2088,101 @@ class ProductionController {
             $damageReason = 'Other Fabric Damage';
         }
 
-        $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ? AND seller_id = ?", [$sellerRollId, $sellerId]);
-        if (!$roll) {
-            Session::flash('error', 'Selected Fabric Roll not found for this supplier.');
-            Response::back();
-            return;
-        }
-
-        $qrPrefix = $qrMatches[1];
-        $qrSequence = (int)$qrMatches[2];
-        $qrRollCandidates = Database::fetchAll(
-            "SELECT id, seller_id, start_seq, end_seq, start_code, end_code
-             FROM seller_rolls
-             WHERE start_code LIKE ? AND end_code LIKE ?",
-            [$qrPrefix . '%', $qrPrefix . '%']
-        );
-        $qrBelongsToRoll = false;
-        foreach ($qrRollCandidates as $candidate) {
-            if (
-                (int)$candidate['id'] === $sellerRollId
-                && (int)$candidate['seller_id'] === $sellerId
-                && strtoupper(substr((string)$candidate['start_code'], 0, 6)) === $qrPrefix
-                && strtoupper(substr((string)$candidate['end_code'], 0, 6)) === $qrPrefix
-                && $qrSequence >= (int)$candidate['start_seq']
-                && $qrSequence <= (int)$candidate['end_seq']
-            ) {
-                $qrBelongsToRoll = true;
-                break;
+        $damageItems = [];
+        $newDamageCountByRoll = [];
+        foreach ($qrCodes as $qrCode) {
+            if (!preg_match('/^([A-Z]{2}\d{4})(\d+)$/', $qrCode, $qrMatches)) {
+                Session::flash('error', "QR code {$qrCode} is not a recognized fabric label.");
+                Response::back();
+                return;
             }
+
+            $qrPrefix = $qrMatches[1];
+            $qrSequence = (int)$qrMatches[2];
+            $candidates = Database::fetchAll(
+                "SELECT sr.*, s.name AS seller_name
+                 FROM seller_rolls sr
+                 JOIN sellers s ON s.id = sr.seller_id
+                 WHERE sr.start_code LIKE ? AND sr.end_code LIKE ?",
+                [$qrPrefix . '%', $qrPrefix . '%']
+            );
+            $matchingRolls = array_values(array_filter($candidates, static function (array $candidate) use ($qrPrefix, $qrSequence): bool {
+                return strtoupper(substr((string)$candidate['start_code'], 0, 6)) === $qrPrefix
+                    && strtoupper(substr((string)$candidate['end_code'], 0, 6)) === $qrPrefix
+                    && $qrSequence >= (int)$candidate['start_seq']
+                    && $qrSequence <= (int)$candidate['end_seq'];
+            }));
+            if (count($matchingRolls) !== 1) {
+                Session::flash('error', count($matchingRolls) > 1
+                    ? "QR code {$qrCode} matches more than one fabric roll."
+                    : "No fabric roll was found for QR code {$qrCode}.");
+                Response::back();
+                return;
+            }
+
+            $roll = $matchingRolls[0];
+            $sellerRollId = (int)$roll['id'];
+            $deletedLabel = Database::fetchOne(
+                "SELECT id FROM seller_roll_deleted_labels WHERE seller_roll_id = ? AND `sequence` = ?",
+                [$sellerRollId, $qrSequence]
+            );
+            if ($deletedLabel) {
+                Session::flash('error', "QR label {$qrCode} was deleted and cannot be used to report damage.");
+                Response::back();
+                return;
+            }
+
+            $existingQrDamage = Database::fetchOne(
+                "SELECT damage_number FROM roll_damages WHERE qr_code = ? LIMIT 1",
+                [$qrCode]
+            );
+            if ($existingQrDamage) {
+                Session::flash('error', "QR label {$qrCode} is already recorded in damage report {$existingQrDamage['damage_number']}.");
+                Response::back();
+                return;
+            }
+
+            $rollQty = max(1, (int)($roll['quantity'] ?? 1));
+            $rollWeight = (float)$roll['weight'];
+            $rollPrice = (float)$roll['price'];
+            $damagedWeight = round($rollWeight / $rollQty, 2);
+            $ratePerKg = $rollWeight > 0 ? ($rollPrice / $rollWeight) : 0.0;
+            $lossAmount = round($damagedWeight * $ratePerKg, 2);
+            if ($lossAmount <= 0) {
+                $lossAmount = round($rollPrice / $rollQty, 2);
+            }
+
+            $damageItems[] = [
+                'qr_code' => $qrCode,
+                'seller_id' => (int)$roll['seller_id'],
+                'seller_roll_id' => $sellerRollId,
+                'roll_number' => $roll['roll_number'],
+                'damaged_weight' => $damagedWeight,
+                'loss_amount' => $lossAmount,
+            ];
+            $newDamageCountByRoll[$sellerRollId] = ($newDamageCountByRoll[$sellerRollId] ?? 0) + 1;
         }
-        if (!$qrBelongsToRoll) {
-            Session::flash('error', 'The scanned QR label does not belong to the selected fabric roll.');
-            Response::back();
-            return;
-        }
 
-        $deletedLabel = Database::fetchOne(
-            "SELECT id FROM seller_roll_deleted_labels WHERE seller_roll_id = ? AND `sequence` = ?",
-            [$sellerRollId, $qrSequence]
-        );
-        if ($deletedLabel) {
-            Session::flash('error', 'This QR label was deleted and cannot be used to report damage.');
-            Response::back();
-            return;
-        }
-
-        $existingQrDamage = Database::fetchOne(
-            "SELECT damage_number FROM roll_damages WHERE qr_code = ? LIMIT 1",
-            [$qrCode]
-        );
-        if ($existingQrDamage) {
-            Session::flash('error', "QR label {$qrCode} is already recorded in damage report {$existingQrDamage['damage_number']}.");
-            Response::back();
-            return;
-        }
-
-        $existingDamages = Database::fetchOne(
-            "SELECT COALESCE(SUM(damaged_quantity), 0) as dmg_qty, COALESCE(SUM(damaged_weight), 0.0) as dmg_weight 
-             FROM roll_damages WHERE seller_roll_id = ? AND status NOT IN ('CLOSED', 'CANCELLED')",
-            [$sellerRollId]
-        );
-        $damagedExistingQty = (int)($existingDamages['dmg_qty'] ?? 0);
-        $availQty = max(0, (int)$roll['quantity'] - $damagedExistingQty);
-
-        if ($availQty < 1) {
-            Session::flash('error', "Damaged Quantity ({$damagedQty} pcs) cannot exceed the available roll balance ({$availQty} pcs).");
-            Response::back();
-            return;
-        }
-
-        // Calculate auto-calculated weight and financial loss valuation
-        $rollWeight = (float)$roll['weight'];
-        $rollPrice = (float)$roll['price'];
-        $rollQty = max(1, (int)($roll['quantity'] ?? 1));
-
-        $weightPerPc = $rollQty > 0 ? round($rollWeight / $rollQty, 2) : 0.0;
-        $damagedWeight = round($damagedQty * $weightPerPc, 2);
-
-        $ratePerKg = $rollWeight > 0 ? ($rollPrice / $rollWeight) : 0.0;
-        $lossAmount = round($damagedWeight * $ratePerKg, 2);
-        if ($lossAmount <= 0 && $rollQty > 0) {
-            $lossAmount = round(($rollPrice / $rollQty) * $damagedQty, 2);
+        foreach ($newDamageCountByRoll as $sellerRollId => $newCount) {
+            $roll = Database::fetchOne(
+                "SELECT sr.roll_number, sr.quantity - COALESCE(dmg.damaged_quantity, 0) AS available_quantity
+                 FROM seller_rolls sr
+                 LEFT JOIN (
+                     SELECT seller_roll_id, SUM(damaged_quantity) AS damaged_quantity
+                     FROM roll_damages
+                     WHERE status NOT IN ('CLOSED', 'CANCELLED')
+                     GROUP BY seller_roll_id
+                 ) dmg ON dmg.seller_roll_id = sr.id
+                 WHERE sr.id = ?",
+                [$sellerRollId]
+            );
+            $availableQuantity = max(0, (int)($roll['available_quantity'] ?? 0));
+            if (!$roll || $newCount > $availableQuantity) {
+                $rollNumber = $roll['roll_number'] ?? (string)$sellerRollId;
+                Session::flash('error', "The scanned labels for roll {$rollNumber} exceed its available damageable balance ({$availableQuantity} pcs).");
+                Response::back();
+                return;
+            }
         }
 
         // Defect Photo / Evidence is required
@@ -2171,45 +2201,51 @@ class ProductionController {
             return;
         }
 
-        // Generate sequential damage number e.g. DMG-ROL-2026-0001
-        $countToday = Database::fetchOne("SELECT COUNT(*) as cnt FROM roll_damages");
-        $nextSeq = (int)($countToday['cnt'] ?? 0) + 1;
-        $damageNumber = 'DMG-ROL-' . date('Y') . '-' . sprintf("%04d", $nextSeq);
-
         $userId = (int)(Session::get('user_id') ?? 1);
+        $totalLossAmount = 0.0;
 
         try {
-            Database::execute(
-                "INSERT INTO roll_damages 
-                    (damage_number, seller_id, seller_roll_id, qr_code, damaged_quantity, damaged_weight, loss_amount, damage_reason, defect_notes, photo_url, status, resolution_type, reported_by, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, NOW(), NOW())",
-                [
-                    $damageNumber,
-                    $sellerId,
-                    $sellerRollId,
-                    $qrCode,
-                    $damagedQty,
-                    $damagedWeight,
-                    $lossAmount,
-                    $damageReason,
-                    $defectNotes ?: null,
-                    $photoUrl,
-                    $userId
-                ]
-            );
-            $damageId = (int)Database::lastInsertId();
+            Database::beginTransaction();
+            $countToday = Database::fetchOne("SELECT COUNT(*) as cnt FROM roll_damages");
+            $nextSeq = (int)($countToday['cnt'] ?? 0) + 1;
+            foreach ($damageItems as $index => $item) {
+                $damageNumber = 'DMG-ROL-' . date('Y') . '-' . sprintf("%04d", $nextSeq + $index);
+                Database::execute(
+                    "INSERT INTO roll_damages
+                        (damage_number, seller_id, seller_roll_id, qr_code, damaged_quantity, damaged_weight, loss_amount, damage_reason, defect_notes, photo_url, status, resolution_type, reported_by, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, NOW(), NOW())",
+                    [
+                        $damageNumber,
+                        $item['seller_id'],
+                        $item['seller_roll_id'],
+                        $item['qr_code'],
+                        $item['damaged_weight'],
+                        $item['loss_amount'],
+                        $damageReason,
+                        $defectNotes ?: null,
+                        $photoUrl,
+                        $userId
+                    ]
+                );
+                $damageId = (int)Database::lastInsertId();
+                $totalLossAmount += (float)$item['loss_amount'];
 
-            AuditService::log('production', 'create', 'roll_damages', $damageId, null, [
-                'damage_number' => $damageNumber,
-                'seller_roll_id' => $sellerRollId,
-                'loss_amount' => $lossAmount,
-                'reason' => $damageReason
-            ]);
-
+                AuditService::log('production', 'create', 'roll_damages', $damageId, null, [
+                    'damage_number' => $damageNumber,
+                    'qr_code' => $item['qr_code'],
+                    'seller_roll_id' => $item['seller_roll_id'],
+                    'loss_amount' => $item['loss_amount'],
+                    'reason' => $damageReason
+                ]);
+            }
+            Database::commit();
             $redirectUrl = !empty($_POST['redirect_url']) ? $_POST['redirect_url'] : url('production/damages');
-            Session::flash('success', "Fabric Roll Damage {$damageNumber} logged successfully. Loss valuation: ₹" . number_format($lossAmount, 2));
+            Session::flash('success', count($damageItems) . ' scanned fabric piece(s) recorded as damage across ' . count($newDamageCountByRoll) . ' roll(s). Total loss valuation: ₹' . number_format($totalLossAmount, 2));
             Response::redirect($redirectUrl);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
             Session::flash('error', 'Error logging roll damage: ' . $e->getMessage());
             Response::back();
         }
