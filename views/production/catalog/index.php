@@ -140,23 +140,23 @@
                  data-material="<?= strtolower(e($p['material'] ?? '')) ?>"
                  data-brand="<?= strtolower(e($p['brand_name'] ?? '')) ?>">
                 <div class="card h-100 shadow-sm border-0 d-flex flex-column catalog-card-hover" style="transition: transform 0.18s, box-shadow 0.18s;">
-                    <!-- Card Top Image / Banner -->
-                    <div class="bg-light position-relative border-bottom text-center d-flex align-items-center justify-content-center" style="height: 180px; overflow: hidden;">
-                        <?php if (!empty($p['image_url'])): ?>
+                    <?php if (!empty($p['image_url'])): ?>
+                        <div class="bg-light position-relative border-bottom text-center d-flex align-items-center justify-content-center" style="height: 180px; overflow: hidden;">
                             <img src="<?= e($p['image_url']) ?>" class="img-fluid" style="max-height: 180px; width: 100%; object-fit: contain;" alt="<?= e($p['name']) ?>">
-                        <?php else: ?>
-                            <div class="text-muted text-center py-4">
-                                <i class="bi bi-image fs-1 text-secondary opacity-50 d-block mb-1"></i>
-                                <span class="small">No Style Image</span>
-                            </div>
-                        <?php endif; ?>
-                        <span class="position-absolute top-0 start-0 m-2 badge bg-dark text-white px-2 py-1 font-monospace">
-                            <?= e($p['code']) ?>
-                        </span>
-                        <span class="position-absolute top-0 end-0 m-2 badge bg-success text-white">In-House</span>
-                    </div>
+                            <span class="position-absolute top-0 start-0 m-2 badge bg-dark text-white px-2 py-1 font-monospace">
+                                <?= e($p['code']) ?>
+                            </span>
+                            <span class="position-absolute top-0 end-0 m-2 badge bg-success text-white">In-House</span>
+                        </div>
+                    <?php endif; ?>
 
                     <div class="card-body d-flex flex-column">
+                        <?php if (empty($p['image_url'])): ?>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="badge bg-dark text-white px-2 py-1 font-monospace"><?= e($p['code']) ?></span>
+                                <span class="badge bg-success text-white">In-House</span>
+                            </div>
+                        <?php endif; ?>
                         <h5 class="card-title fw-bold mb-1 text-truncate" title="<?= e($p['name']) ?>">
                             <a href="<?= url('production/catalog/view/' . $p['id']) ?>" class="text-dark text-decoration-none hover-primary">
                                 <?= e($p['name']) ?>
