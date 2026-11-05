@@ -380,7 +380,7 @@
                                 <div class="spec-item"><strong>Design:</strong> <?= e($stk['design_name']) ?></div>
                             <?php endif; ?>
                             <?php if ($stk['weight'] > 0): ?>
-                                <div class="spec-item"><strong>Roll Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
+                                <div class="spec-item"><strong>Total Roll Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -854,7 +854,7 @@ function submitAddExtraLabel() {
 
                 const safeColor = stk.color ? `<div class="spec-item"><strong>Color:</strong> ${stk.color}</div>` : '';
                 const safeDesign = stk.design_name ? `<div class="spec-item"><strong>Design:</strong> ${stk.design_name}</div>` : '';
-                const safeWeight = stk.weight > 0 ? `<div class="spec-item"><strong>Roll Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : '';
+                const safeWeight = stk.weight > 0 ? `<div class="spec-item"><strong>Total Roll Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : '';
 
                 card.innerHTML = `
                     <div class="sticker-card-toolbar no-print">

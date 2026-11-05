@@ -1139,14 +1139,15 @@ class ProductionController {
 
     public function ajaxSellerRolls(string $id): void {
         $sellerId = (int)$id;
+        $excludeDamageId = max(0, (int)($_GET['exclude_damage_id'] ?? 0));
         $rolls = Database::fetchAll(
             "SELECT sr.id, sr.roll_number, sr.color, sr.design_name, sr.quantity, sr.weight, sr.price, sr.photo_url,
                     COALESCE(u.used_quantity, 0) as used_quantity,
                     COALESCE(u.used_weight, 0) as used_weight,
                     COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
                     COALESCE(dmg.damaged_weight, 0) as damaged_weight,
-                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
-                    GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight
+                    GREATEST(0, sr.quantity - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
+                    GREATEST(0.0, sr.weight - COALESCE(dmg.damaged_weight, 0)) as available_weight
              FROM seller_rolls sr
              LEFT JOIN (
                  SELECT ppr.seller_roll_id, 
@@ -1162,17 +1163,76 @@ class ProductionController {
                         SUM(rd.damaged_quantity) as damaged_quantity,
                         SUM(rd.damaged_weight) as damaged_weight
                  FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED')
+                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
+                   AND (? = 0 OR rd.id != ?)
                  GROUP BY rd.seller_roll_id
              ) dmg ON sr.id = dmg.seller_roll_id
              WHERE sr.seller_id = ?
              ORDER BY sr.id ASC",
-            [$sellerId]
+            [$excludeDamageId, $excludeDamageId, $sellerId]
         );
 
         Response::json([
             'success' => true,
             'rolls' => $rolls
+        ]);
+    }
+
+    public function ajaxLookupDamageRoll(): void {
+        $rawScan = trim((string)($_GET['code'] ?? ''));
+        $scanCode = strtoupper(trim(explode('|', $rawScan, 2)[0]));
+
+        if (!preg_match('/^([A-Z]{2}\d{4})(\d+)$/', $scanCode, $matches)) {
+            Response::json(['success' => false, 'message' => 'QR code is not a recognized fabric roll label.'], 400);
+            return;
+        }
+
+        $prefix = $matches[1];
+        $sequence = (int)$matches[2];
+        $rolls = Database::fetchAll(
+            "SELECT sr.id, sr.seller_id, sr.roll_number, sr.start_seq, sr.end_seq, sr.start_code, sr.end_code,
+                    s.name as seller_name, s.company as seller_company
+             FROM seller_rolls sr
+             JOIN sellers s ON s.id = sr.seller_id
+             WHERE sr.start_code LIKE ? AND sr.end_code LIKE ?
+             ORDER BY sr.id ASC",
+            [$prefix . '%', $prefix . '%']
+        );
+
+        $matchesForCode = array_values(array_filter($rolls, static function (array $roll) use ($prefix, $sequence): bool {
+            return strtoupper(substr((string)$roll['start_code'], 0, 6)) === $prefix
+                && strtoupper(substr((string)$roll['end_code'], 0, 6)) === $prefix
+                && $sequence >= (int)$roll['start_seq']
+                && $sequence <= (int)$roll['end_seq'];
+        }));
+
+        if (count($matchesForCode) !== 1) {
+            Response::json([
+                'success' => false,
+                'message' => count($matchesForCode) > 1
+                    ? 'This QR code matches more than one fabric roll. Select the roll manually.'
+                    : 'No fabric roll was found for this QR code.',
+            ], count($matchesForCode) > 1 ? 409 : 404);
+            return;
+        }
+
+        $roll = $matchesForCode[0];
+        $deletedLabel = Database::fetchOne(
+            "SELECT id FROM seller_roll_deleted_labels WHERE seller_roll_id = ? AND `sequence` = ?",
+            [(int)$roll['id'], $sequence]
+        );
+        if ($deletedLabel) {
+            Response::json(['success' => false, 'message' => 'This QR label was deleted and cannot be used to report damage.'], 404);
+            return;
+        }
+
+        Response::json([
+            'success' => true,
+            'seller_id' => (int)$roll['seller_id'],
+            'seller_name' => $roll['seller_name'],
+            'roll_id' => (int)$roll['id'],
+            'roll_number' => $roll['roll_number'],
+            'code' => $scanCode,
         ]);
     }
 
@@ -2002,22 +2062,14 @@ class ProductionController {
             return;
         }
 
-        // Check available quantity ceiling
-        $usage = Database::fetchOne(
-            "SELECT COALESCE(SUM(ppr.roll_qty), 0) as used_qty, COALESCE(SUM(ppr.roll_weight), 0.0) as used_weight 
-             FROM production_program_rolls ppr
-             JOIN production_programs pp ON ppr.production_program_id = pp.id
-             WHERE pp.is_active = 1 AND pp.status != 'CANCELLED' AND ppr.seller_roll_id = ?",
-            [$sellerRollId]
-        );
+        // Allocated rolls can still be damaged; only previously damaged units reduce this limit.
         $existingDamages = Database::fetchOne(
             "SELECT COALESCE(SUM(damaged_quantity), 0) as dmg_qty, COALESCE(SUM(damaged_weight), 0.0) as dmg_weight 
              FROM roll_damages WHERE seller_roll_id = ? AND status NOT IN ('CLOSED', 'CANCELLED')",
             [$sellerRollId]
         );
-        $usedQty = (int)($usage['used_qty'] ?? 0);
         $damagedExistingQty = (int)($existingDamages['dmg_qty'] ?? 0);
-        $availQty = max(0, (int)$roll['quantity'] - $usedQty - $damagedExistingQty);
+        $availQty = max(0, (int)$roll['quantity'] - $damagedExistingQty);
 
         if ($damagedQty > $availQty) {
             Session::flash('error', "Damaged Quantity ({$damagedQty} pcs) cannot exceed the available roll balance ({$availQty} pcs).");
@@ -2149,22 +2201,14 @@ class ProductionController {
             return;
         }
 
-        // Check available quantity ceiling excluding current damage
-        $usage = Database::fetchOne(
-            "SELECT COALESCE(SUM(ppr.roll_qty), 0) as used_qty, COALESCE(SUM(ppr.roll_weight), 0.0) as used_weight 
-             FROM production_program_rolls ppr
-             JOIN production_programs pp ON ppr.production_program_id = pp.id
-             WHERE pp.is_active = 1 AND pp.status != 'CANCELLED' AND ppr.seller_roll_id = ?",
-            [$sellerRollId]
-        );
+        // Allocated rolls can still be damaged; only other active damage records reduce this limit.
         $existingDamages = Database::fetchOne(
             "SELECT COALESCE(SUM(damaged_quantity), 0) as dmg_qty, COALESCE(SUM(damaged_weight), 0.0) as dmg_weight 
              FROM roll_damages WHERE seller_roll_id = ? AND status NOT IN ('CLOSED', 'CANCELLED') AND id != ?",
             [$sellerRollId, $damageId]
         );
-        $usedQty = (int)($usage['used_qty'] ?? 0);
         $damagedExistingQty = (int)($existingDamages['dmg_qty'] ?? 0);
-        $availQty = max(0, (int)$roll['quantity'] - $usedQty - $damagedExistingQty);
+        $availQty = max(0, (int)$roll['quantity'] - $damagedExistingQty);
 
         if ($damagedQty > $availQty) {
             Session::flash('error', "Damaged Quantity ({$damagedQty} pcs) cannot exceed the available roll balance ({$availQty} pcs).");

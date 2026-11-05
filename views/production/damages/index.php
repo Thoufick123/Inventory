@@ -5,9 +5,6 @@
             <span class="text-muted">Track defective fabric rolls, initiate supplier returns, and manage refunds or replacement rolls</span>
         </div>
         <div class="d-flex gap-2 align-items-center">
-            <a href="<?= url('production/sellers') ?>" class="btn btn-outline-secondary">
-                <i class="bi bi-truck me-1"></i> Material Suppliers
-            </a>
             <?php if (hasPermission('damages', 'create')): ?>
             <button type="button" class="btn btn-danger shadow-sm" data-bs-toggle="modal" data-bs-target="#reportDamageModal">
                 <i class="bi bi-plus-circle me-1"></i> Report Roll Damage
@@ -347,6 +344,12 @@
                 <?= CSRF::field() ?>
                 <div class="modal-body p-4">
                     <div class="row g-3">
+                        <div class="col-12">
+                            <label for="damageRollQrScan" class="form-label fw-bold">Scan Fabric Roll QR</label>
+                            <input type="text" id="damageRollQrScan" class="form-control form-control-lg" placeholder="Scan or enter the roll QR code, then press Enter" autocomplete="off">
+                            <div id="damageRollScanStatus" class="small mt-1" role="status" aria-live="polite"></div>
+                        </div>
+
                         <!-- Supplier Selection -->
                         <div class="col-md-6">
                             <label class="form-label fw-bold required">Material Supplier / Mill</label>
@@ -380,7 +383,7 @@
                                     <div class="mt-1 d-flex gap-1 flex-wrap" id="infoRollRates"></div>
                                 </div>
                                 <div class="text-end">
-                                    <span class="small text-muted d-block">AVAILABLE BALANCE</span>
+                                    <span class="small text-muted d-block">DAMAGEABLE BALANCE</span>
                                     <div id="infoRollBalance">0.00 kg</div>
                                     <small class="text-muted d-block" id="infoRollPrice">₹0.00</small>
                                 </div>
@@ -529,7 +532,7 @@
                                     <div class="mt-1 d-flex gap-1 flex-wrap" id="editInfoRollRates"></div>
                                 </div>
                                 <div class="text-end">
-                                    <span class="small text-muted d-block">AVAILABLE BALANCE</span>
+                                    <span class="small text-muted d-block">DAMAGEABLE BALANCE</span>
                                     <div id="editInfoRollBalance">0.00 kg</div>
                                     <small class="text-muted d-block" id="editInfoRollPrice">₹0.00</small>
                                 </div>
@@ -738,12 +741,12 @@ function loadSupplierRolls(sellerId, selectedRollId = null) {
     if (!sellerId) {
         rollSelect.innerHTML = '<option value="">-- Select Supplier First --</option>';
         if (infoBox) infoBox.style.display = 'none';
-        return;
+        return Promise.resolve();
     }
 
     rollSelect.innerHTML = '<option value="">Loading rolls...</option>';
 
-    fetch('<?= url('api/sellers') ?>/' + sellerId + '/rolls')
+    return fetch('<?= url('api/sellers') ?>/' + sellerId + '/rolls')
         .then(res => res.json())
         .then(data => {
             rollSelect.innerHTML = '<option value="">-- Choose Fabric Roll --</option>';
@@ -756,13 +759,9 @@ function loadSupplierRolls(sellerId, selectedRollId = null) {
                     opt.value = r.id;
                     const availWt = parseFloat(r.available_weight) || 0;
                     const totalWt = parseFloat(r.weight) || 0;
-                    let wtDisplay = `${totalWt.toFixed(2)} kg`;
-                    if (availWt > 0 && availWt < totalWt) {
-                        wtDisplay = `Avail: ${availWt.toFixed(2)} kg / Total: ${totalWt.toFixed(2)} kg`;
-                    } else if (availWt === 0) {
-                        wtDisplay = `Total: ${totalWt.toFixed(2)} kg (Assigned in Program)`;
-                    }
-                    opt.textContent = `${r.roll_number} (${r.color || 'No Color'} - ${r.design_name || 'No Design'}) • ${wtDisplay}`;
+                    const availQty = parseInt(r.available_quantity, 10) || 0;
+                    const usedQty = parseInt(r.used_quantity, 10) || 0;
+                    opt.textContent = `${r.roll_number} (${r.color || 'No Color'} - ${r.design_name || 'No Design'}) • Damageable: ${availQty} pcs / ${availWt.toFixed(2)} kg${usedQty > 0 ? ` • ${usedQty} pcs assigned` : ''}`;
                     if (selectedRollId && parseInt(selectedRollId) === parseInt(r.id)) {
                         opt.selected = true;
                     }
@@ -779,6 +778,50 @@ function loadSupplierRolls(sellerId, selectedRollId = null) {
         .catch(err => {
             console.error('Error fetching rolls:', err);
             rollSelect.innerHTML = '<option value="">Failed to load rolls</option>';
+            return false;
+        });
+}
+
+function setDamageRollScanStatus(message, isError = false) {
+    const status = document.getElementById('damageRollScanStatus');
+    if (!status) return;
+    status.textContent = message;
+    status.className = `small mt-1 ${isError ? 'text-danger' : 'text-success'}`;
+}
+
+function scanDamageRollQr() {
+    const scanInput = document.getElementById('damageRollQrScan');
+    const scannedCode = scanInput ? scanInput.value.trim() : '';
+    if (!scannedCode) return;
+
+    setDamageRollScanStatus('Looking up fabric roll…');
+    fetch('<?= url('api/production/damages/scan-roll') ?>?code=' + encodeURIComponent(scannedCode))
+        .then(async response => {
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.message || 'Unable to find this fabric roll.');
+            }
+            return data;
+        })
+        .then(data => {
+            const sellerSelect = document.getElementById('modalSellerSelect');
+            sellerSelect.value = String(data.seller_id);
+            if (sellerSelect.value !== String(data.seller_id)) {
+                throw new Error('Supplier for this QR code is not available in the supplier list.');
+            }
+            return loadSupplierRolls(data.seller_id, data.roll_id).then(() => data);
+        })
+        .then(data => {
+            const roll = loadedRollsMap[data.roll_id];
+            if (!roll) {
+                throw new Error('The roll was found, but its details could not be loaded.');
+            }
+            const m = getRollMetrics(roll);
+            const allocationText = m.usedQty > 0 ? ` ${m.usedQty} pcs are assigned to active production programs.` : '';
+            setDamageRollScanStatus(`Found ${data.code} — ${data.roll_number}. Damageable balance: ${m.availQty} pcs.${allocationText}`);
+        })
+        .catch(error => {
+            setDamageRollScanStatus(error.message || 'Unable to scan this fabric roll.', true);
         });
 }
 
@@ -786,8 +829,8 @@ function getRollMetrics(r) {
     const totQty = parseInt(r.quantity) || 1;
     const totWeight = parseFloat(r.weight) || 0;
     const totPrice = parseFloat(r.price) || 0;
-    const availQty = parseInt(r.available_quantity !== undefined ? r.available_quantity : r.quantity) || totQty;
-    const availWeight = parseFloat(r.available_weight !== undefined ? r.available_weight : r.weight) || totWeight;
+    const availQty = r.available_quantity !== undefined ? Math.max(0, parseInt(r.available_quantity, 10) || 0) : totQty;
+    const availWeight = r.available_weight !== undefined ? Math.max(0, parseFloat(r.available_weight) || 0) : totWeight;
     
     const weightPerPc = totQty > 0 ? (totWeight / totQty) : totWeight;
     const ratePerKg = totWeight > 0 ? (totPrice / totWeight) : 0;
@@ -799,6 +842,7 @@ function getRollMetrics(r) {
         totPrice,
         availQty,
         availWeight,
+        usedQty: parseInt(r.used_quantity, 10) || 0,
         weightPerPc,
         ratePerKg,
         pricePerPc
@@ -884,7 +928,7 @@ function updateReportCalculations(m, qty, weight) {
     if (rateBadge) rateBadge.textContent = `₹${m.ratePerKg.toFixed(2)} / kg`;
 
     const qtyHelp = document.getElementById('reportQtyHelp');
-    if (qtyHelp) qtyHelp.textContent = `1 pc = ${m.weightPerPc.toFixed(2)} kg (Max available: ${m.availQty} pcs)`;
+    if (qtyHelp) qtyHelp.textContent = `1 pc = ${m.weightPerPc.toFixed(2)} kg (Max damageable: ${m.availQty} pcs)`;
 
     const weightHelp = document.getElementById('reportWeightHelp');
     if (weightHelp) weightHelp.textContent = `Rate: ₹${m.ratePerKg.toFixed(2)} / kg`;
@@ -900,13 +944,13 @@ function onReportQtyChange() {
 
     const qtyInput = document.getElementById('inputDamagedQty');
     let qty = parseInt(qtyInput.value) || 0;
-    const maxQty = m.availQty > 0 ? m.availQty : m.totQty;
+    const maxQty = m.availQty;
 
     if (qty > maxQty) {
         alert(`Damaged Quantity (${qty} pcs) cannot exceed the available roll quantity (${maxQty} pcs) in supplier stock.`);
         qty = maxQty;
         qtyInput.value = maxQty;
-    } else if (qty < 1 && qtyInput.value !== '') {
+    } else if (qty < 1 && qtyInput.value !== '' && maxQty > 0) {
         qty = 1;
         qtyInput.value = 1;
     }
@@ -951,9 +995,9 @@ function handleRollSelectionChange(selectEl) {
         `<span class="badge bg-primary-subtle text-primary border">1 pc = ${m.weightPerPc.toFixed(2)} kg (₹${m.pricePerPc.toFixed(2)})</span>`;
 
     if (m.availWeight > 0) {
-        document.getElementById('infoRollBalance').innerHTML = `<span class="text-success fw-bold">${m.availWeight.toFixed(2)} kg</span> <small class="text-muted">(${m.availQty} pcs left / ${m.totWeight.toFixed(2)} kg total)</small>`;
+        document.getElementById('infoRollBalance').innerHTML = `<span class="text-success fw-bold">${m.availWeight.toFixed(2)} kg damageable</span> <small class="text-muted">(${m.availQty} pcs damageable / ${m.totWeight.toFixed(2)} kg total${m.usedQty ? ` • ${m.usedQty} pcs assigned` : ''})</small>`;
     } else {
-        document.getElementById('infoRollBalance').innerHTML = `<span class="text-dark fw-bold">${m.totWeight.toFixed(2)} kg Total</span> <span class="badge bg-secondary-subtle text-secondary ms-1">In Production Program</span>`;
+        document.getElementById('infoRollBalance').innerHTML = `<span class="text-dark fw-bold">No damageable balance</span> <small class="text-muted">(${m.usedQty || 0} pcs assigned / ${m.totQty} pcs total)</small>`;
     }
     document.getElementById('infoRollPrice').textContent = `Total Lot: ₹${m.totPrice.toFixed(2)}`;
 
@@ -961,19 +1005,22 @@ function handleRollSelectionChange(selectEl) {
     const defaultQty = 1;
     const qtyInput = document.getElementById('inputDamagedQty');
     if (qtyInput) {
-        qtyInput.value = defaultQty;
-        qtyInput.max = m.availQty > 0 ? m.availQty : m.totQty;
+        qtyInput.value = Math.min(defaultQty, m.availQty);
+        qtyInput.max = m.availQty;
+        qtyInput.disabled = m.availQty < 1;
+        qtyInput.min = m.availQty > 0 ? 1 : 0;
     }
 
     // Calculate initial damaged weight accurately based on 1 unit weight
-    const defaultWeight = defaultQty * m.weightPerPc;
+    const selectedQty = Math.min(defaultQty, m.availQty);
+    const defaultWeight = selectedQty * m.weightPerPc;
     const weightInput = document.getElementById('inputDamagedWeight');
     if (weightInput) {
         weightInput.value = defaultWeight.toFixed(2);
-        weightInput.max = (m.availWeight > 0 ? m.availWeight : m.totWeight).toFixed(2);
+        weightInput.max = m.availWeight.toFixed(2);
     }
 
-    updateReportCalculations(m, defaultQty, defaultWeight);
+    updateReportCalculations(m, selectedQty, defaultWeight);
     syncReportReasonAndNotes();
 
     if (infoBox) infoBox.style.display = '';
@@ -990,7 +1037,7 @@ function updateEditCalculations(m, qty, weight) {
     if (rateBadge) rateBadge.textContent = `₹${m.ratePerKg.toFixed(2)} / kg`;
 
     const qtyHelp = document.getElementById('editQtyHelp');
-    if (qtyHelp) qtyHelp.textContent = `1 pc = ${m.weightPerPc.toFixed(2)} kg (Max available: ${m.availQty} pcs)`;
+    if (qtyHelp) qtyHelp.textContent = `1 pc = ${m.weightPerPc.toFixed(2)} kg (Max damageable: ${m.availQty} pcs)`;
 
     const weightHelp = document.getElementById('editWeightHelp');
     if (weightHelp) weightHelp.textContent = `Rate: ₹${m.ratePerKg.toFixed(2)} / kg`;
@@ -1006,13 +1053,13 @@ function onEditQtyChange() {
 
     const qtyInput = document.getElementById('editDamagedQty');
     let qty = parseInt(qtyInput.value) || 0;
-    const maxQty = m.availQty > 0 ? m.availQty : m.totQty;
+    const maxQty = m.availQty;
 
     if (qty > maxQty) {
         alert(`Damaged Quantity (${qty} pcs) cannot exceed the available roll quantity (${maxQty} pcs) in supplier stock.`);
         qty = maxQty;
         qtyInput.value = maxQty;
-    } else if (qty < 1 && qtyInput.value !== '') {
+    } else if (qty < 1 && qtyInput.value !== '' && maxQty > 0) {
         qty = 1;
         qtyInput.value = 1;
     }
@@ -1069,14 +1116,14 @@ function openEditDamageModal(damageData) {
         if (photoReqStar) photoReqStar.style.display = '';
     }
 
-    loadSupplierRollsForEdit(damageData.seller_id, damageData.seller_roll_id);
+    loadSupplierRollsForEdit(damageData.seller_id, damageData.seller_roll_id, damageData.id);
     syncEditReasonAndNotes();
 
     const modal = new bootstrap.Modal(document.getElementById('editDamageModal'));
     modal.show();
 }
 
-function loadSupplierRollsForEdit(sellerId, selectedRollId = null) {
+function loadSupplierRollsForEdit(sellerId, selectedRollId = null, excludeDamageId = 0) {
     const rollSelect = document.getElementById('editRollSelect');
     const infoBox = document.getElementById('editRollInfoBox');
     if (!sellerId) {
@@ -1087,7 +1134,7 @@ function loadSupplierRollsForEdit(sellerId, selectedRollId = null) {
 
     rollSelect.innerHTML = '<option value="">Loading rolls...</option>';
 
-    fetch('<?= url('api/sellers') ?>/' + sellerId + '/rolls')
+    fetch('<?= url('api/sellers') ?>/' + sellerId + '/rolls?exclude_damage_id=' + encodeURIComponent(excludeDamageId))
         .then(res => res.json())
         .then(data => {
             rollSelect.innerHTML = '<option value="">-- Choose Fabric Roll --</option>';
@@ -1100,13 +1147,9 @@ function loadSupplierRollsForEdit(sellerId, selectedRollId = null) {
                     opt.value = r.id;
                     const availWt = parseFloat(r.available_weight) || 0;
                     const totalWt = parseFloat(r.weight) || 0;
-                    let wtDisplay = `${totalWt.toFixed(2)} kg`;
-                    if (availWt > 0 && availWt < totalWt) {
-                        wtDisplay = `Avail: ${availWt.toFixed(2)} kg / Total: ${totalWt.toFixed(2)} kg`;
-                    } else if (availWt === 0) {
-                        wtDisplay = `Total: ${totalWt.toFixed(2)} kg (Assigned in Program)`;
-                    }
-                    opt.textContent = `${r.roll_number} (${r.color || 'No Color'} - ${r.design_name || 'No Design'}) • ${wtDisplay}`;
+                    const availQty = parseInt(r.available_quantity, 10) || 0;
+                    const usedQty = parseInt(r.used_quantity, 10) || 0;
+                    opt.textContent = `${r.roll_number} (${r.color || 'No Color'} - ${r.design_name || 'No Design'}) • Damageable: ${availQty} pcs / ${availWt.toFixed(2)} kg${usedQty > 0 ? ` • ${usedQty} pcs assigned` : ''}`;
                     if (selectedRollId && parseInt(selectedRollId) === parseInt(r.id)) {
                         opt.selected = true;
                     }
@@ -1146,19 +1189,20 @@ function handleEditRollSelectionChange(selectEl, resetValues = true) {
         `<span class="badge bg-primary-subtle text-primary border">1 pc = ${m.weightPerPc.toFixed(2)} kg (₹${m.pricePerPc.toFixed(2)})</span>`;
 
     if (m.availWeight > 0) {
-        document.getElementById('editInfoRollBalance').innerHTML = `<span class="text-success fw-bold">${m.availWeight.toFixed(2)} kg</span> <small class="text-muted">(${m.availQty} pcs left / ${m.totWeight.toFixed(2)} kg total)</small>`;
+        document.getElementById('editInfoRollBalance').innerHTML = `<span class="text-success fw-bold">${m.availWeight.toFixed(2)} kg damageable</span> <small class="text-muted">(${m.availQty} pcs damageable / ${m.totWeight.toFixed(2)} kg total${m.usedQty ? ` • ${m.usedQty} pcs assigned` : ''})</small>`;
     } else {
-        document.getElementById('editInfoRollBalance').innerHTML = `<span class="text-dark fw-bold">${m.totWeight.toFixed(2)} kg Total</span> <span class="badge bg-secondary-subtle text-secondary ms-1">In Production Program</span>`;
+        document.getElementById('editInfoRollBalance').innerHTML = `<span class="text-dark fw-bold">No damageable balance</span> <small class="text-muted">(${m.usedQty || 0} pcs assigned / ${m.totQty} pcs total)</small>`;
     }
     document.getElementById('editInfoRollPrice').textContent = `Total Lot: ₹${m.totPrice.toFixed(2)}`;
 
     const qtyInput = document.getElementById('editDamagedQty');
     if (qtyInput) {
-        qtyInput.max = m.availQty > 0 ? m.availQty : m.totQty;
+        qtyInput.max = m.availQty;
+        qtyInput.disabled = m.availQty < 1;
     }
 
     if (resetValues) {
-        const defaultQty = 1;
+        const defaultQty = Math.min(1, m.availQty);
         const defaultWeight = defaultQty * m.weightPerPc;
         if (qtyInput) qtyInput.value = defaultQty;
         document.getElementById('editDamagedWeight').value = defaultWeight.toFixed(2);
@@ -1215,6 +1259,17 @@ function handleResolutionTypeChange(type) {
 
 // Client-side form submit validation
 document.addEventListener('DOMContentLoaded', () => {
+    const scanInput = document.getElementById('damageRollQrScan');
+    if (scanInput) {
+        scanInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                scanDamageRollQr();
+            }
+        });
+        scanInput.addEventListener('input', () => setDamageRollScanStatus(''));
+    }
+
     const resolveForm = document.getElementById('resolveDamageForm');
     if (resolveForm) {
         resolveForm.addEventListener('submit', function(e) {
@@ -1256,7 +1311,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (rollId && loadedRollsMap[rollId]) {
                 const m = getRollMetrics(loadedRollsMap[rollId]);
-                const maxQty = m.availQty > 0 ? m.availQty : m.totQty;
+                const maxQty = m.availQty;
                 if (qty > maxQty) {
                     alert(`Damaged Quantity (${qty} pcs) cannot exceed the available roll quantity (${maxQty} pcs).`);
                     e.preventDefault();
@@ -1303,7 +1358,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (rollId && loadedEditRollsMap[rollId]) {
                 const m = getRollMetrics(loadedEditRollsMap[rollId]);
-                const maxQty = m.availQty > 0 ? m.availQty : m.totQty;
+                const maxQty = m.availQty;
                 if (qty > maxQty) {
                     alert(`Damaged Quantity (${qty} pcs) cannot exceed the available roll quantity (${maxQty} pcs).`);
                     e.preventDefault();
