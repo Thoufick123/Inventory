@@ -184,7 +184,115 @@
     </div>
 </div>
 
-<div class="row g-3 inventory-batch-list-mode" id="inventoryBatchesGrid">
+<div class="table-responsive card border-0 shadow-sm mb-3" id="inventoryBatchList">
+    <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>QC Batch</th>
+                <th>Program</th>
+                <th>Product</th>
+                <th class="text-center">Passed</th>
+                <th class="text-center">In Stock</th>
+                <th class="text-center">Outward</th>
+                <th>QC Outcomes</th>
+                <th>Status</th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($batches as $batch): ?>
+                <?php
+                    $batchSearchVariants = implode(' ', array_map(function ($variant) {
+                        return ($variant['size_name'] ?? '') . ' ' . ($variant['color_name'] ?? '');
+                    }, $batch['variants'] ?? []));
+                    $batchSearchOutward = '';
+                    foreach ($batch['outward_history'] ?? [] as $outward) {
+                        $batchSearchOutward .= ' ' . ($outward['outward_number'] ?? '') . ' ' . ($outward['warehouse_name'] ?? '') . ' ' . ($outward['vehicle_number'] ?? '');
+                    }
+                    $batchSearchText = strtolower(
+                        ($batch['product_name'] ?? '') . ' ' .
+                        ($batch['category_name'] ?? '') . ' ' .
+                        ($batch['program_number'] ?? '') . ' ' .
+                        ($batch['inspector_name'] ?? '') . ' ' .
+                        'rework rejected qc passed outward qc batch #' . $batch['qc_batch_id'] . ' ' .
+                        $batch['qc_batch_id'] . ' ' . $batchSearchVariants . ' ' . $batchSearchOutward
+                    );
+                    $batchStatus = $batch['stock_status'] ?? 'IN_STOCK';
+                ?>
+                <tr class="batch-list-row"
+                    data-batch-id="<?= (int)$batch['qc_batch_id'] ?>"
+                    data-category-id="<?= (int)($batch['category_id'] ?? 0) ?>"
+                    data-search-text="<?= e($batchSearchText) ?>">
+                    <td class="text-nowrap">
+                        <div class="fw-semibold">QC Batch #<?= (int)$batch['qc_batch_id'] ?></div>
+                        <small class="text-muted"><?= (new DateTime($batch['batch_created_at'] ?? 'now'))->format('d M Y, g:i A') ?></small>
+                    </td>
+                    <td>
+                        <a href="<?= url('production/programs/view/' . $batch['program_id']) ?>" class="text-decoration-none fw-semibold">
+                            <?= e($batch['program_number']) ?>
+                        </a>
+                    </td>
+                    <td>
+                        <div class="fw-semibold text-dark"><?= e($batch['product_name']) ?></div>
+                        <?php if (!empty($batch['category_name'])): ?>
+                            <small class="text-muted"><?= e($batch['category_name']) ?></small>
+                        <?php endif; ?>
+                        <?php if (!empty($batch['variants'])): ?>
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                <?php foreach (array_slice($batch['variants'], 0, 3) as $variant): ?>
+                                    <span class="badge bg-light text-dark border small">
+                                        <?= e($variant['size_name']) ?>/<?= e($variant['color_name']) ?>
+                                        (<?= number_format($variant['passed_qty']) ?>)
+                                    </span>
+                                <?php endforeach; ?>
+                                <?php if (count($batch['variants']) > 3): ?>
+                                    <span class="badge bg-secondary-subtle text-secondary border small">+<?= count($batch['variants']) - 3 ?> more</span>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                    </td>
+                    <td class="text-center fw-semibold"><?= number_format($batch['total_passed_pieces']) ?> pcs</td>
+                    <td class="text-center fw-semibold text-success"><?= number_format($batch['remaining_pieces']) ?> pcs</td>
+                    <td class="text-center fw-semibold text-danger"><?= number_format($batch['total_outward_pieces']) ?> pcs</td>
+                    <td>
+                        <div class="d-flex flex-wrap gap-1">
+                            <span class="badge bg-success-subtle text-success border">Passed: <?= number_format($batch['total_passed_pieces']) ?></span>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">Rework: <?= number_format($batch['total_rework_pieces']) ?></span>
+                            <span class="badge bg-danger-subtle text-danger border">Rejected: <?= number_format($batch['total_rejected_pieces']) ?></span>
+                        </div>
+                    </td>
+                    <td>
+                        <?php if ($batchStatus === 'NO_PASSED_STOCK'): ?>
+                            <span class="badge bg-secondary-subtle text-secondary border">No QC-Passed Stock</span>
+                        <?php elseif ($batchStatus === 'FULLY_OUTWARDED'): ?>
+                            <span class="badge bg-secondary-subtle text-secondary border">Fully Outwarded</span>
+                        <?php elseif ($batchStatus === 'PARTIALLY_OUTWARDED'): ?>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">Partially Outwarded</span>
+                        <?php else: ?>
+                            <span class="badge bg-success-subtle text-success border">In Stock</span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="text-end">
+                        <div class="d-flex justify-content-end gap-1">
+                            <a href="<?= url('production/inventory/batch/' . $batch['qc_batch_id']) ?>"
+                               class="btn btn-sm btn-outline-primary text-nowrap">
+                                <i class="bi bi-eye me-1"></i>View Products
+                            </a>
+                            <?php if (hasPermission('batches', 'create') && $batch['remaining_pieces'] > 0): ?>
+                                <a href="<?= url('production/batches/create?qc_batch_id=' . $batch['qc_batch_id']) ?>"
+                                   class="btn btn-sm btn-outline-success" title="Pack Remaining Stock">
+                                    <i class="bi bi-box-seam"></i>
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+</div>
+
+<div class="row g-3 inventory-batch-list-mode" id="inventoryBatchesGrid" style="display: none;">
     <?php foreach ($batches as $idx => $batch): ?>
     <?php
         $batchDate = new DateTime($batch['batch_created_at'] ?? 'now');
@@ -397,6 +505,13 @@
     transform: translateY(-3px);
     box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
 }
+#inventoryBatchList table {
+    min-width: 1050px;
+}
+.batch-list-row > td {
+    padding-top: 0.9rem;
+    padding-bottom: 0.9rem;
+}
 .inventory-batch-list-mode {
     display: flex;
     flex-direction: column;
@@ -490,13 +605,16 @@ let visibleBatchCards = [];
 
 function switchBatchView(mode) {
     const grid = document.getElementById('inventoryBatchesGrid');
+    const table = document.getElementById('inventoryBatchList');
     const cardsButton = document.getElementById('batchCardsViewButton');
     const listButton = document.getElementById('batchListViewButton');
     const showList = mode === 'list';
 
     if (grid) {
         grid.classList.toggle('inventory-batch-list-mode', showList);
+        grid.style.display = showList ? 'none' : '';
     }
+    if (table) table.style.display = showList ? '' : 'none';
     if (cardsButton) {
         cardsButton.classList.toggle('btn-primary', !showList);
         cardsButton.classList.toggle('active', !showList);
@@ -548,6 +666,7 @@ function filterBatchesLive(query) {
         if (alertEl) alertEl.style.display = 'block';
         if (paginationContainer) paginationContainer.style.display = 'none';
         allCards.forEach(c => c.style.display = 'none');
+        document.querySelectorAll('.batch-list-row').forEach(row => row.style.display = 'none');
         return;
     }
 
@@ -590,12 +709,17 @@ function renderBatchPagination() {
     const startIdx = isAll ? 0 : (currentBatchPage - 1) * effectiveSize;
     const endIdx = isAll ? totalBatches : Math.min(startIdx + effectiveSize, totalBatches);
 
-    // Hide all first
+    // Hide all cards and rows first, then show the matching page in the active view.
     allCards.forEach(card => card.style.display = 'none');
+    const batchRows = Array.from(document.querySelectorAll('.batch-list-row'));
+    batchRows.forEach(row => row.style.display = 'none');
 
     // Show only the page slice of matching cards
     cardsToPaginate.forEach((card, idx) => {
-        card.style.display = (idx >= startIdx && idx < endIdx) ? '' : 'none';
+        const isOnPage = idx >= startIdx && idx < endIdx;
+        card.style.display = isOnPage ? '' : 'none';
+        const row = batchRows.find(item => item.dataset.batchId === card.dataset.batchId);
+        if (row) row.style.display = isOnPage ? '' : 'none';
     });
 
     const infoEl = document.getElementById('batchPageInfo');
@@ -647,6 +771,7 @@ function renderBatchPagination() {
 document.addEventListener('DOMContentLoaded', function() {
     const allCards = Array.from(document.querySelectorAll('.batch-card-col'));
     visibleBatchCards = allCards;
+    switchBatchView('list');
     renderBatchPagination();
 
     const searchInput = document.getElementById('inventorySearchInput');
