@@ -83,24 +83,16 @@
 <div class="card border-0 shadow-sm mb-4 bg-white rounded-3">
     <div class="card-body">
         <form method="GET" action="<?= url('warehouse/sellers') ?>" class="row g-3 align-items-end">
-            <div class="col-md-5">
+            <div class="col-12 col-lg-9">
                 <label class="form-label small fw-semibold">Search Supplier / Company / Contact / GST</label>
-                <div class="input-group input-group-sm">
+                <div class="input-group">
                     <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
                     <input type="text" name="search" class="form-control" placeholder="Search by name, company, mobile, city, GSTIN..." value="<?= e($search ?? '') ?>">
                 </div>
             </div>
-            <div class="col-md-2">
-                <label class="form-label small fw-semibold">Status</label>
-                <select name="status" class="form-select form-select-sm">
-                    <option value="">Active Only</option>
-                    <option value="all" <?= ($status ?? '') === 'all' ? 'selected' : '' ?>>All Statuses</option>
-                    <option value="0" <?= ($status ?? '') === '0' ? 'selected' : '' ?>>Inactive Only</option>
-                </select>
-            </div>
-            <div class="col-md-2 d-flex gap-2">
-                <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold"><i class="bi bi-funnel me-1"></i> Filter</button>
-                <a href="<?= url('warehouse/sellers') ?>" class="btn btn-outline-secondary btn-sm" title="Reset Filters"><i class="bi bi-arrow-clockwise"></i></a>
+            <div class="col-12 col-lg-3 d-flex gap-2">
+                <button type="submit" class="btn btn-primary flex-grow-1 fw-semibold"><i class="bi bi-funnel me-1"></i> Filter</button>
+                <a href="<?= url('warehouse/sellers') ?>" class="btn btn-outline-secondary flex-shrink-0" title="Reset Search" aria-label="Reset search"><i class="bi bi-arrow-clockwise"></i></a>
             </div>
         </form>
     </div>
