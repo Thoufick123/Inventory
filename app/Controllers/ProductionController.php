@@ -8312,6 +8312,7 @@ class ProductionController {
                     'total_pieces'        => 0,
                     'total_value'         => 0.0,
                     'variants'            => [],
+                    'variant_indexes'     => [],
                 ];
             }
             $passedQty = (int)$it['passed_qty'];
@@ -8326,9 +8327,21 @@ class ProductionController {
             $batches[$batchId]['total_pieces']        += $inventoryPassedQty;
             $batches[$batchId]['total_value']         += ($inventoryPassedQty * $price);
             if ($inventoryPassedQty > 0) {
-                $batches[$batchId]['variants'][] = [
-                    'size_name'  => $it['size_name'],
-                    'color_name' => $it['color_name'],
+                $variantKey = strtolower(trim((string)$it['size_name'])) . '|' . strtolower(trim((string)$it['color_name']));
+                if (!isset($batches[$batchId]['variant_indexes'][$variantKey])) {
+                    $batches[$batchId]['variant_indexes'][$variantKey] = count($batches[$batchId]['variants']);
+                    $batches[$batchId]['variants'][] = [
+                        'size_name'  => $it['size_name'],
+                        'color_name' => $it['color_name'],
+                        'passed_qty' => 0,
+                        'outward_qty' => 0,
+                        'qc_items'   => [],
+                    ];
+                }
+                $variantIndex = $batches[$batchId]['variant_indexes'][$variantKey];
+                $batches[$batchId]['variants'][$variantIndex]['passed_qty'] += $inventoryPassedQty;
+                $batches[$batchId]['variants'][$variantIndex]['qc_items'][] = [
+                    'qc_item_id' => (int)$it['id'],
                     'passed_qty' => $inventoryPassedQty,
                 ];
             }
@@ -8376,6 +8389,32 @@ class ProductionController {
             $batch['total_passed_value']     = $batch['total_value'];
             $batch['outward_history']        = $passedPcs > 0 ? $matchingOutwards : [];
             $batch['outward_count']          = count($batch['outward_history']);
+
+            $variants = array_values($batch['variants']);
+            $variantPieces = [];
+            foreach ($variants as $variantIndex => $variant) {
+                foreach ($variant['qc_items'] as $qcItem) {
+                    $variantPieces[] = [
+                        'qc_item_id' => $qcItem['qc_item_id'],
+                        'variant_index' => $variantIndex,
+                        'passed_qty' => $qcItem['passed_qty'],
+                    ];
+                }
+            }
+            usort($variantPieces, static fn(array $left, array $right): int => $left['qc_item_id'] <=> $right['qc_item_id']);
+            $remainingOutwardQty = $outwardPcs;
+            foreach ($variantPieces as $variantPiece) {
+                $outwardForItem = min((int)$variantPiece['passed_qty'], $remainingOutwardQty);
+                $variants[$variantPiece['variant_index']]['outward_qty'] += $outwardForItem;
+                $remainingOutwardQty -= $outwardForItem;
+            }
+            foreach ($variants as &$variant) {
+                $variant['remaining_qty'] = (int)$variant['passed_qty'] - $variant['outward_qty'];
+                unset($variant['qc_items']);
+            }
+            unset($variant);
+            $batch['variants'] = $variants;
+            unset($batch['variant_indexes']);
 
             if ($passedPcs === 0) {
                 $batch['stock_status'] = 'NO_PASSED_STOCK';
