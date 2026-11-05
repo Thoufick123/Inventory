@@ -501,19 +501,11 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                                 </td>
                                 <td class="text-end">
                                     <div class="d-flex justify-content-end align-items-center gap-1">
-                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="printSinglePieceLabel(<?= $it['piece_no'] ?>)" title="Print QR Label">
-                                            <i class="bi bi-printer me-1"></i>Print
-                                        </button>
                                         <div class="dropdown">
                                             <button class="btn btn-sm btn-light border dropdown-toggle" type="button" data-bs-toggle="dropdown">
                                                 Actions
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                                <li>
-                                                    <a class="dropdown-item" href="javascript:void(0)" onclick="printSinglePieceLabel(<?= $it['piece_no'] ?>)">
-                                                        <i class="bi bi-printer me-2 text-primary"></i>Print QR Label
-                                                    </a>
-                                                </li>
                                                 <?php if (empty($it['is_dispatched'])): ?>
                                                 <li>
                                                     <a class="dropdown-item text-success" href="<?= url('production/batches/create?qc_batch_id=' . $it['qc_batch_id']) ?>">
