@@ -389,7 +389,7 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                 <button type="button" class="btn btn-outline-secondary fw-semibold" id="btnCardView" onclick="switchView('card')">
                     <i class="bi bi-grid-3x3-gap me-1"></i> Cards
                 </button>
-                <button type="button" class="btn btn-primary active fw-semibold" id="btnPieceView" onclick="switchView('piece')">
+                <button type="button" class="btn btn-primary active fw-semibold" id="btnPieceView" onclick="switchView('list')">
                     <i class="bi bi-list-ul me-1"></i> List (<?= count($pieceItems) ?>)
                 </button>
                 <button type="button" class="btn btn-outline-secondary fw-semibold" id="btnGroupView" onclick="switchView('group')">
@@ -401,14 +401,24 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
     <div class="card-body p-4">
 
         <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3" id="pieceCardsContainer" style="display: none;"></div>
+        <div class="list-group list-group-flush gap-2" id="pieceListContainer" style="display: block;"></div>
         <div class="text-center text-muted py-5" id="emptyPieceCardsSearchState" style="display: none;">
             <i class="bi bi-search fs-1 d-block mb-2 text-secondary"></i>
             <h6 class="fw-semibold mb-1">No Matching Garment Tag Found</h6>
             <p class="small mb-0">No piece in this batch matches the scanned or searched QR code.</p>
         </div>
+        <div class="text-center text-muted py-5" id="emptyPieceListSearchState" style="display: none;">
+            <i class="bi bi-search fs-1 d-block mb-2 text-secondary"></i>
+            <h6 class="fw-semibold mb-1">No Matching Garment Tag Found</h6>
+            <p class="small mb-0">No piece in this batch matches the scanned or searched QR code.</p>
+        </div>
+        <div class="text-center text-muted py-5" id="emptyInventoryState" style="display: none;">
+            <i class="bi bi-box-seam fs-1 d-block mb-3 text-secondary"></i>
+            <h6 class="fw-semibold mb-1">No Passed Items Found</h6>
+        </div>
 
-        <!-- 1. Piece-by-Piece Table View (Default View Matching Image 2) -->
-        <div class="table-responsive" id="pieceViewContainer" style="display: block;">
+        <!-- Table kept as the source for list and card item data/actions. -->
+        <div class="table-responsive" id="pieceViewContainer" style="display: none;">
             <table class="table table-hover align-middle mb-0" id="pieceInventoryTable">
                 <thead class="table-light">
                     <tr>
@@ -659,8 +669,32 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
 .inventory-piece-card .card-footer {
     background: #fff;
 }
+.inventory-piece-list-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem !important;
+    background: #fff;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.inventory-piece-list-item:hover {
+    border-color: #93c5fd;
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+}
+.inventory-piece-list-item .inventory-list-tag {
+    min-width: 185px;
+}
+.inventory-piece-list-item .inventory-list-product {
+    min-width: 180px;
+    flex: 1 1 220px;
+}
+.inventory-piece-list-item .inventory-list-meta {
+    flex: 1 1 280px;
+}
+.inventory-piece-list-item .inventory-list-actions {
+    min-width: 120px;
+}
 .inventory-piece-card.inventory-search-highlight,
-.inventory-piece-row.inventory-search-highlight {
+.inventory-piece-row.inventory-search-highlight,
+.inventory-piece-list-item.inventory-search-highlight {
     outline: 3px solid #f59e0b;
     outline-offset: -2px;
     background-color: #fffbeb !important;
@@ -752,11 +786,13 @@ const INVENTORY_DELETE_CSRF_TOKEN = <?= json_encode(CSRF::token()) ?>;
 let currentInventoryPage = 1;
 let inventoryPageSize = 10;
 let matchingPieceElements = [];
-let currentInventoryView = 'piece';
+let currentInventoryView = 'list';
 const inventoryPieceCardsByNo = new Map();
+const inventoryPieceListItemsByNo = new Map();
 
 document.addEventListener('DOMContentLoaded', function() {
     buildInventoryPieceCards();
+    buildInventoryPieceList();
     // Render individual QR codes on cards
     document.querySelectorAll('.piece-qr-box').forEach(function(box) {
         const text = box.getAttribute('data-json');
@@ -776,24 +812,33 @@ document.addEventListener('DOMContentLoaded', function() {
 function switchView(mode) {
     const pieceContainer = document.getElementById('pieceViewContainer');
     const cardsContainer = document.getElementById('pieceCardsContainer');
+    const listContainer = document.getElementById('pieceListContainer');
     const groupContainer = document.getElementById('groupViewContainer');
     const btnPiece = document.getElementById('btnPieceView');
     const btnCard = document.getElementById('btnCardView');
     const btnGroup = document.getElementById('btnGroupView');
     const paginationFooter = document.getElementById('piecePaginationFooter');
+    const emptyCardsState = document.getElementById('emptyPieceCardsSearchState');
+    const emptyListState = document.getElementById('emptyPieceListSearchState');
+    const emptyInventoryState = document.getElementById('emptyInventoryState');
     currentInventoryView = mode;
 
     if (pieceContainer) pieceContainer.style.display = mode === 'piece' ? 'block' : 'none';
     if (cardsContainer) cardsContainer.style.display = mode === 'card' ? 'flex' : 'none';
-    const emptyCardsState = document.getElementById('emptyPieceCardsSearchState');
+    if (listContainer) listContainer.style.display = mode === 'list' ? 'flex' : 'none';
     if (emptyCardsState && mode !== 'card') emptyCardsState.style.display = 'none';
+    if (emptyListState && mode !== 'list') emptyListState.style.display = 'none';
+    if (emptyInventoryState) {
+        const totalCount = window.inventoryPieceItems ? window.inventoryPieceItems.length : 0;
+        emptyInventoryState.style.display = totalCount === 0 && mode !== 'group' ? '' : 'none';
+    }
     if (groupContainer) groupContainer.style.display = mode === 'group' ? 'block' : 'none';
     if (paginationFooter) paginationFooter.style.display = mode === 'group' ? 'none' : 'flex';
 
     [btnCard, btnPiece, btnGroup].forEach(button => {
         if (!button) return;
         const active = (mode === 'card' && button === btnCard)
-            || (mode === 'piece' && button === btnPiece)
+            || ((mode === 'list' || mode === 'piece') && button === btnPiece)
             || (mode === 'group' && button === btnGroup);
         button.className = `btn ${active ? 'btn-primary active' : 'btn-outline-secondary'} fw-semibold`;
     });
@@ -863,6 +908,52 @@ function buildInventoryPieceCards() {
     });
 }
 
+function buildInventoryPieceList() {
+    const list = document.getElementById('pieceListContainer');
+    if (!list) return;
+    list.innerHTML = '';
+    inventoryPieceListItemsByNo.clear();
+
+    document.querySelectorAll('.inventory-piece-row[data-piece-no]').forEach(row => {
+        const cells = row.cells;
+        if (!cells || cells.length < 8) return;
+
+        const item = document.createElement('article');
+        item.className = 'list-group-item inventory-piece-list-item d-flex flex-wrap align-items-center gap-3 p-3';
+        item.dataset.pieceNo = row.dataset.pieceNo;
+        item.dataset.tag = row.dataset.tag || '';
+        item.dataset.sku = row.dataset.sku || '';
+        item.dataset.size = row.dataset.size || '';
+        item.dataset.color = row.dataset.color || '';
+        item.dataset.product = row.dataset.product || '';
+
+        const tag = document.createElement('div');
+        tag.className = 'inventory-list-tag';
+        tag.innerHTML = `<div class="small text-muted fw-semibold mb-1">Piece #${row.dataset.pieceNo}</div>${cells[1].innerHTML}`;
+
+        const product = document.createElement('div');
+        product.className = 'inventory-list-product';
+        product.innerHTML = cells[2].innerHTML;
+
+        const meta = document.createElement('div');
+        meta.className = 'inventory-list-meta d-flex flex-wrap gap-3 align-items-center';
+        [cells[3], cells[4], cells[5], cells[6]].forEach(cell => {
+            const detail = document.createElement('div');
+            detail.innerHTML = cell.innerHTML;
+            meta.appendChild(detail);
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'inventory-list-actions d-flex justify-content-end ms-auto';
+        const actionMenu = cells[7].firstElementChild;
+        if (actionMenu) actions.appendChild(actionMenu.cloneNode(true));
+
+        item.append(tag, product, meta, actions);
+        list.appendChild(item);
+        inventoryPieceListItemsByNo.set(item.dataset.pieceNo, item);
+    });
+}
+
 function filterInventoryPieces() {
     const input = document.getElementById('qrInventorySearch');
     const rawVal = input ? input.value.trim().toUpperCase() : '';
@@ -877,6 +968,10 @@ function filterInventoryPieces() {
     document.querySelectorAll('.inventory-piece-card').forEach(card => {
         card.classList.remove('inventory-search-highlight');
         card.classList.toggle('inventory-search-match', Boolean(rawVal) && (card.dataset.tag || '').includes(rawVal));
+    });
+    document.querySelectorAll('.inventory-piece-list-item').forEach(item => {
+        item.classList.remove('inventory-search-highlight');
+        item.classList.toggle('inventory-search-match', Boolean(rawVal) && (item.dataset.tag || '').includes(rawVal));
     });
 
     rows.forEach(row => {
@@ -894,6 +989,8 @@ function filterInventoryPieces() {
         }
         const card = inventoryPieceCardsByNo.get(row.dataset.pieceNo);
         if (card && !matches) card.style.display = 'none';
+        const listItem = inventoryPieceListItemsByNo.get(row.dataset.pieceNo);
+        if (listItem && !matches) listItem.style.display = 'none';
     });
 
     const badge = document.getElementById('searchMatchBadge');
@@ -920,9 +1017,13 @@ function filterInventoryPieces() {
     if (exactMatch) {
         exactMatch.classList.add('inventory-search-highlight');
         const matchingCard = inventoryPieceCardsByNo.get(exactMatch.dataset.pieceNo);
+        const matchingListItem = inventoryPieceListItemsByNo.get(exactMatch.dataset.pieceNo);
         if (matchingCard) matchingCard.classList.add('inventory-search-highlight');
-        if (currentInventoryView === 'piece' || currentInventoryView === 'card') {
-            const target = currentInventoryView === 'card' ? matchingCard : exactMatch;
+        if (matchingListItem) matchingListItem.classList.add('inventory-search-highlight');
+        if (currentInventoryView === 'list' || currentInventoryView === 'piece' || currentInventoryView === 'card') {
+            const target = currentInventoryView === 'card' ? matchingCard
+                : currentInventoryView === 'list' ? matchingListItem
+                : exactMatch;
             if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
     }
@@ -939,7 +1040,9 @@ function goToInventoryPage(pageNum) {
     renderInventoryPagination();
     const activeView = currentInventoryView === 'card'
         ? document.getElementById('pieceCardsContainer')
-        : document.getElementById('pieceInventoryTable');
+        : currentInventoryView === 'list'
+            ? document.getElementById('pieceListContainer')
+            : document.getElementById('pieceInventoryTable');
     if (activeView) activeView.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -963,6 +1066,8 @@ function renderInventoryPagination() {
         row.style.display = visible ? '' : 'none';
         const card = inventoryPieceCardsByNo.get(row.dataset.pieceNo);
         if (card) card.style.display = visible ? '' : 'none';
+        const listItem = inventoryPieceListItemsByNo.get(row.dataset.pieceNo);
+        if (listItem) listItem.style.display = visible ? '' : 'none';
     });
 
     // Empty search state
@@ -973,6 +1078,14 @@ function renderInventoryPagination() {
     const emptyCardsState = document.getElementById('emptyPieceCardsSearchState');
     if (emptyCardsState) {
         emptyCardsState.style.display = currentInventoryView === 'card' && totalMatching === 0 && totalCount > 0 ? '' : 'none';
+    }
+    const emptyListState = document.getElementById('emptyPieceListSearchState');
+    if (emptyListState) {
+        emptyListState.style.display = currentInventoryView === 'list' && totalMatching === 0 && totalCount > 0 ? '' : 'none';
+    }
+    const emptyInventoryState = document.getElementById('emptyInventoryState');
+    if (emptyInventoryState) {
+        emptyInventoryState.style.display = totalCount === 0 && currentInventoryView !== 'group' ? '' : 'none';
     }
 
     // Update Entries Counter text
