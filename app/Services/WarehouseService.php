@@ -1393,7 +1393,7 @@ class WarehouseService {
 
         // Third-party Sellers & Procurement Metrics
         $sellerStats = [
-            'total_sellers'      => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM sellers WHERE is_active = 1")['cnt'] ?? 0),
+            'total_sellers'      => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_suppliers WHERE is_active = 1")['cnt'] ?? 0),
             'total_orders'       => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM purchase_orders WHERE seller_id IS NOT NULL")['cnt'] ?? 0),
             'total_spend'        => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE seller_id IS NOT NULL")['total'] ?? 0),
             'total_inward_units' => (int)(Database::fetchOne("SELECT COALESCE(SUM(pi.quantity), 0) as total FROM purchase_items pi JOIN purchase_orders po ON pi.purchase_order_id = po.id WHERE po.seller_id IS NOT NULL")['total'] ?? 0),
