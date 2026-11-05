@@ -3501,12 +3501,12 @@ function syncInwardButtonWithSelection() {
     const quickBtn = document.getElementById('btnQuickInwardSelected');
     const bottomBtn = document.getElementById('btnBottomInwardSelected');
     const icon = document.getElementById('btnInwardSubmitIcon');
-    if (!btnText || !qtyInput || !tagsInput) return;
+    const form = document.getElementById('formConfirmInward');
 
     // Check if the current variant was already fully inwarded
     const isAlreadyInwardedInitial = <?= (!empty($isFullyInwarded) && $currentSourceType !== 'returns') ? 'true' : 'false' ?>;
     if (isAlreadyInwardedInitial) {
-        btnText.textContent = 'All <?= (int)($alreadyInwardedQty ?? 0) ?> Pieces Officially Inwarded (1-Time Completed)';
+        if (btnText) btnText.textContent = 'All <?= (int)($alreadyInwardedQty ?? 0) ?> Pieces Officially Inwarded (1-Time Completed)';
         if (btn) {
             btn.disabled = true;
             btn.classList.add('btn-secondary', 'opacity-75');
@@ -3518,22 +3518,36 @@ function syncInwardButtonWithSelection() {
         return;
     }
 
-    if (!Array.isArray(GENERATED_ITEMS) || GENERATED_ITEMS.length === 0) {
-        return;
-    }
+    // Use the rendered checkbox state as the source of truth so the buttons cannot
+    // get out of sync with selection changes or a stale in-memory selection set.
+    selectedStickerIndices.clear();
+    document.querySelectorAll('.piece-select-chk:checked:not(:disabled)').forEach(chk => {
+        const index = Number.parseInt(chk.dataset.index || '', 10);
+        if (Number.isInteger(index)) selectedStickerIndices.add(index);
+    });
 
-    // Collect available, not-yet-inwarded items
+    const isFlagSet = value => value === true || value === 1 || ['1', 'true', 'yes'].includes(String(value).toLowerCase());
     const availableItems = [];
-    GENERATED_ITEMS.forEach((it, idx) => {
-        if (it && (<?= $currentSourceType === 'returns' ? 'true' : 'false' ?> || !it.is_inwarded) && !it.is_deleted) {
+    (Array.isArray(GENERATED_ITEMS) ? GENERATED_ITEMS : []).forEach((it, idx) => {
+        if (it && (<?= $currentSourceType === 'returns' ? 'true' : 'false' ?> || !isFlagSet(it.is_inwarded)) && !isFlagSet(it.is_deleted)) {
             availableItems.push({ index: idx, item: it });
         }
     });
+    const pickedAvailable = availableItems.filter(entry => selectedStickerIndices.has(entry.index));
+    const hasSelection = pickedAvailable.length > 0;
+    const canSubmit = hasSelection && Boolean(form);
+    [quickBtn, bottomBtn].forEach(button => {
+        if (!button) return;
+        button.disabled = !canSubmit;
+        button.classList.toggle('btn-outline-success', !canSubmit);
+        button.classList.toggle('btn-success', canSubmit);
+        if (button === quickBtn) button.classList.toggle('text-white', canSubmit);
+    });
 
     if (availableItems.length === 0) {
-        btnText.textContent = 'No active QR stickers remain on this page';
-        qtyInput.value = 0;
-        tagsInput.value = '[]';
+        if (btnText) btnText.textContent = 'No active QR stickers remain on this page';
+        if (qtyInput) qtyInput.value = 0;
+        if (tagsInput) tagsInput.value = '[]';
         if (btn) {
             btn.disabled = true;
             btn.classList.add('btn-secondary', 'opacity-75');
@@ -3545,10 +3559,9 @@ function syncInwardButtonWithSelection() {
         return;
     }
 
-    // Check how many of the available items are selected / picked
-    const pickedAvailable = availableItems.filter(entry => selectedStickerIndices.has(entry.index));
+    if (!btnText || !qtyInput || !tagsInput) return;
 
-    if (pickedAvailable.length > 0) {
+    if (hasSelection) {
         // PICKED / SELECTED PRODUCTS ONLY INWARD
         const count = pickedAvailable.length;
         const tagCodes = pickedAvailable.map(entry => entry.item.tag_code);
@@ -3561,16 +3574,6 @@ function syncInwardButtonWithSelection() {
             btn.classList.add('btn-success');
         }
         if (icon) icon.className = 'bi bi-box-arrow-in-down-right fs-4';
-        if (quickBtn) {
-            quickBtn.disabled = false;
-            quickBtn.classList.remove('btn-outline-success');
-            quickBtn.classList.add('btn-success', 'text-white');
-        }
-        if (bottomBtn) {
-            bottomBtn.disabled = false;
-            bottomBtn.classList.remove('btn-outline-success');
-            bottomBtn.classList.add('btn-success');
-        }
     } else {
         // No selection means no inward action. Stock must never be credited implicitly.
         btnText.textContent = 'Select QR Sticker(s) to Inward';
@@ -3582,16 +3585,6 @@ function syncInwardButtonWithSelection() {
             btn.classList.remove('btn-success');
         }
         if (icon) icon.className = 'bi bi-hand-index-thumb fs-4';
-        if (quickBtn) {
-            quickBtn.disabled = true;
-            quickBtn.classList.add('btn-outline-success');
-            quickBtn.classList.remove('btn-success', 'text-white');
-        }
-        if (bottomBtn) {
-            bottomBtn.disabled = true;
-            bottomBtn.classList.add('btn-outline-success');
-            bottomBtn.classList.remove('btn-success', 'text-white');
-        }
     }
 }
 
