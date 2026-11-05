@@ -419,6 +419,8 @@ class Router {
         $this->get('production/labels/edit/{id}', 'ProductionController', 'editLabel', ['AuthMiddleware', ['PermissionMiddleware', 'labels', 'edit']]);
         $this->post('production/labels/update/{id}', 'ProductionController', 'updateLabel', ['AuthMiddleware', ['PermissionMiddleware', 'labels', 'edit']]);
         $this->post('production/labels/delete/{id}', 'ProductionController', 'deleteLabel', ['AuthMiddleware', ['PermissionMiddleware', 'labels', 'delete']]);
+        $this->get('api/production/labels/deleted-codes', 'ProductionController', 'ajaxGetDeletedLabelCodes', ['AuthMiddleware']);
+        $this->post('api/production/labels/delete-code', 'ProductionController', 'ajaxDeleteLabelCode', ['AuthMiddleware']);
 
         // QC
         $this->get('production/qc', 'ProductionController', 'qcList', ['AuthMiddleware', ['PermissionMiddleware', 'qc', 'view']]);

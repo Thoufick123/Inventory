@@ -6131,6 +6131,46 @@ class ProductionController {
         ]);
     }
 
+    public function ajaxGetDeletedLabelCodes(): void {
+        if (!hasPermission('labels', 'view') && !hasPermission('labels', 'create') && !hasPermission('labels', 'edit')) {
+            Response::json(['success' => false, 'message' => 'You do not have permission to view Production QR labels.'], 403);
+            return;
+        }
+
+        $rows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
+        Response::json([
+            'success' => true,
+            'codes' => array_column($rows, 'code'),
+        ]);
+    }
+
+    public function ajaxDeleteLabelCode(): void {
+        if (!hasPermission('labels', 'create') && !hasPermission('labels', 'edit')) {
+            Response::json(['success' => false, 'message' => 'You do not have permission to delete Production QR labels.'], 403);
+            return;
+        }
+
+        if (!CSRF::validateRequest()) {
+            Response::json(['success' => false, 'message' => 'Invalid security token. Refresh the page and try again.'], 419);
+            return;
+        }
+
+        $code = strtoupper(trim((string)($_POST['code'] ?? '')));
+        if (!preg_match('/^[A-Z]{1,5}\d{6,}$/', $code)) {
+            Response::json(['success' => false, 'message' => 'Enter a valid Production label code.'], 422);
+            return;
+        }
+
+        Database::execute(
+            "INSERT INTO production_deleted_label_codes (code, created_by)
+             VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE code = VALUES(code)",
+            [$code, Session::userId()]
+        );
+
+        Response::json(['success' => true, 'code' => $code]);
+    }
+
     public function createLabel(): void {
         $programId = $_GET['program_id'] ?? null;
         $stitchingBatchId = $_GET['stitching_batch_id'] ?? null;

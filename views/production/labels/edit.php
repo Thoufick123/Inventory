@@ -934,6 +934,45 @@ function buildProductionLabelQrPayload(damageCode, sku, basePrice, discountPrice
     return `${damageCode}|${sku}|MRP:${basePrice}|Disc:${discountPrice}`;
 }
 
+let deletedProductionLabelCodes = new Set();
+let deletedProductionLabelCodesLoaded = false;
+
+async function loadDeletedProductionLabelCodes() {
+    if (deletedProductionLabelCodesLoaded) return;
+    const response = await fetch('<?= url("api/production/labels/deleted-codes") ?>', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success || !Array.isArray(data.codes)) {
+        throw new Error(data.message || 'Could not load deleted Production QR labels.');
+    }
+    deletedProductionLabelCodes = new Set(data.codes.map(code => String(code).toUpperCase()));
+    deletedProductionLabelCodesLoaded = true;
+}
+
+async function persistDeletedProductionLabelCode(code) {
+    const formData = new FormData();
+    formData.append('code', code);
+    formData.append('_csrf_token', document.querySelector('#labelForm input[name="_csrf_token"]')?.value || '');
+
+    try {
+        const response = await fetch('<?= url("api/production/labels/delete-code") ?>', {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.message || 'Could not delete the Production QR label.');
+        }
+        deletedProductionLabelCodes.add(String(data.code).toUpperCase());
+        return true;
+    } catch (error) {
+        alert(error.message || 'Could not save the deleted Production QR label.');
+        return false;
+    }
+}
+
 let currentPreviewIndex = 0;
 let currentExtraVariantIndex = null;
 let catalogExtraNextSeq = {};
@@ -1314,10 +1353,17 @@ function printSingleVariantLabel(idx) {
 }
 
 
-function openQRPrintModal() {
+async function openQRPrintModal() {
     const grid = document.getElementById('qrStickersGrid');
     if (!grid) return;
     grid.innerHTML = '';
+
+    try {
+        await loadDeletedProductionLabelCodes();
+    } catch (error) {
+        alert(error.message || 'Could not load deleted Production QR labels.');
+        return;
+    }
 
     if (!currentVariantItems || currentVariantItems.length === 0) {
         alert('No variant items found to print.');
@@ -1351,6 +1397,7 @@ function openQRPrintModal() {
             stickerIndex++;
             const currentSeq = startSeq + q - 1;
             const damageCode = getLabelCode(currentSeq, itemCatalogHierarchy, it);
+            if (deletedProductionLabelCodes.has(damageCode.toUpperCase())) continue;
 
             const colDiv = document.createElement('div');
             colDiv.className = 'col';
@@ -1406,15 +1453,16 @@ function setAllQRStickersSelected(selected) {
     updatePrintModalSummary();
 }
 
-function removeSingleStickerCard(btn) {
+async function removeSingleStickerCard(btn) {
     const col = btn.closest('.col');
-    if (col) {
+    const code = col?.querySelector('.lbl-damage-code')?.textContent.trim().toUpperCase();
+    if (col && code && await persistDeletedProductionLabelCode(code)) {
         col.remove();
         updatePrintModalSummary();
     }
 }
 
-function removeLabelByCode() {
+async function removeLabelByCode() {
     const input = document.getElementById('deleteLabelInput');
     if (!input || !input.value.trim()) return;
     const targetCode = input.value.trim().toUpperCase();
@@ -1422,13 +1470,19 @@ function removeLabelByCode() {
     const cols = grid.querySelectorAll('.col');
     let removedCount = 0;
 
+    const matchedCards = [];
     cols.forEach(col => {
         const codeEl = col.querySelector('.lbl-damage-code');
         if (codeEl && codeEl.textContent.trim().toUpperCase() === targetCode) {
-            col.remove();
-            removedCount++;
+            matchedCards.push(col);
         }
     });
+
+    for (const card of matchedCards) {
+        if (!await persistDeletedProductionLabelCode(targetCode)) return;
+        card.remove();
+        removedCount++;
+    }
 
     if (removedCount > 0) {
         input.value = '';

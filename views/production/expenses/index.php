@@ -518,6 +518,9 @@
                     </div>
 
                     <div class="d-flex justify-content-end mb-3">
+                        <button type="button" class="btn btn-outline-secondary fw-bold me-2" onclick="cancelExpenseEntry()">
+                            Cancel
+                        </button>
                         <button type="button" class="btn btn-outline-primary fw-bold" onclick="addExpenseLineItem()">
                             <i class="bi bi-plus-circle me-1"></i>Add Expense Item
                         </button>
@@ -905,6 +908,15 @@ function addExpenseLineItem() {
     costInput.value = '';
     calculateNewExpenseTotal();
     nameInput.focus();
+}
+
+function cancelExpenseEntry() {
+    document.getElementById('newItemName').value = '';
+    document.getElementById('newQuantity').value = '1';
+    document.getElementById('newUnitCost').value = '';
+    toggleQuickAddTypeBox(false);
+    calculateNewExpenseTotal();
+    document.getElementById('newItemName').focus();
 }
 
 function updateExpenseItemsTotal() {
