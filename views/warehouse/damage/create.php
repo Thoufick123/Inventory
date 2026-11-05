@@ -415,7 +415,14 @@ document.addEventListener('DOMContentLoaded', function() {
             (variant.mrp > 0 ? variant.mrp : 
             (variant.purchase_price || 0)))
         ) || 0;
-        const qty = 1;
+        const qty = Math.max(1, parseInt(variant.damage_quantity, 10) || 1);
+        const availableStock = Number(variant.available_stock) || 0;
+        if (qty > availableStock) {
+            scanFeedback.classList.remove('alert-info', 'alert-success');
+            scanFeedback.classList.add('alert-danger');
+            scanFeedbackMsg.innerText = `This scan represents ${qty} pcs, but only ${availableStock} pcs are available in the selected warehouse.`;
+            return;
+        }
 
         queue.push({
             variant_id: variant.id,
@@ -430,6 +437,9 @@ document.addEventListener('DOMContentLoaded', function() {
             sub_subcategory_name: variant.sub_subcategory_name || '',
             category_hierarchy: variant.category_hierarchy || '',
             available_stock: variant.available_stock || 0,
+            is_series: Boolean(variant.is_series),
+            is_complementary: Boolean(variant.is_complementary),
+            pack_quantity: Number(variant.pack_quantity) || 1,
             quantity: qty,
             mrp: parseFloat(variant.mrp || 0),
             selling_price: parseFloat(variant.selling_price || 0),

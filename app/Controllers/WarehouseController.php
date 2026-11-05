@@ -2736,7 +2736,28 @@ class WarehouseController {
                     $totalLoss = $qty * $costPerUnit;
                 }
                 $tagCode = trim($it['tag_code'] ?? '');
-                if ($qty > 1) {
+                $packInfo = Database::fetchOne(
+                    "SELECT pv.qr_code, pv.series_start_code, pv.series_end_code, pv.qr_type, pv.pack_quantity,
+                            pv.is_complementary, p.is_complementary AS product_is_complementary,
+                            wc.category_type
+                     FROM product_variants pv
+                     JOIN products p ON p.id = pv.product_id
+                     LEFT JOIN warehouse_categories wc ON wc.id = p.warehouse_category_id
+                     WHERE pv.id = ?",
+                    [$variantId]
+                );
+                $isPackProduct = $packInfo && (
+                    strtoupper((string)($packInfo['qr_type'] ?? '')) === 'SERIES_BATCH'
+                    || strtoupper((string)($packInfo['category_type'] ?? '')) === 'SERIES'
+                    || strtoupper((string)($packInfo['category_type'] ?? '')) === 'COMPLEMENTARY'
+                    || (int)($packInfo['pack_quantity'] ?? 1) > 1
+                    || !empty($packInfo['is_complementary'])
+                    || !empty($packInfo['product_is_complementary'])
+                );
+                $isPackMasterTag = $isPackProduct && $tagCode !== ''
+                    && !empty($packInfo['qr_code'])
+                    && strcasecmp($tagCode, trim((string)$packInfo['qr_code'])) === 0;
+                if ($qty > 1 && !$isPackMasterTag) {
                     $tagsArray = array_filter(array_map('trim', explode(',', $tagCode)));
                     if (count($tagsArray) < $qty) {
                         $vInfo = Database::fetchOne("
@@ -2936,12 +2957,13 @@ class WarehouseController {
         if (str_starts_with($rawCode, '{') && str_ends_with($rawCode, '}')) {
             $decoded = json_decode($rawCode, true);
             if (is_array($decoded)) {
-                $extractedTag = $decoded['tag'] ?? $decoded['tag_code'] ?? $decoded['code'] ?? $rawCode;
+                $extractedTag = $decoded['tag'] ?? $decoded['tag_code'] ?? $decoded['code'] ?? $decoded['qr_code'] ?? $decoded['batch_number'] ?? $rawCode;
                 if (!empty($decoded['sku'])) $candidateCodes[] = trim($decoded['sku']);
                 if (!empty($decoded['tag'])) $candidateCodes[] = trim($decoded['tag']);
                 if (!empty($decoded['tag_code'])) $candidateCodes[] = trim($decoded['tag_code']);
                 if (!empty($decoded['code'])) $candidateCodes[] = trim($decoded['code']);
                 if (!empty($decoded['qr_code'])) $candidateCodes[] = trim($decoded['qr_code']);
+                if (!empty($decoded['batch_number'])) $candidateCodes[] = trim($decoded['batch_number']);
             }
         }
         // 2. If Pipe-delimited QR payload (e.g. "BCT102601|BCT0303-12Y-BLK|MRP:999|Disc:599")
@@ -3199,6 +3221,67 @@ class WarehouseController {
             }
         }
 
+        // Resolve individual tags within a configured series range before trying fuzzy product matching.
+        if (!$variant && preg_match('/^(.+?)(\d+)$/', trim($extractedTag), $scannedSeriesTag)) {
+            $rangeStockLocationClause = $warehouseId > 0 ? ' AND available_sb.location_id = ?' : '';
+            $rangeParams = [];
+            if ($warehouseId > 0) {
+                $rangeParams[] = $warehouseId;
+            }
+            $rangeVariants = Database::fetchAll(
+                "SELECT pv.*,
+                        p.id AS product_id, p.name AS product_name, p.code AS product_code, p.image_url AS product_image,
+                        p.qr_code_prefix, p.category_code, p.subcategory_code, p.sub_subcategory_code,
+                        p.category_id, p.subcategory_id, p.sub_subcategory_id,
+                        s.name AS size_name, s.code AS size_code,
+                        col.name AS color_name, col.hex_code AS color_hex,
+                        COALESCE(wc.name, cat.name) AS category_name,
+                        COALESCE(wsc.name, subcat.name) AS subcategory_name,
+                        COALESCE(wssc.name, subsubcat.name) AS sub_subcategory_name
+                 FROM product_variants pv
+                 JOIN products p ON p.id = pv.product_id
+                 LEFT JOIN sizes s ON s.id = pv.size_id
+                 LEFT JOIN colors col ON col.id = pv.color_id
+                 LEFT JOIN warehouse_categories wc ON wc.id = p.warehouse_category_id
+                 LEFT JOIN warehouse_subcategories wsc ON wsc.id = p.warehouse_subcategory_id
+                 LEFT JOIN warehouse_sub_subcategories wssc ON wssc.id = p.warehouse_sub_subcategory_id
+                 LEFT JOIN categories cat ON cat.id = p.category_id
+                 LEFT JOIN subcategories subcat ON subcat.id = p.subcategory_id
+                 LEFT JOIN sub_subcategories subsubcat ON subsubcat.id = p.sub_subcategory_id
+                 WHERE pv.is_active = 1
+                   AND pv.series_start_code IS NOT NULL
+                   AND pv.series_end_code IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1 FROM stock_balances available_sb
+                       WHERE available_sb.variant_id = pv.id
+                         AND available_sb.location_type = 'WAREHOUSE'
+                         AND available_sb.stock_state = 'AVAILABLE'
+                         AND available_sb.quantity > 0{$rangeStockLocationClause}
+                   )
+                 ORDER BY pv.id DESC",
+                $rangeParams
+            );
+
+            foreach ($rangeVariants as $rangeVariant) {
+                if (!preg_match('/^(.+?)(\d+)$/', trim((string)$rangeVariant['series_start_code']), $rangeStart)
+                    || !preg_match('/^(.+?)(\d+)$/', trim((string)$rangeVariant['series_end_code']), $rangeEnd)) {
+                    continue;
+                }
+                if (strcasecmp($rangeStart[1], $rangeEnd[1]) !== 0
+                    || strcasecmp($rangeStart[1], $scannedSeriesTag[1]) !== 0
+                    || strlen($rangeStart[2]) !== strlen($rangeEnd[2])
+                    || strlen($rangeStart[2]) !== strlen($scannedSeriesTag[2])) {
+                    continue;
+                }
+
+                $sequence = (int)$scannedSeriesTag[2];
+                if ($sequence >= (int)$rangeStart[2] && $sequence <= (int)$rangeEnd[2]) {
+                    $variant = $rangeVariant;
+                    break;
+                }
+            }
+        }
+
         // Strategy 6: Dynamic Piece Tag Decomposition & Reverse Prefix/Sequence Matching
         if (!$variant) {
             if (preg_match('/^([A-Za-z_-]{2,6})(\d{4})(\d{1,5})$/i', $extractedTag, $matches)) {
@@ -3402,6 +3485,36 @@ class WarehouseController {
             exit;
         }
 
+        $damageScanInfo = Database::fetchOne(
+            "SELECT pv.qr_code, pv.qr_type, pv.pack_quantity, pv.series_start_code, pv.series_end_code,
+                    pv.is_complementary, p.is_complementary AS product_is_complementary,
+                    wc.category_type
+             FROM product_variants pv
+             JOIN products p ON p.id = pv.product_id
+             LEFT JOIN warehouse_categories wc ON wc.id = p.warehouse_category_id
+             WHERE pv.id = ?",
+            [(int)$variant['id']]
+        ) ?? [];
+        $isSeriesProduct = strtoupper((string)($damageScanInfo['qr_type'] ?? '')) === 'SERIES_BATCH'
+            || strtoupper((string)($damageScanInfo['category_type'] ?? '')) === 'SERIES';
+        $isComplementaryProduct = strtoupper((string)($damageScanInfo['category_type'] ?? '')) === 'COMPLEMENTARY'
+            || !empty($damageScanInfo['is_complementary'])
+            || !empty($damageScanInfo['product_is_complementary']);
+        $isPackProduct = $isSeriesProduct || $isComplementaryProduct
+            || (int)($damageScanInfo['pack_quantity'] ?? 1) > 1;
+        $isMasterPackScan = $isPackProduct
+            && !empty($damageScanInfo['qr_code'])
+            && strcasecmp(trim((string)$extractedTag), trim((string)$damageScanInfo['qr_code'])) === 0;
+        $packQuantity = max(1, (int)($damageScanInfo['pack_quantity'] ?? 1));
+        if ($isSeriesProduct && $packQuantity === 1
+            && preg_match('/^(.+?)(\d+)$/', trim((string)($damageScanInfo['series_start_code'] ?? '')), $seriesStart)
+            && preg_match('/^(.+?)(\d+)$/', trim((string)($damageScanInfo['series_end_code'] ?? '')), $seriesEnd)
+            && strcasecmp($seriesStart[1], $seriesEnd[1]) === 0
+            && strlen($seriesStart[2]) === strlen($seriesEnd[2])) {
+            $packQuantity = max(1, (int)$seriesEnd[2] - (int)$seriesStart[2] + 1);
+        }
+        $damageQuantity = $isMasterPackScan ? $packQuantity : 1;
+
         // Fetch Stock Balances in this warehouse
         $stockSql = "SELECT 
                         COALESCE(SUM(CASE WHEN stock_state = 'AVAILABLE' THEN quantity ELSE 0 END), 0) as available_qty,
@@ -3420,6 +3533,13 @@ class WarehouseController {
             echo json_encode([
                 'success' => false,
                 'message' => 'This product has no available stock in the selected warehouse and cannot be added to damage.'
+            ]);
+            exit;
+        }
+        if ($damageQuantity > (float)$stock['available_qty']) {
+            echo json_encode([
+                'success' => false,
+                'message' => "This scan represents {$damageQuantity} pcs, but only {$stock['available_qty']} pcs are available in the selected warehouse."
             ]);
             exit;
         }
@@ -3498,6 +3618,11 @@ class WarehouseController {
                 'mrp'                  => (float)($variant['mrp'] ?? $variant['selling_price'] ?? 0),
                 'selling_price'        => (float)($variant['selling_price'] ?? 0),
                 'tag_code'             => $extractedTag,
+                'is_series'            => $isSeriesProduct,
+                'is_complementary'     => $isComplementaryProduct,
+                'is_pack_product'      => $isPackProduct,
+                'pack_quantity'        => $packQuantity,
+                'damage_quantity'      => $damageQuantity,
                 'available_stock'      => (int)($stock['available_qty'] ?? 0),
                 'damaged_stock'        => (int)($stock['damaged_qty'] ?? 0),
                 'reserved_stock'       => (int)($stock['reserved_qty'] ?? 0),
