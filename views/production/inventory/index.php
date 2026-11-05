@@ -135,13 +135,23 @@
 </div>
 
 <!-- Batch Cards Grid Header -->
-<div class="d-flex align-items-center justify-content-between mb-3">
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
     <h5 class="mb-0 fw-semibold">
-        <i class="bi bi-grid-1x2 me-2 text-primary"></i>
+        <i class="bi bi-boxes me-2 text-primary"></i>
         Inventory Batches
         <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill ms-2" id="totalBatchBadgeCount"><?= count($batches) ?> Batches</span>
     </h5>
-    <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>Click "View Products" to see individual garments, remaining stock &amp; outward dispatch history</span>
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+        <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>Click "View Products" to see individual garments, remaining stock &amp; outward dispatch history</span>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Inventory batch layout">
+            <button type="button" class="btn btn-outline-secondary" id="batchCardsViewButton" onclick="switchBatchView('cards')" aria-pressed="false">
+                <i class="bi bi-grid-3x3-gap me-1"></i>Cards
+            </button>
+            <button type="button" class="btn btn-primary active" id="batchListViewButton" onclick="switchBatchView('list')" aria-pressed="true">
+                <i class="bi bi-list-ul me-1"></i>List
+            </button>
+        </div>
+    </div>
 </div>
 
 <?php if (empty($batches)): ?>
@@ -174,7 +184,7 @@
     </div>
 </div>
 
-<div class="row g-3" id="inventoryBatchesGrid">
+<div class="row g-3 inventory-batch-list-mode" id="inventoryBatchesGrid">
     <?php foreach ($batches as $idx => $batch): ?>
     <?php
         $batchDate = new DateTime($batch['batch_created_at'] ?? 'now');
@@ -214,7 +224,7 @@
         <div class="card border-0 shadow-sm h-100 inventory-batch-card" style="border-left: 4px solid var(--bs-<?= $statusColor ?>) !important; transition: transform 0.18s, box-shadow 0.18s;">
             <div class="card-body p-4">
                 <!-- Batch Header -->
-                <div class="d-flex align-items-start justify-content-between mb-3">
+                <div class="d-flex align-items-start justify-content-between mb-3 batch-list-header">
                     <div>
                         <div class="d-flex align-items-center gap-2 mb-1">
                             <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 fs-6 fw-bold text-nowrap">
@@ -240,6 +250,7 @@
                 </div>
 
                 <!-- Product Name -->
+                <div class="batch-list-product">
                 <div class="mb-3">
                     <div class="fw-bold text-dark fs-6 mb-1"><?= e($batch['product_name']) ?></div>
                     <?php if (!empty($batch['category_name'])): ?>
@@ -269,11 +280,12 @@
                     </div>
                 </div>
                 <?php endif; ?>
+                </div>
 
-                <hr class="my-3 opacity-25">
+                <hr class="my-3 opacity-25 batch-list-divider">
 
                 <!-- Stats Grid (Remaining In-Stock vs Outwarded vs Total) -->
-                <div class="row g-2 mb-3">
+                <div class="row g-2 mb-3 batch-list-stats">
                     <div class="col-4">
                         <div class="bg-success bg-opacity-10 rounded-2 p-2 text-center h-100">
                             <div class="fw-bold text-success fs-5"><?= number_format($batch['remaining_pieces']) ?></div>
@@ -295,6 +307,7 @@
                     </div>
                 </div>
 
+                <div class="batch-list-summary">
                 <div class="d-flex flex-wrap gap-2 mb-3" aria-label="QC outcome quantities">
                     <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
                         <i class="bi bi-check-circle me-1"></i>QC Passed: <?= number_format($batch['total_passed_pieces']) ?>
@@ -332,9 +345,10 @@
                     <i class="bi bi-person-check me-1 text-success"></i>Inspector: <strong><?= e($batch['inspector_name']) ?></strong>
                 </div>
                 <?php endif; ?>
+                </div>
 
                 <!-- Actions -->
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 batch-list-actions">
                     <a href="<?= url('production/inventory/batch/' . $batch['qc_batch_id']) ?>" 
                        class="btn btn-<?= ($stockStatus === 'FULLY_OUTWARDED') ? 'outline-secondary' : $colorClass ?> btn-sm flex-grow-1 fw-semibold">
                         <i class="bi bi-eye me-1"></i> View Products &amp; History
@@ -383,12 +397,119 @@
     transform: translateY(-3px);
     box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
 }
+.inventory-batch-list-mode {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin: 0;
+}
+.inventory-batch-list-mode > .batch-card-col {
+    flex: 0 0 100%;
+    width: 100%;
+    max-width: 100%;
+    padding: 0;
+}
+.inventory-batch-list-mode .inventory-batch-card {
+    border-left-width: 4px !important;
+}
+.inventory-batch-list-mode .inventory-batch-card > .card-body {
+    display: grid;
+    grid-template-areas: "header product stats summary actions";
+    grid-template-columns: minmax(185px, 1.05fr) minmax(220px, 1.35fr) minmax(220px, 1.2fr) minmax(260px, 1.5fr) minmax(145px, 0.8fr);
+    align-items: center;
+    gap: 1rem;
+}
+.inventory-batch-list-mode .batch-list-header {
+    grid-area: header;
+    display: block !important;
+    margin: 0 !important;
+}
+.inventory-batch-list-mode .batch-list-header > div:first-child {
+    min-width: 0;
+}
+.inventory-batch-list-mode .batch-list-header > div:last-child {
+    display: none;
+}
+.inventory-batch-list-mode .batch-list-product {
+    grid-area: product;
+    min-width: 0;
+}
+.inventory-batch-list-mode .batch-list-product > .mb-3 {
+    margin-bottom: 0.5rem !important;
+}
+.inventory-batch-list-mode .batch-list-stats {
+    grid-area: stats;
+    margin: 0;
+}
+.inventory-batch-list-mode .batch-list-summary {
+    grid-area: summary;
+    min-width: 0;
+}
+.inventory-batch-list-mode .batch-list-summary > :last-child {
+    margin-bottom: 0 !important;
+}
+.inventory-batch-list-mode .batch-list-divider {
+    display: none;
+}
+.inventory-batch-list-mode .batch-list-actions {
+    grid-area: actions;
+    align-self: center;
+}
+.inventory-batch-list-mode .batch-list-actions .btn:first-child {
+    white-space: normal;
+}
+.inventory-batch-list-mode .batch-list-actions .btn.flex-grow-1 {
+    flex-grow: 1;
+}
+@media (max-width: 1399.98px) {
+    .inventory-batch-list-mode .inventory-batch-card > .card-body {
+        grid-template-areas:
+            "header product stats"
+            "summary summary actions";
+        grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.3fr) minmax(210px, 1fr);
+    }
+}
+@media (max-width: 767.98px) {
+    .inventory-batch-list-mode .inventory-batch-card > .card-body {
+        grid-template-areas:
+            "header"
+            "product"
+            "stats"
+            "summary"
+            "actions";
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.85rem;
+    }
+}
 </style>
 
 <script>
 let currentBatchPage = 1;
 let batchPageSize = 9;
 let visibleBatchCards = [];
+
+function switchBatchView(mode) {
+    const grid = document.getElementById('inventoryBatchesGrid');
+    const cardsButton = document.getElementById('batchCardsViewButton');
+    const listButton = document.getElementById('batchListViewButton');
+    const showList = mode === 'list';
+
+    if (grid) {
+        grid.classList.toggle('inventory-batch-list-mode', showList);
+    }
+    if (cardsButton) {
+        cardsButton.classList.toggle('btn-primary', !showList);
+        cardsButton.classList.toggle('active', !showList);
+        cardsButton.classList.toggle('btn-outline-secondary', showList);
+        cardsButton.setAttribute('aria-pressed', String(!showList));
+    }
+    if (listButton) {
+        listButton.classList.toggle('btn-primary', showList);
+        listButton.classList.toggle('active', showList);
+        listButton.classList.toggle('btn-outline-secondary', !showList);
+        listButton.setAttribute('aria-pressed', String(showList));
+    }
+}
 
 function clearSearchInput() {
     const searchInput = document.getElementById('inventorySearchInput');
