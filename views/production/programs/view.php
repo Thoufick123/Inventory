@@ -46,15 +46,7 @@
             <a href="<?= url('production/cutting/create?program_id=' . $program['id']) ?>" class="btn btn-primary">
                 <i class="bi bi-scissors me-1"></i> New Cutting Batch
             </a>
-            <a href="<?= url('production/labels/create?program_id=' . $program['id']) ?>" class="btn btn-outline-dark">
-                <i class="bi bi-tags me-1"></i> Labels
-            </a>
         <?php endif; ?>
-
-        <!-- Change Status Modal Trigger -->
-        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#statusModal">
-            <i class="bi bi-arrow-repeat me-1"></i> Status
-        </button>
 
         <!-- Delete Program Form -->
         <form method="POST" action="<?= url('production/programs/delete/' . $program['id']) ?>" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this production program?');">
@@ -523,37 +515,6 @@
                     </table>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
-
-<!-- Change Status Modal -->
-<div class="modal fade" id="statusModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <form method="POST" action="<?= url('production/programs/status/' . $program['id']) ?>">
-                <?= CSRF::field() ?>
-                <div class="modal-header">
-                    <h5 class="modal-title">Change Program Status</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <label class="form-label required">Select New Status</label>
-                    <select name="status" class="form-select" required>
-                        <option value="DRAFT" <?= $program['status'] === 'DRAFT' ? 'selected' : '' ?>>Draft</option>
-                        <option value="APPROVED" <?= $program['status'] === 'APPROVED' ? 'selected' : '' ?>>Approved</option>
-                        <option value="SCHEDULED" <?= $program['status'] === 'SCHEDULED' ? 'selected' : '' ?>>Scheduled</option>
-                        <option value="IN_PROGRESS" <?= $program['status'] === 'IN_PROGRESS' ? 'selected' : '' ?>>In Progress</option>
-                        <option value="COMPLETED" <?= $program['status'] === 'COMPLETED' ? 'selected' : '' ?>>Completed</option>
-                        <option value="HOLD" <?= $program['status'] === 'HOLD' ? 'selected' : '' ?>>On Hold</option>
-                        <option value="CANCELLED" <?= $program['status'] === 'CANCELLED' ? 'selected' : '' ?>>Cancelled</option>
-                    </select>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Update Status</button>
-                </div>
-            </form>
         </div>
     </div>
 </div>
