@@ -710,9 +710,9 @@ class ProductionService {
     }
 
     /**
-     * Create Production Batch (Finished Goods Packing).
+     * Resolve approved QR tags by QC item, including legacy label sequence tags.
      */
-    public static function getAvailableQCPieceTags(int $qcBatchId): array {
+    private static function getApprovedQCPieceTags(int $qcBatchId): array {
         if ($qcBatchId <= 0) {
             return [];
         }
@@ -764,6 +764,35 @@ class ProductionService {
             ];
         }
 
+        return $approvedByItem;
+    }
+
+    public static function getQCPieceTagPositions(int $qcBatchId): array {
+        $approvedByItem = self::getApprovedQCPieceTags($qcBatchId);
+        $items = QCBatch::getItems($qcBatchId);
+        $positions = [];
+        $pieceNo = 0;
+        foreach ($items as $item) {
+            $itemId = (int)$item['id'];
+            $passedQty = max(0, (int)($item['passed_qty'] ?? 0));
+            $tags = $approvedByItem[$itemId]['tags'] ?? [];
+            for ($pieceIndex = 0; $pieceIndex < $passedQty; $pieceIndex++) {
+                $pieceNo++;
+                if (!empty($tags[$pieceIndex])) {
+                    $positions[strtoupper(trim((string)$tags[$pieceIndex]))] = $pieceNo;
+                }
+            }
+        }
+
+        return $positions;
+    }
+
+    public static function getAvailableQCPieceTags(int $qcBatchId): array {
+        if ($qcBatchId <= 0) {
+            return [];
+        }
+
+        $approvedByItem = self::getApprovedQCPieceTags($qcBatchId);
         $legacyPackedByVariant = [];
         $assignedTagsByVariant = [];
         $previousRows = Database::fetchAll(
@@ -781,13 +810,19 @@ class ProductionService {
                 foreach ($tags as $tag) {
                     $tag = trim((string)$tag);
                     if ($tag !== '') {
-                        $assignedTagsByVariant[$variantId][$tag] = true;
+                        $assignedTagsByVariant[$variantId][strtoupper($tag)] = true;
                     }
                 }
             } else {
                 $legacyPackedByVariant[$variantId] = ($legacyPackedByVariant[$variantId] ?? 0) + (int)$row['quantity'];
             }
         }
+
+        $deletedRows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
+        $deletedTags = array_fill_keys(array_map(
+            static fn(array $row): string => strtoupper(trim((string)$row['code'])),
+            $deletedRows
+        ), true);
 
         $availableByItem = [];
         foreach ($approvedByItem as $itemId => $itemData) {
@@ -799,7 +834,7 @@ class ProductionService {
                     $legacySkip--;
                     continue;
                 }
-                if (empty($assignedTagsByVariant[$variantId][$tag])) {
+                if (empty($assignedTagsByVariant[$variantId][strtoupper($tag)]) && empty($deletedTags[strtoupper($tag)])) {
                     $available[] = $tag;
                 }
             }
@@ -810,6 +845,34 @@ class ProductionService {
         return $availableByItem;
     }
 
+    public static function getDeletedQCPieceCounts(int $qcBatchId, array $deletedCodes = []): array {
+        if ($qcBatchId <= 0) {
+            return [];
+        }
+
+        $approvedByItem = self::getApprovedQCPieceTags($qcBatchId);
+        $deletedTags = array_fill_keys(array_map(
+            static fn($code): string => strtoupper(trim((string)$code)),
+            $deletedCodes
+        ), true);
+        $deletedCounts = [];
+
+        foreach (QCBatch::getItems($qcBatchId) as $item) {
+            $itemId = (int)$item['id'];
+            $tags = $approvedByItem[$itemId]['tags'] ?? [];
+
+            $deletedCounts[$itemId] = count(array_filter(
+                $tags,
+                static fn(string $tag): bool => isset($deletedTags[strtoupper($tag)])
+            ));
+        }
+
+        return $deletedCounts;
+    }
+
+    /**
+     * Create Production Batch (Finished Goods Packing).
+     */
     public static function createProductionBatch(array $batchData, array $items, int $userId): int {
         Database::beginTransaction();
         try {

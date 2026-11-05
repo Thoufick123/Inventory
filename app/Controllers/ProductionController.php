@@ -6171,6 +6171,80 @@ class ProductionController {
         Response::json(['success' => true, 'code' => $code]);
     }
 
+    public function deleteProductionInventoryPiece(): void {
+        if (!hasPermission('inventory', 'delete')) {
+            Response::json(['success' => false, 'message' => 'You do not have permission to delete Production inventory pieces.'], 403);
+            return;
+        }
+
+        if (!CSRF::validateRequest()) {
+            Response::json(['success' => false, 'message' => 'Invalid security token. Refresh the page and try again.'], 419);
+            return;
+        }
+
+        $qcBatchId = (int)($_POST['qc_batch_id'] ?? 0);
+        $code = strtoupper(trim((string)($_POST['code'] ?? '')));
+        if ($qcBatchId <= 0 || !preg_match('/^[A-Z0-9][A-Z0-9_-]{2,49}$/', $code)) {
+            Response::json(['success' => false, 'message' => 'A valid QC batch and QR code are required.'], 422);
+            return;
+        }
+
+        $qcBatch = Database::fetchOne("SELECT id, program_id FROM qc_batches WHERE id = ?", [$qcBatchId]);
+        if (!$qcBatch) {
+            Response::json(['success' => false, 'message' => 'QC batch not found.'], 404);
+            return;
+        }
+
+        $piecePositions = ProductionService::getQCPieceTagPositions($qcBatchId);
+        $pieceNo = $piecePositions[$code] ?? null;
+        if ($pieceNo === null) {
+            Response::json(['success' => false, 'message' => 'This QR code could not be matched to a QC-passed inventory piece.'], 409);
+            return;
+        }
+
+        $passedQty = array_sum(array_map(
+            static fn(array $item): int => (int)($item['passed_qty'] ?? 0),
+            QCBatch::getItems($qcBatchId)
+        ));
+        $outwardTotals = Database::fetchOne(
+            "SELECT COALESCE(SUM(COALESCE(po.total_quantity, po.quantity, pb.total_qty, 0)), 0) as total_outward_qty
+             FROM production_outwards po
+             JOIN production_batches pb ON po.production_batch_id = pb.id
+             WHERE pb.qc_batch_id = ? OR (pb.program_id = ? AND pb.program_id > 0)",
+            [$qcBatchId, (int)($qcBatch['program_id'] ?? 0)]
+        );
+        $outwardQty = (int)($outwardTotals['total_outward_qty'] ?? 0);
+        if ($pieceNo <= min($passedQty, $outwardQty)) {
+            Response::json(['success' => false, 'message' => 'Dispatched inventory pieces cannot be deleted.'], 409);
+            return;
+        }
+
+        $availableTags = ProductionService::getAvailableQCPieceTags($qcBatchId);
+        $isAvailable = false;
+        foreach ($availableTags as $tags) {
+            foreach ($tags as $tag) {
+                if (strtoupper(trim((string)$tag)) === $code) {
+                    $isAvailable = true;
+                    break 2;
+                }
+            }
+        }
+
+        if (!$isAvailable) {
+            Response::json(['success' => false, 'message' => 'This QR code is not available in this QC batch. It may already be packed or deleted.'], 409);
+            return;
+        }
+
+        Database::execute(
+            "INSERT INTO production_deleted_label_codes (code, created_by)
+             VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE code = VALUES(code)",
+            [$code, Session::userId()]
+        );
+
+        Response::json(['success' => true, 'code' => $code]);
+    }
+
     public function createLabel(): void {
         $programId = $_GET['program_id'] ?? null;
         $stitchingBatchId = $_GET['stitching_batch_id'] ?? null;
@@ -8172,6 +8246,15 @@ class ProductionController {
 
         $items = Database::fetchAll($sql, $params);
 
+        $deletedCodeRows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
+        $deletedCodes = array_column($deletedCodeRows, 'code');
+        $deletedCountsByBatch = [];
+        if (!empty($deletedCodes)) {
+            foreach (array_unique(array_map(static fn(array $item): int => (int)$item['qc_batch_id'], $items)) as $qcBatchId) {
+                $deletedCountsByBatch[$qcBatchId] = ProductionService::getDeletedQCPieceCounts($qcBatchId, $deletedCodes);
+            }
+        }
+
         // Fetch all outward dispatches to link with batches/programs
         $allOutwards = Database::fetchAll(
             "SELECT po.id as outward_id,
@@ -8235,16 +8318,18 @@ class ProductionController {
             $reworkQty = (int)($it['rework_qty'] ?? 0);
             $rejectedQty = (int)($it['rejected_qty'] ?? 0);
             $price = (float)(($it['discount_price'] ?? 0) > 0 ? $it['discount_price'] : ($it['base_price'] ?? 0));
+            $deletedQty = (int)($deletedCountsByBatch[(int)$batchId][(int)$it['id']] ?? 0);
+            $inventoryPassedQty = max(0, $passedQty - $deletedQty);
             $batches[$batchId]['total_passed_pieces'] += $passedQty;
             $batches[$batchId]['total_rework_pieces'] += $reworkQty;
             $batches[$batchId]['total_rejected_pieces'] += $rejectedQty;
-            $batches[$batchId]['total_pieces']        += $passedQty;
-            $batches[$batchId]['total_value']         += ($passedQty * $price);
-            if ($passedQty > 0) {
+            $batches[$batchId]['total_pieces']        += $inventoryPassedQty;
+            $batches[$batchId]['total_value']         += ($inventoryPassedQty * $price);
+            if ($inventoryPassedQty > 0) {
                 $batches[$batchId]['variants'][] = [
                     'size_name'  => $it['size_name'],
                     'color_name' => $it['color_name'],
-                    'passed_qty' => $passedQty,
+                    'passed_qty' => $inventoryPassedQty,
                 ];
             }
         }
@@ -8278,7 +8363,7 @@ class ProductionController {
                 $totalOutwardQty += (int)$ow['outward_qty'];
             }
 
-            $passedPcs = (int)$batch['total_passed_pieces'];
+            $passedPcs = (int)$batch['total_pieces'];
             $outwardPcs = min($passedPcs, $totalOutwardQty);
             $remainingPcs = max(0, $passedPcs - $outwardPcs);
             
@@ -8404,6 +8489,12 @@ class ProductionController {
             return;
         }
 
+        $deletedCodeRows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
+        $deletedCodes = array_fill_keys(array_map(
+            static fn(array $row): string => strtoupper((string)$row['code']),
+            $deletedCodeRows
+        ), true);
+
         $first = $qcItems[0];
         $qcOutcomeItems = array_values(array_filter($qcItems, static function (array $item): bool {
             return (int)($item['rework_qty'] ?? 0) > 0 || (int)($item['rejected_qty'] ?? 0) > 0;
@@ -8493,6 +8584,15 @@ class ProductionController {
             }
         }
 
+        $availableTagsByItem = ProductionService::getAvailableQCPieceTags($id);
+        $availableCodesByItem = [];
+        foreach ($availableTagsByItem as $itemId => $tags) {
+            $availableCodesByItem[(int)$itemId] = array_fill_keys(
+                array_map(static fn($tag): string => strtoupper(trim((string)$tag)), $tags),
+                true
+            );
+        }
+
         // Build piece-by-piece records
         $pieceItems = [];
         $globalPieceIndex = 1;
@@ -8503,8 +8603,6 @@ class ProductionController {
         foreach ($items as $it) {
             $passedQty = (int)$it['passed_qty'];
             $price = (float)($it['discount_price'] > 0 ? $it['discount_price'] : $it['base_price']);
-            $totalPieces += $passedQty;
-            $totalValue  += ($passedQty * $price);
 
             $batchDate = new DateTime($it['batch_created_at'] ?? 'now');
             $monthStr  = $batchDate->format('m');
@@ -8543,14 +8641,21 @@ class ProductionController {
                 }
                 $batchPieceSeq++;
 
-                $isDispatched = ($globalPieceIndex <= $totalOutwardPieces);
+                $pieceNo = $globalPieceIndex++;
+                if (isset($deletedCodes[strtoupper($pieceTagCode)])) {
+                    continue;
+                }
+
+                $totalPieces++;
+                $totalValue += $price;
+                $isDispatched = ($pieceNo <= $totalOutwardPieces);
                 $pieceOutwardInfo = null;
                 if ($isDispatched && !empty($outwards)) {
                     $pieceOutwardInfo = $outwards[0]['outward_number'] ?? 'OUTWARDED';
                 }
 
                 $pieceItems[] = [
-                    'piece_no'        => $globalPieceIndex++,
+                    'piece_no'        => $pieceNo,
                     'piece_seq'       => $p,
                     'passed_in_group' => $passedQty,
                     'qc_item_id'      => $it['id'],
@@ -8571,6 +8676,7 @@ class ProductionController {
                     'inspector_name'  => $it['inspector_name'] ?? 'Inspector',
                     'batch_created_at'=> $it['batch_created_at'] ?? null,
                     'is_dispatched'   => $isDispatched,
+                    'can_delete'      => !$isDispatched && isset($availableCodesByItem[(int)$it['id']][strtoupper($pieceTagCode)]),
                     'outward_info'    => $pieceOutwardInfo,
                 ];
             }

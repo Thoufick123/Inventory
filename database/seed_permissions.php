@@ -37,6 +37,8 @@ foreach ($permissionBlocks[1] as $permissionBlock) {
 }
 
 $definitions = array_merge($definitions, [
+    ['module' => 'inventory', 'action' => 'delete', 'desc' => 'Delete an available Production inventory QR piece'],
+
     // WhatsApp Channel Hub
     ['module' => 'whatsapp_orders', 'action' => 'view', 'desc' => 'View WhatsApp B2B Orders and history'],
     ['module' => 'whatsapp_orders', 'action' => 'create', 'desc' => 'Create new WhatsApp B2B order'],

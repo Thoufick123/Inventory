@@ -529,6 +529,14 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                                                     </a>
                                                 </li>
                                                 <?php endif; ?>
+                                                <?php if (!empty($it['can_delete']) && hasPermission('inventory', 'delete')): ?>
+                                                <li><hr class="dropdown-divider"></li>
+                                                <li>
+                                                    <button type="button" class="dropdown-item text-danger" onclick="deleteInventoryPiece(<?= htmlspecialchars(json_encode($it['tag_code']), ENT_QUOTES, 'UTF-8') ?>, <?= (int)$it['qc_batch_id'] ?>)">
+                                                        <i class="bi bi-trash me-2"></i>Delete QR from Inventory
+                                                    </button>
+                                                </li>
+                                                <?php endif; ?>
                                                 <li>
                                                     <a class="dropdown-item" href="<?= url('production/qc/inspect/' . $it['qc_batch_id']) ?>">
                                                         <i class="bi bi-eye me-2"></i>View QC Inspection
@@ -706,6 +714,8 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
 <script>
 const PIECE_ITEMS = <?= json_encode($pieceItems ?? []) ?>;
 window.inventoryPieceItems = <?= json_encode($pieceItems ?? []) ?>;
+const INVENTORY_PIECE_DELETE_URL = <?= json_encode(url('production/inventory/delete-piece')) ?>;
+const INVENTORY_DELETE_CSRF_TOKEN = <?= json_encode(CSRF::token()) ?>;
 
 // Pagination state
 let currentInventoryPage = 1;
@@ -1156,4 +1166,29 @@ function showCopyFeedback(btn) {
 document.addEventListener('DOMContentLoaded', function() {
     filterInventoryPieces();
 });
+
+async function deleteInventoryPiece(code, qcBatchId) {
+    if (!confirm(`Delete QR ${code} from Production Unit Inventory? This cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(INVENTORY_PIECE_DELETE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: new URLSearchParams({
+                _csrf_token: INVENTORY_DELETE_CSRF_TOKEN,
+                qc_batch_id: String(qcBatchId),
+                code: code
+            })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            throw new Error(result.message || 'Could not delete this inventory QR.');
+        }
+        window.location.reload();
+    } catch (error) {
+        alert(error.message || 'Could not delete this inventory QR.');
+    }
+}
 </script>
