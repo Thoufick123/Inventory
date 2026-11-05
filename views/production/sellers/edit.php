@@ -1391,7 +1391,7 @@ function openEditLabelsPreviewModal() {
 
         const safeColor = stk.color ? `Color: ${stk.color}` : '';
         const safeDesign = stk.design_name ? `Design: ${stk.design_name}` : '';
-        const safeWeight = stk.weight > 0 ? `Weight: ${Number(stk.weight).toFixed(2)} kg` : '';
+        const safeWeight = stk.weight > 0 ? `Roll Weight: ${Number(stk.weight).toFixed(2)} kg` : '';
 
         card.innerHTML = `
             <div class="edit-sticker-header">
@@ -1409,7 +1409,7 @@ function openEditLabelsPreviewModal() {
                     <div class="edit-spec-row">
                         ${safeColor ? `<div class="edit-spec-item"><strong>Color:</strong> ${stk.color}</div>` : ''}
                         ${safeDesign ? `<div class="edit-spec-item"><strong>Design:</strong> ${stk.design_name}</div>` : ''}
-                        ${safeWeight ? `<div class="edit-spec-item"><strong>Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : ''}
+                        ${safeWeight ? `<div class="edit-spec-item"><strong>Roll Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : ''}
                     </div>
                     <div class="edit-piece-seq-badge">
                         PIECE ${stk.piece_index} OF ${stk.total_qty}

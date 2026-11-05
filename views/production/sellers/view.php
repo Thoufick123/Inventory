@@ -1012,7 +1012,7 @@ function loadAndRenderStickers(ajaxUrl) {
                 
                 const safeColor = stk.color ? `Color: ${stk.color}` : '';
                 const safeDesign = stk.design_name ? `Design: ${stk.design_name}` : '';
-                const safeWeight = stk.weight > 0 ? `Weight: ${Number(stk.weight).toFixed(2)} kg` : '';
+                const safeWeight = stk.weight > 0 ? `Roll Weight: ${Number(stk.weight).toFixed(2)} kg` : '';
 
                 card.innerHTML = `
                     <div class="modal-sticker-header">
@@ -1030,7 +1030,7 @@ function loadAndRenderStickers(ajaxUrl) {
                             <div class="modal-spec-row">
                                 ${safeColor ? `<div class="modal-spec-item"><strong>Color:</strong> ${stk.color}</div>` : ''}
                                 ${safeDesign ? `<div class="modal-spec-item"><strong>Design:</strong> ${stk.design_name}</div>` : ''}
-                                ${safeWeight ? `<div class="modal-spec-item"><strong>Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : ''}
+                                ${safeWeight ? `<div class="modal-spec-item"><strong>Roll Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : ''}
                             </div>
                             <div class="modal-piece-seq-badge">
                                 PIECE ${stk.piece_index} OF ${stk.total_qty}

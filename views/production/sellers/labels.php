@@ -199,18 +199,6 @@
             text-overflow: ellipsis;
         }
 
-        .piece-seq-badge {
-            display: inline-block;
-            background: #0f172a;
-            color: #fff;
-            padding: 1px 4px;
-            border-radius: 3px;
-            font-size: 7.5px;
-            font-weight: 700;
-            letter-spacing: 0.3px;
-            margin-top: 3px;
-        }
-
         /* Print Media Styles */
         @media print {
             body {
@@ -392,11 +380,8 @@
                                 <div class="spec-item"><strong>Design:</strong> <?= e($stk['design_name']) ?></div>
                             <?php endif; ?>
                             <?php if ($stk['weight'] > 0): ?>
-                                <div class="spec-item"><strong>Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
+                                <div class="spec-item"><strong>Roll Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
                             <?php endif; ?>
-                        </div>
-                        <div class="piece-seq-badge">
-                            PIECE <?= $stk['piece_index'] ?> OF <?= $stk['total_qty'] ?>
                         </div>
                     </div>
                 </div>
@@ -734,10 +719,6 @@ function refreshStickersFromDOM() {
         const delBtn = card.querySelector('.btn-single-delete');
         if (delBtn) delBtn.setAttribute('onclick', `deleteSingleSticker(${newIdx})`);
 
-        const badge = card.querySelector('.piece-seq-badge');
-        if (badge) {
-            badge.textContent = `PIECE ${newIdx + 1} OF ${total}`;
-        }
     });
 
     updateSelectedCount();
@@ -848,7 +829,7 @@ function submitAddExtraLabel() {
 
                 const safeColor = stk.color ? `<div class="spec-item"><strong>Color:</strong> ${stk.color}</div>` : '';
                 const safeDesign = stk.design_name ? `<div class="spec-item"><strong>Design:</strong> ${stk.design_name}</div>` : '';
-                const safeWeight = stk.weight > 0 ? `<div class="spec-item"><strong>Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : '';
+                const safeWeight = stk.weight > 0 ? `<div class="spec-item"><strong>Roll Weight:</strong> ${Number(stk.weight).toFixed(2)} kg</div>` : '';
 
                 card.innerHTML = `
                     <div class="sticker-card-toolbar no-print">
@@ -881,9 +862,6 @@ function submitAddExtraLabel() {
                                 ${safeColor}
                                 ${safeDesign}
                                 ${safeWeight}
-                            </div>
-                            <div class="piece-seq-badge">
-                                PIECE ${stk.piece_index} OF ${stk.total_qty}
                             </div>
                         </div>
                     </div>
