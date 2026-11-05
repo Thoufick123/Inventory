@@ -128,7 +128,7 @@ $isEditMode = (!empty($_GET['mode']) && $_GET['mode'] === 'edit');
                             <div id="supplierTextInputWrapper" class="d-none">
                                 <div class="input-group">
                                     <span class="input-group-text bg-light text-success border-success-subtle"><i class="bi bi-person-plus-fill text-success"></i></span>
-                                    <input type="text" id="newSupplierNameInput" class="form-control fw-semibold border-success-subtle" placeholder="Enter new contact person / supplier name..." minlength="2" maxlength="150" oninput="onNewSupplierNameInput(this.value)">
+                                    <input type="text" id="newSupplierNameInput" class="form-control text-uppercase fw-semibold border-success-subtle" placeholder="Enter new contact person / supplier name..." minlength="2" maxlength="150" oninput="onNewSupplierNameInput(this.value)">
                                     <button type="button" class="btn btn-outline-secondary btn-sm px-2.5" onclick="setSupplierMode('existing')" title="Switch to existing supplier dropdown">
                                         <i class="bi bi-arrow-return-left me-1"></i> Pick Existing
                                     </button>
@@ -161,7 +161,7 @@ $isEditMode = (!empty($_GET['mode']) && $_GET['mode'] === 'edit');
                             <label class="form-label small fw-semibold">
                                 <i class="bi bi-building me-1 text-primary"></i>Company Name
                             </label>
-                            <input type="text" name="company" id="supplierCompany" class="form-control" placeholder="e.g. RK Apparels Pvt Ltd" maxlength="200">
+                            <input type="text" name="company" id="supplierCompany" class="form-control text-uppercase" placeholder="e.g. RK Apparels Pvt Ltd" maxlength="200">
                         </div>
 
                         <!-- 2. Brand Name Field (Dropdown + New Brand Creation) -->
@@ -177,7 +177,7 @@ $isEditMode = (!empty($_GET['mode']) && $_GET['mode'] === 'edit');
 
                             <!-- Mode A: Dropdown showing Existing Brands -->
                             <div id="brandDropdownWrapper">
-                                <select name="brand_id" id="brandSelect" class="form-select" onchange="onBrandSelectChange(this.value)">
+                                <select name="brand_id" id="brandSelect" class="form-select text-uppercase" onchange="onBrandSelectChange(this.value)">
                                     <option value="">-- Choose Existing Brand --</option>
                                     <?php foreach (($brands ?? []) as $b): ?>
                                         <option value="<?= (int)$b['id'] ?>"><?= e($b['name']) ?></option>
@@ -189,7 +189,7 @@ $isEditMode = (!empty($_GET['mode']) && $_GET['mode'] === 'edit');
                             <!-- Mode B: Direct Input for Newly Created Brand -->
                             <div id="brandTextInputWrapper" class="d-none">
                                 <div class="input-group">
-                                    <input type="text" name="new_brand_name" id="newBrandNameInput" class="form-control" placeholder="Enter new brand name..." minlength="2" maxlength="150">
+                                    <input type="text" name="new_brand_name" id="newBrandNameInput" class="form-control text-uppercase" placeholder="Enter new brand name..." minlength="2" maxlength="150">
                                     <button type="button" class="btn btn-outline-secondary" onclick="setBrandMode('existing')" title="Select from existing brands">
                                         <i class="bi bi-arrow-return-left"></i>
                                     </button>

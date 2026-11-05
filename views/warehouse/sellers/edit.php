@@ -20,13 +20,13 @@
                     <div class="row g-3">
                         <div class="col-12">
                             <label class="form-label small fw-semibold">Contact Person / Supplier Name <span class="text-danger">*</span></label>
-                            <input type="text" name="name" id="supplierNameInput" class="form-control" value="<?= e($seller['name']) ?>" required minlength="2" maxlength="150" autocomplete="off">
+                            <input type="text" name="name" id="supplierNameInput" class="form-control text-uppercase" value="<?= e($seller['name']) ?>" required minlength="2" maxlength="150" autocomplete="off">
                             <div class="invalid-feedback">Supplier name is required (min 2 characters).</div>
                         </div>
 
                         <div class="col-12">
                             <label class="form-label small fw-semibold">Company / Brand Name</label>
-                            <input type="text" name="company" id="supplierCompanyInput" class="form-control" value="<?= e($seller['company'] ?? '') ?>" placeholder="e.g. RK Apparels Pvt Ltd" maxlength="200">
+                            <input type="text" name="company" id="supplierCompanyInput" class="form-control text-uppercase" value="<?= e($seller['company'] ?? '') ?>" placeholder="e.g. RK Apparels Pvt Ltd" maxlength="200">
                         </div>
 
                         <div class="col-md-6">

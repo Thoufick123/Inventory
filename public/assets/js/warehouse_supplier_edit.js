@@ -1,3 +1,28 @@
+document.addEventListener('DOMContentLoaded', function () {
+    const nameFields = [
+        document.getElementById('supplierNameInput'),
+        document.getElementById('supplierCompanyInput')
+    ].filter(Boolean);
+
+    nameFields.forEach(function (input) {
+        input.addEventListener('input', function () {
+            const start = input.selectionStart;
+            const end = input.selectionEnd;
+            input.value = input.value.toUpperCase();
+            if (start !== null && end !== null) input.setSelectionRange(start, end);
+        });
+    });
+
+    const form = document.getElementById('supplierEditForm');
+    if (form) {
+        form.addEventListener('submit', function () {
+            nameFields.forEach(function (input) {
+                input.value = input.value.toUpperCase();
+            });
+        });
+    }
+});
+
 function handleExistingRowQRModeChange(select) {
     const row = select.closest('tr');
     if (!row) return;

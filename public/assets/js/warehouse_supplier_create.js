@@ -5,6 +5,25 @@ let currentSupplierMode = 'existing';
 let currentBrandMode = 'existing';
 
 document.addEventListener('DOMContentLoaded', function () {
+    const newSupplierNameInput = document.getElementById('newSupplierNameInput');
+    const supplierCompanyInput = document.getElementById('supplierCompany');
+    const newBrandNameInput = document.getElementById('newBrandNameInput');
+
+    [newSupplierNameInput, supplierCompanyInput, newBrandNameInput].forEach(function (input) {
+        if (!input) return;
+        input.addEventListener('input', function () {
+            const start = input.selectionStart;
+            const end = input.selectionEnd;
+            input.value = input.value.toUpperCase();
+            if (start !== null && end !== null) input.setSelectionRange(start, end);
+
+            if (input === newSupplierNameInput) {
+                const hiddenName = document.getElementById('supplierName');
+                if (hiddenName) hiddenName.value = input.value.trim();
+            }
+        });
+    });
+
     const searchInput = document.getElementById('supplierSearchInput');
     if (searchInput) {
         searchInput.addEventListener('input', filterSupplierSuggestions);
@@ -302,7 +321,7 @@ function onBrandSelectChange(val) {
 
 function onNewSupplierNameInput(val) {
     const input = document.getElementById('supplierName');
-    if (input) input.value = (val || '').trim();
+    if (input) input.value = (val || '').trim().toUpperCase();
 }
 
 function clearExistingSupplierSelection() {
@@ -433,6 +452,9 @@ function normalizeSupplierPhone(phone) {
 }
 
 function handlePhase1Submit(event) {
+    const companyInput = document.getElementById('supplierCompany');
+    if (companyInput) companyInput.value = companyInput.value.toUpperCase();
+
     const billImageInput = document.getElementById('billImageInput');
     const selectedSupplierId = Number(document.getElementById('existingSupplierId')?.value || 0);
     const selectedSupplier = existingSuppliersData.find(function (supplier) {
@@ -517,7 +539,9 @@ function handlePhase1Submit(event) {
             showValidationAlert('Supplier Contact / Name is mandatory (minimum 2 characters).');
             return false;
         }
-        if (supplierNameInput) supplierNameInput.value = newName;
+        if (supplierNameInput) supplierNameInput.value = newName.toUpperCase();
+        const companyInput = document.getElementById('supplierCompany');
+        if (companyInput) companyInput.value = companyInput.value.toUpperCase();
         const hiddenId = document.getElementById('existingSupplierId');
         if (hiddenId) hiddenId.value = '';
     } else {
@@ -543,7 +567,8 @@ function handlePhase1Submit(event) {
     const brandSel = document.getElementById('brandSelect');
     const brandVal = brandSel ? brandSel.value : '';
     const newBrandInput = document.getElementById('newBrandNameInput');
-    const newBrandVal = newBrandInput ? newBrandInput.value.trim() : '';
+    const newBrandVal = newBrandInput ? newBrandInput.value.trim().toUpperCase() : '';
+    if (newBrandInput) newBrandInput.value = newBrandVal;
 
     if (currentBrandMode === 'new' || brandVal === '__NEW__') {
         if (!newBrandVal || newBrandVal.length < 2) {
