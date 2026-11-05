@@ -295,10 +295,6 @@
                                 <!-- Actions -->
                                 <td class="text-end">
                                     <div class="btn-group btn-group-sm">
-                                        <!-- View Modal Button -->
-                                        <button type="button" class="btn btn-outline-info" data-bs-toggle="modal" data-bs-target="#viewSellerModal_<?= $s['id'] ?>" title="Quick View Supplier Details & Fabric Rolls">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
                                         <!-- Full View Link -->
                                         <a href="<?= url('production/sellers/view/' . $s['id']) ?>" class="btn btn-outline-secondary" title="Open Full View Sheet">
                                             <i class="bi bi-box-arrow-up-right"></i>

@@ -1,5 +1,5 @@
 <div class="page-header mb-4">
-    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 w-100">
         <div>
             <div class="d-flex align-items-center gap-2 mb-1">
                 <h2 class="mb-0"><i class="bi bi-truck-flatbed me-2 text-primary"></i><?= e($seller['name']) ?></h2>
@@ -16,7 +16,7 @@
                 Material Supplier & Fabric Lot Specification Sheet
             </span>
         </div>
-        <div class="d-flex gap-2 align-items-center flex-wrap">
+        <div class="d-flex gap-2 align-items-center flex-wrap ms-auto">
             <a href="<?= url('production/sellers') ?>" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left me-1"></i> Back to Suppliers
             </a>
