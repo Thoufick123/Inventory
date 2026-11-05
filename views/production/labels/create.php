@@ -1049,6 +1049,10 @@ function generateQRCodeContainer(containerId, textPayload) {
     }
 }
 
+function buildProductionLabelQrPayload(damageCode, sku, basePrice, discountPrice) {
+    return `${damageCode}|${sku}|MRP:${basePrice}|Disc:${discountPrice}`;
+}
+
 let currentPreviewIndex = 0;
 let currentExtraVariantIndex = null;
 let catalogExtraNextSeq = {};
@@ -1080,7 +1084,7 @@ function previewSingleQR(idx) {
     document.getElementById('previewBasePrice').textContent = 'MRP: ₹' + fmtBase;
     document.getElementById('previewDiscPrice').textContent = 'Disc: ₹' + fmtDisc;
 
-    const qrPayload = `${damageCode}|${sku}|MRP:${fmtBase}|Disc:${fmtDisc}`;
+    const qrPayload = buildProductionLabelQrPayload(damageCode, sku, fmtBase, fmtDisc);
 
     generateQRCodeContainer('singleQRCanvas', qrPayload);
     const modal = new bootstrap.Modal(document.getElementById('singleQRModal'));
@@ -1346,7 +1350,7 @@ function updateExtraLabelPreview() {
         `;
         previewGrid.appendChild(card);
 
-        const qrPayload = `${damageCode}|${sku}|MRP:${fmtBase}|Disc:${fmtDisc}`;
+        const qrPayload = buildProductionLabelQrPayload(damageCode, sku, fmtBase, fmtDisc);
         generateQRCodeContainer(canvasId, qrPayload);
     }
 }
@@ -1381,6 +1385,7 @@ async function executePrintExtraLabels() {
             basePrice: basePrice.toFixed(2),
             discountPrice: discountPrice.toFixed(2),
             damageCode: code,
+            qrContent: buildProductionLabelQrPayload(code, sku, basePrice.toFixed(2), discountPrice.toFixed(2)),
             title: "GRM WAREHOUSE",
             quantity: 1
         });
@@ -1549,7 +1554,7 @@ function openQRPrintModal() {
             `;
             grid.appendChild(col);
 
-            const qrPayload = `${damageCode}|${sku}|MRP:${basePrice.toFixed(2)}|Disc:${discountPrice.toFixed(2)}`;
+            const qrPayload = buildProductionLabelQrPayload(damageCode, sku, basePrice.toFixed(2), discountPrice.toFixed(2));
 
             setTimeout(() => {
                 generateQRCodeContainer(qrCanvasId, qrPayload);
@@ -1591,6 +1596,7 @@ function printQRStickersDirectly() {
             basePrice: basePrice,
             discountPrice: discountPrice,
             damageCode: damageCode,
+            qrContent: buildProductionLabelQrPayload(damageCode, sku, basePrice, discountPrice),
             title: "GRM WAREHOUSE",
             quantity: 1
         });
