@@ -107,9 +107,11 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
         </span>
     </div>
     <div class="d-flex gap-2 flex-wrap">
+        <?php if (!empty($pieceItems)): ?>
         <button type="button" class="btn btn-outline-primary" onclick="printAllBatchLabels()">
             <i class="bi bi-printer me-1"></i> Print Batch Labels
         </button>
+        <?php endif; ?>
         <a href="<?= url('production/qc/inspect/' . $qcBatchId) ?>" class="btn btn-outline-secondary">
             <i class="bi bi-clipboard-check me-1"></i> View QC Inspection
         </a>
@@ -117,7 +119,7 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
         <a href="<?= url('production/batches/create?qc_batch_id=' . $qcBatchId) ?>" class="btn btn-success">
             <i class="bi bi-box-seam me-1"></i> Pack into Box Batch (<?= number_format($remainingPieces) ?> pcs)
         </a>
-        <?php elseif ($remainingPieces == 0): ?>
+        <?php elseif ($totalPieces > 0 && $remainingPieces == 0): ?>
         <a href="<?= url('production/batches?search=' . urlencode($batchInfo['program_number'] ?? '')) ?>" class="btn btn-outline-secondary" title="All pieces from this batch have already been packed into finished boxes">
             <i class="bi bi-check2-all me-1"></i> Fully Packed &amp; Dispatched
         </a>
@@ -162,6 +164,10 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                     <span class="text-uppercase text-muted fw-semibold small d-block">Total QC Passed</span>
                     <h3 class="fw-bold text-dark mb-0 mt-1"><?= number_format($totalPieces) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
                     <small class="text-muted d-block mt-1"><?= count($rawItems) ?> product variants</small>
+                    <div class="d-flex flex-wrap gap-1 mt-2">
+                        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Rework: <?= number_format($totalReworkPieces) ?></span>
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Rejected: <?= number_format($totalRejectedPieces) ?></span>
+                    </div>
                 </div>
                 <div class="bg-info text-dark rounded-3 p-3">
                     <i class="bi bi-patch-check-fill fs-4"></i>
@@ -182,6 +188,53 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                 </div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- QC outcomes that are separate from passed inventory and outward dispatch -->
+<div class="card shadow-sm mb-4 border-0">
+    <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <div>
+            <h5 class="card-title mb-0 fw-bold text-dark"><i class="bi bi-clipboard2-pulse me-2 text-warning"></i>QC Rework &amp; Rejected Items</h5>
+            <small class="text-muted">These quantities are not included in QC-passed inventory or outward dispatch totals.</small>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-3 py-2">Rework: <?= number_format($totalReworkPieces) ?></span>
+            <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-3 py-2">Rejected: <?= number_format($totalRejectedPieces) ?></span>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <?php if (!empty($qcOutcomeItems)): ?>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Variant</th>
+                        <th>QC Action</th>
+                        <th>Defect / Reason</th>
+                        <th class="text-end">Rework Qty</th>
+                        <th class="text-end">Rejected Qty</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($qcOutcomeItems as $outcome): ?>
+                    <tr>
+                        <td>
+                            <span class="badge bg-secondary-subtle text-secondary border"><?= e($outcome['size_name'] ?? 'Std') ?></span>
+                            <span class="badge bg-info-subtle text-info border"><?= e($outcome['color_name'] ?? 'Std') ?></span>
+                        </td>
+                        <td><?= e($outcome['action_taken'] ?? '—') ?></td>
+                        <td><?= e($outcome['defect_reason'] ?? '—') ?></td>
+                        <td class="text-end"><span class="badge bg-warning-subtle text-warning-emphasis border"><?= number_format((int)($outcome['rework_qty'] ?? 0)) ?></span></td>
+                        <td class="text-end"><span class="badge bg-danger-subtle text-danger border"><?= number_format((int)($outcome['rejected_qty'] ?? 0)) ?></span></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php else: ?>
+        <div class="text-center text-muted py-4">No rework or rejected quantities were recorded for this QC batch.</div>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -439,6 +492,9 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                                     <?php endif; ?>
                                 </td>
                                 <td>
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1 d-block mb-1">
+                                        <i class="bi bi-patch-check me-1"></i>QC PASSED
+                                    </span>
                                     <?php if (!empty($it['is_dispatched'])): ?>
                                         <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1 d-block mb-1">
                                             <i class="bi bi-truck me-1"></i>DISPATCHED

@@ -7807,7 +7807,7 @@ class ProductionController {
                 LEFT JOIN categories c_p ON p.category_id = c_p.id
                 LEFT JOIN categories c_pp ON pp.category_id = c_pp.id
                 LEFT JOIN users u ON qb.inspector_id = u.id
-                WHERE qi.passed_qty > 0";
+                WHERE (qi.passed_qty > 0 OR qi.rework_qty > 0 OR qi.rejected_qty > 0)";
         
         $params = [];
 
@@ -7890,21 +7890,29 @@ class ProductionController {
                     'inspector_name'      => $it['inspector_name'],
                     'batch_created_at'    => $it['batch_created_at'],
                     'total_passed_pieces' => 0,
+                    'total_rework_pieces' => 0,
+                    'total_rejected_pieces' => 0,
                     'total_pieces'        => 0,
                     'total_value'         => 0.0,
                     'variants'            => [],
                 ];
             }
             $passedQty = (int)$it['passed_qty'];
+            $reworkQty = (int)($it['rework_qty'] ?? 0);
+            $rejectedQty = (int)($it['rejected_qty'] ?? 0);
             $price = (float)(($it['discount_price'] ?? 0) > 0 ? $it['discount_price'] : ($it['base_price'] ?? 0));
             $batches[$batchId]['total_passed_pieces'] += $passedQty;
+            $batches[$batchId]['total_rework_pieces'] += $reworkQty;
+            $batches[$batchId]['total_rejected_pieces'] += $rejectedQty;
             $batches[$batchId]['total_pieces']        += $passedQty;
             $batches[$batchId]['total_value']         += ($passedQty * $price);
-            $batches[$batchId]['variants'][]           = [
-                'size_name'  => $it['size_name'],
-                'color_name' => $it['color_name'],
-                'passed_qty' => $passedQty,
-            ];
+            if ($passedQty > 0) {
+                $batches[$batchId]['variants'][] = [
+                    'size_name'  => $it['size_name'],
+                    'color_name' => $it['color_name'],
+                    'passed_qty' => $passedQty,
+                ];
+            }
         }
 
         // Calculate Outward Deductions, Remaining In-Stock & Outward Status for each batch
@@ -7947,10 +7955,12 @@ class ProductionController {
             $batch['remaining_pieces']       = $remainingPcs;
             $batch['remaining_value']        = $remainingVal;
             $batch['total_passed_value']     = $batch['total_value'];
-            $batch['outward_history']        = $matchingOutwards;
-            $batch['outward_count']          = count($matchingOutwards);
+            $batch['outward_history']        = $passedPcs > 0 ? $matchingOutwards : [];
+            $batch['outward_count']          = count($batch['outward_history']);
 
-            if ($passedPcs > 0 && $remainingPcs === 0) {
+            if ($passedPcs === 0) {
+                $batch['stock_status'] = 'NO_PASSED_STOCK';
+            } elseif ($remainingPcs === 0) {
                 $batch['stock_status'] = 'FULLY_OUTWARDED';
             } elseif ($outwardPcs > 0 && $remainingPcs > 0) {
                 $batch['stock_status'] = 'PARTIALLY_OUTWARDED';
@@ -7966,6 +7976,8 @@ class ProductionController {
             'total_remaining_valuation' => array_sum(array_column($batches, 'remaining_value')),
             'total_outwarded_pieces'    => array_sum(array_column($batches, 'total_outward_pieces')),
             'total_passed_pieces'       => array_sum(array_column($batches, 'total_passed_pieces')),
+            'total_rework_pieces'       => array_sum(array_column($batches, 'total_rework_pieces')),
+            'total_rejected_pieces'     => array_sum(array_column($batches, 'total_rejected_pieces')),
             'total_passed_valuation'    => array_sum(array_column($batches, 'total_passed_value')),
             'unique_batches_count'      => count($batches),
             'in_stock_batches_count'    => count(array_filter($batches, fn($b) => ($b['remaining_pieces'] ?? 0) > 0)),
@@ -8047,21 +8059,30 @@ class ProductionController {
                         OR (LOWER(TRIM(li.size_name)) = LOWER(TRIM(qi.size_name)) AND LOWER(TRIM(li.color_name)) = LOWER(TRIM(qi.color_name)))
                     ))
                 )
-                WHERE qi.passed_qty > 0 AND qi.qc_batch_id = ?
+                WHERE qi.qc_batch_id = ?
+                  AND (qi.passed_qty > 0 OR qi.rework_qty > 0 OR qi.rejected_qty > 0)
                 ORDER BY qi.id ASC";
 
-        $items = Database::fetchAll($sql, [$id]);
+        $qcItems = Database::fetchAll($sql, [$id]);
 
-        if (empty($items)) {
-            Response::redirect(url('production/inventory'), 'error', 'Batch not found or has no passed items.');
+        if (empty($qcItems)) {
+            Response::redirect(url('production/inventory'), 'error', 'Batch not found or has no recorded QC outcome.');
             return;
         }
 
-        $first = $items[0];
+        $first = $qcItems[0];
+        $qcOutcomeItems = array_values(array_filter($qcItems, static function (array $item): bool {
+            return (int)($item['rework_qty'] ?? 0) > 0 || (int)($item['rejected_qty'] ?? 0) > 0;
+        }));
+        $totalReworkPieces = array_sum(array_map(static fn(array $item): int => (int)($item['rework_qty'] ?? 0), $qcItems));
+        $totalRejectedPieces = array_sum(array_map(static fn(array $item): int => (int)($item['rejected_qty'] ?? 0), $qcItems));
+        $items = array_values(array_filter($qcItems, static function (array $item): bool {
+            return (int)($item['passed_qty'] ?? 0) > 0;
+        }));
         $programId = (int)($first['program_id'] ?? 0);
 
         // Fetch outward dispatch history for this QC batch / program
-        $outwards = Database::fetchAll(
+        $outwards = empty($items) ? [] : Database::fetchAll(
             "SELECT po.*,
                     pb.batch_number,
                     pb.box_count as batch_box_count,
@@ -8234,6 +8255,9 @@ class ProductionController {
             'batchInfo'           => $first,
             'pieceItems'          => $pieceItems,
             'rawItems'            => $items,
+            'qcOutcomeItems'      => $qcOutcomeItems,
+            'totalReworkPieces'   => $totalReworkPieces,
+            'totalRejectedPieces' => $totalRejectedPieces,
             'totalPieces'         => $totalPieces,
             'totalValue'          => $totalValue,
             'totalOutwardPieces'  => $effectiveOutwardPieces,

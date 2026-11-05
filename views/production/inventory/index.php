@@ -4,8 +4,8 @@
 ?>
 <div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4">
     <div>
-        <h2 class="mb-1"><i class="bi bi-box2-heart me-2 text-success"></i>Production Inventory (Post-QC Passed)</h2>
-        <span class="text-muted">Finished goods automatically fetched into inventory immediately after passing QC inspection</span>
+        <h2 class="mb-1"><i class="bi bi-box2-heart me-2 text-success"></i>Production Inventory &amp; QC Outcomes</h2>
+        <span class="text-muted">QC-passed inventory, outward dispatches, rework, and rejected quantities shown separately</span>
     </div>
     <div class="d-flex gap-2">
         <a href="<?= url('production/qc') ?>" class="btn btn-outline-secondary">
@@ -73,6 +73,14 @@
                     <span class="text-uppercase text-muted fw-semibold small d-block">Total QC Passed</span>
                     <h3 class="fw-bold text-dark mb-0 mt-1"><?= number_format($stats['total_passed_pieces'] ?? 0) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
                     <small class="text-muted d-block mt-1"><?= number_format($stats['unique_batches_count'] ?? 0) ?> Total QC Batches</small>
+                    <div class="d-flex flex-wrap gap-1 mt-2">
+                        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                            Rework: <?= number_format($stats['total_rework_pieces'] ?? 0) ?>
+                        </span>
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                            Rejected: <?= number_format($stats['total_rejected_pieces'] ?? 0) ?>
+                        </span>
+                    </div>
                 </div>
                 <div class="bg-info text-dark rounded-3 p-3">
                     <i class="bi bi-patch-check-fill fs-4"></i>
@@ -143,11 +151,11 @@
 <div class="card border-0 shadow-sm">
     <div class="card-body text-center py-5">
         <i class="bi bi-box-seam fs-1 d-block mb-3 text-secondary"></i>
-        <h6 class="fw-semibold mb-1"><?= (!empty($search) || !empty($categoryFilter)) ? 'No Matching Inventory Batches Found' : 'No Passed Inventory Found' ?></h6>
+        <h6 class="fw-semibold mb-1"><?= (!empty($search) || !empty($categoryFilter)) ? 'No Matching Inventory Batches Found' : 'No QC Outcomes Found' ?></h6>
         <p class="small text-muted mb-3">
             <?= (!empty($search) || !empty($categoryFilter)) 
                 ? 'Try adjusting your search terms or clearing the category filter.' 
-                : 'Products will automatically appear here once they pass QC inspection.' ?>
+                : 'Batches with passed, rework, or rejected QC quantities will appear here.' ?>
         </p>
         <?php if (!empty($search) || !empty($categoryFilter)): ?>
             <a href="<?= url('production/inventory') ?>" class="btn btn-sm btn-outline-primary">
@@ -196,6 +204,7 @@
             ($batch['category_name'] ?? '') . ' ' . 
             ($batch['program_number'] ?? '') . ' ' . 
             ($batch['inspector_name'] ?? '') . ' ' . 
+            'rework rejected qc passed outward ' .
             'qc batch #' . $batch['qc_batch_id'] . ' ' . 
             $batch['qc_batch_id'] . ' ' . 
             $variantKeywords . ' ' .
@@ -208,7 +217,8 @@
          data-batch-id="<?= $batch['qc_batch_id'] ?>"
          data-category-id="<?= $batch['category_id'] ?? '' ?>"
          data-search-text="<?= e($searchDataText) ?>">
-        <div class="card border-0 shadow-sm h-100 inventory-batch-card" style="border-left: 4px solid var(--bs-<?= ($stockStatus === 'FULLY_OUTWARDED') ? 'secondary' : ($stockStatus === 'PARTIALLY_OUTWARDED' ? 'warning' : 'success') ?>) !important; transition: transform 0.18s, box-shadow 0.18s;">
+        <?php $statusColor = in_array($stockStatus, ['FULLY_OUTWARDED', 'NO_PASSED_STOCK'], true) ? 'secondary' : ($stockStatus === 'PARTIALLY_OUTWARDED' ? 'warning' : 'success'); ?>
+        <div class="card border-0 shadow-sm h-100 inventory-batch-card" style="border-left: 4px solid var(--bs-<?= $statusColor ?>) !important; transition: transform 0.18s, box-shadow 0.18s;">
             <div class="card-body p-4">
                 <!-- Batch Header -->
                 <div class="d-flex align-items-start justify-content-between mb-3">
@@ -217,7 +227,9 @@
                             <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 fs-6 fw-bold text-nowrap">
                                 <i class="bi bi-patch-check-fill me-1"></i>QC Batch #<?= $batch['qc_batch_id'] ?>
                             </span>
-                            <?php if ($stockStatus === 'FULLY_OUTWARDED'): ?>
+                            <?php if ($stockStatus === 'NO_PASSED_STOCK'): ?>
+                                <span class="badge bg-secondary-subtle text-secondary border small"><i class="bi bi-clipboard-x me-1"></i>No QC-Passed Stock</span>
+                            <?php elseif ($stockStatus === 'FULLY_OUTWARDED'): ?>
                                 <span class="badge bg-secondary-subtle text-secondary border small"><i class="bi bi-truck me-1"></i>Fully Outwarded</span>
                             <?php elseif ($stockStatus === 'PARTIALLY_OUTWARDED'): ?>
                                 <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle small"><i class="bi bi-pie-chart me-1"></i>Partially Outwarded</span>
@@ -229,7 +241,7 @@
                             <i class="bi bi-calendar3 me-1"></i><?= $batchDate->format('d M Y, g:i A') ?>
                         </div>
                     </div>
-                    <div class="bg-<?= ($stockStatus === 'FULLY_OUTWARDED') ? 'secondary' : ($stockStatus === 'PARTIALLY_OUTWARDED' ? 'warning' : 'success') ?> bg-opacity-10 rounded-3 p-2 text-<?= ($stockStatus === 'FULLY_OUTWARDED') ? 'secondary' : ($stockStatus === 'PARTIALLY_OUTWARDED' ? 'warning' : 'success') ?>">
+                    <div class="bg-<?= $statusColor ?> bg-opacity-10 rounded-3 p-2 text-<?= $statusColor ?>">
                         <i class="bi bi-boxes fs-4"></i>
                     </div>
                 </div>
@@ -274,6 +286,7 @@
                             <div class="fw-bold text-success fs-5"><?= number_format($batch['remaining_pieces']) ?></div>
                             <div class="text-muted small" style="font-size: 11px;">In Stock (pcs)</div>
                         </div>
+
                     </div>
                     <div class="col-4">
                         <div class="bg-danger bg-opacity-10 rounded-2 p-2 text-center h-100">
@@ -287,6 +300,18 @@
                             <div class="text-muted small" style="font-size: 11px;">Total Passed</div>
                         </div>
                     </div>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2 mb-3" aria-label="QC outcome quantities">
+                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                        <i class="bi bi-check-circle me-1"></i>QC Passed: <?= number_format($batch['total_passed_pieces']) ?>
+                    </span>
+                    <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 py-1">
+                        <i class="bi bi-arrow-repeat me-1"></i>QC Rework: <?= number_format($batch['total_rework_pieces']) ?>
+                    </span>
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
+                        <i class="bi bi-x-circle me-1"></i>QC Rejected: <?= number_format($batch['total_rejected_pieces']) ?>
+                    </span>
                 </div>
 
                 <div class="d-flex justify-content-between align-items-center mb-3 p-2 bg-light rounded border">
