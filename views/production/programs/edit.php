@@ -780,7 +780,7 @@ function handleRollCategoryChange(counterId, catId) {
         subSubcatSelect.disabled = true;
     }
 
-    fetch(`${baseUrl}/api/subcategories/${catId}`)
+    fetch(`${baseUrl}/api/subcategories/${catId}?catalog_only=1`)
         .then(res => res.json())
         .then(res => {
             let options = '<option value="">-- Select Sub Category --</option>';
@@ -822,7 +822,7 @@ function handleRollSubcategoryChange(counterId, subcatId) {
         subSubcatSelect.innerHTML = '<option value="">-- Loading Sub-Subcategories... --</option>';
     }
 
-    fetch(`${baseUrl}/api/sub-subcategories/${subcatId}`)
+    fetch(`${baseUrl}/api/sub-subcategories/${subcatId}?catalog_only=1`)
         .then(res => res.json())
         .then(res => {
             let options = '<option value="">-- Select Sub Sub Category --</option>';
@@ -858,7 +858,7 @@ function loadRollSubcategories(counterId, catId, selectedSubcatId = '', selected
     subcatSelect.disabled = false;
     subcatSelect.innerHTML = '<option value="">-- Loading Subcategories... --</option>';
 
-    fetch(`${baseUrl}/api/subcategories/${catId}`)
+    fetch(`${baseUrl}/api/subcategories/${catId}?catalog_only=1`)
         .then(res => res.json())
         .then(res => {
             let options = '<option value="">-- Select Sub Category --</option>';
@@ -893,7 +893,7 @@ function loadRollSubSubcategories(counterId, subcatId, selectedSubSubcatId = '')
     subSubcatSelect.disabled = false;
     subSubcatSelect.innerHTML = '<option value="">-- Loading Sub-Subcategories... --</option>';
 
-    fetch(`${baseUrl}/api/sub-subcategories/${subcatId}`)
+    fetch(`${baseUrl}/api/sub-subcategories/${subcatId}?catalog_only=1`)
         .then(res => res.json())
         .then(res => {
             let options = '<option value="">-- Select Sub Sub Category --</option>';

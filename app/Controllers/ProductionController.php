@@ -3196,7 +3196,17 @@ class ProductionController {
 
     public function ajaxCategories(): void {
         try {
-            $categories = Database::fetchAll("SELECT id, name, slug FROM categories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
+            $sql = "SELECT c.id, c.name, c.slug FROM categories c WHERE c.is_active = 1";
+            if (!empty($_GET['catalog_only'])) {
+                $sql .= " AND EXISTS (
+                    SELECT 1 FROM products p
+                    WHERE p.category_id = c.id
+                      AND p.is_active = 1
+                      AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+                )";
+            }
+            $sql .= " ORDER BY c.sort_order ASC, c.name ASC";
+            $categories = Database::fetchAll($sql);
             Response::json($categories);
         } catch (\Throwable $e) {
             Response::json(['success' => false, 'message' => $e->getMessage()], 500);
@@ -3287,8 +3297,19 @@ class ProductionController {
 
     public function ajaxSubcategories(int $categoryId): void {
         try {
+            $sql = "SELECT sc.id, sc.name, sc.slug FROM subcategories sc
+                    WHERE sc.category_id = ? AND sc.is_active = 1";
+            if (!empty($_GET['catalog_only'])) {
+                $sql .= " AND EXISTS (
+                    SELECT 1 FROM products p
+                    WHERE p.subcategory_id = sc.id
+                      AND p.is_active = 1
+                      AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+                )";
+            }
+            $sql .= " ORDER BY sc.sort_order ASC, sc.name ASC";
             $subcats = Database::fetchAll(
-                "SELECT id, name, slug FROM subcategories WHERE category_id = ? AND is_active = 1 ORDER BY sort_order ASC, name ASC",
+                $sql,
                 [$categoryId]
             );
             Response::json($subcats);
@@ -3385,8 +3406,19 @@ class ProductionController {
 
     public function ajaxSubSubcategories(int $subcategoryId): void {
         try {
+            $sql = "SELECT ssc.id, ssc.name, ssc.slug FROM sub_subcategories ssc
+                    WHERE ssc.subcategory_id = ? AND ssc.is_active = 1";
+            if (!empty($_GET['catalog_only'])) {
+                $sql .= " AND EXISTS (
+                    SELECT 1 FROM products p
+                    WHERE p.sub_subcategory_id = ssc.id
+                      AND p.is_active = 1
+                      AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+                )";
+            }
+            $sql .= " ORDER BY ssc.name ASC";
             $subSubcats = Database::fetchAll(
-                "SELECT id, name, slug FROM sub_subcategories WHERE subcategory_id = ? AND is_active = 1 ORDER BY name ASC",
+                $sql,
                 [$subcategoryId]
             );
             Response::json($subSubcats);
@@ -3614,7 +3646,17 @@ class ProductionController {
     public function createProgram(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
-        $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
+        $categories = Database::fetchAll(
+            "SELECT c.* FROM categories c
+             WHERE c.is_active = 1
+               AND EXISTS (
+                   SELECT 1 FROM products p
+                   WHERE p.category_id = c.id
+                     AND p.is_active = 1
+                     AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+               )
+             ORDER BY c.sort_order ASC, c.name ASC"
+        );
         $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
 
         // Fetch raw material rolls from seller_rolls joined with sellers with live usage, damages, and remaining stock
@@ -3899,7 +3941,17 @@ class ProductionController {
 
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
-        $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
+        $categories = Database::fetchAll(
+            "SELECT c.* FROM categories c
+             WHERE c.is_active = 1
+               AND EXISTS (
+                   SELECT 1 FROM products p
+                   WHERE p.category_id = c.id
+                     AND p.is_active = 1
+                     AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+               )
+             ORDER BY c.sort_order ASC, c.name ASC"
+        );
         $subcategories = $program['category_id'] ? Database::fetchAll("SELECT * FROM subcategories WHERE category_id = ? AND is_active = 1 ORDER BY sort_order ASC, name ASC", [$program['category_id']]) : [];
         $subSubcategories = $program['subcategory_id'] ? Database::fetchAll("SELECT * FROM sub_subcategories WHERE subcategory_id = ? AND is_active = 1 ORDER BY name ASC", [$program['subcategory_id']]) : [];
         $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
