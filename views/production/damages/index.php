@@ -1,10 +1,10 @@
 <div class="page-header mb-4">
-    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 w-100">
         <div>
             <h2 class="mb-0"><i class="bi bi-exclamation-octagon me-2 text-danger"></i>Fabric &amp; Roll Damage Management</h2>
             <span class="text-muted">Track defective fabric rolls, initiate supplier returns, and manage refunds or replacement rolls</span>
         </div>
-        <div class="d-flex gap-2 align-items-center">
+        <div class="d-flex gap-2 align-items-center ms-auto">
             <?php if (hasPermission('damages', 'create')): ?>
             <button type="button" class="btn btn-danger shadow-sm" data-bs-toggle="modal" data-bs-target="#reportDamageModal">
                 <i class="bi bi-plus-circle me-1"></i> Report Roll Damage

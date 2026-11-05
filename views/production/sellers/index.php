@@ -297,7 +297,7 @@
                                     <div class="btn-group btn-group-sm">
                                         <!-- Full View Link -->
                                         <a href="<?= url('production/sellers/view/' . $s['id']) ?>" class="btn btn-outline-secondary" title="Open Full View Sheet">
-                                            <i class="bi bi-box-arrow-up-right"></i>
+                                            <i class="bi bi-eye"></i>
                                         </a>
                                         <!-- Print Labels Link -->
                                         <a href="<?= url('production/sellers/' . $s['id'] . '/labels') ?>" class="btn btn-outline-dark" target="_blank" title="Print Fabric QR Labels">
