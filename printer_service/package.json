@@ -1,0 +1,17 @@
+{
+  "name": "grm-tsc-print-helper",
+  "version": "1.0.0",
+  "description": "Windows Local Print Helper Service for TSC TE244 TSPL Thermal Labels",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "tsc",
+    "tspl",
+    "thermal-printer",
+    "print-service"
+  ],
+  "author": "GRM Inventory",
+  "license": "MIT"
+}

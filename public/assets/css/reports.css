@@ -1,0 +1,108 @@
+.reports-content .page-content {
+    background: #f8fafc;
+}
+
+.reports-content .page-content > .d-flex h4 {
+    font-size: 1.35rem;
+    letter-spacing: -0.02em;
+}
+
+.reports-content .page-content .card {
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 0.75rem !important;
+    box-shadow: none !important;
+    background-color: #fff !important;
+    background-image: none !important;
+}
+
+.reports-content .page-content .card:not(.text-white) {
+    border-left: 1px solid #e2e8f0 !important;
+}
+
+.reports-content .page-content .card.text-white {
+    color: #0f172a !important;
+}
+
+.reports-content .page-content .card.text-white .text-white {
+    color: #0f172a !important;
+}
+
+.reports-content .page-content .card.text-white .text-white-50,
+.reports-content .page-content .card.text-white .text-light {
+    color: #64748b !important;
+}
+
+.reports-content .page-content .card.text-white .bg-dark {
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+}
+
+.reports-content .page-content .card-header {
+    background-color: #fff !important;
+    border-color: #e2e8f0 !important;
+    padding: 0.9rem 1rem !important;
+}
+
+.reports-content .page-content .table {
+    font-size: 0.875rem;
+}
+
+.reports-content .page-content .table > :not(caption) > * > * {
+    padding: 0.65rem 0.75rem;
+    border-color: #e9eef5;
+}
+
+.reports-content .page-content .table thead.table-light th {
+    background-color: #f8fafc !important;
+    color: #475569 !important;
+    font-size: 0.73rem;
+    font-weight: 600;
+    letter-spacing: 0.025em;
+    white-space: nowrap;
+}
+
+.reports-content .page-content .form-select,
+.reports-content .page-content .form-control {
+    border-color: #d7dee8;
+    border-radius: 0.5rem;
+    box-shadow: none;
+}
+
+.reports-content .page-content .form-select:focus,
+.reports-content .page-content .form-control:focus {
+    border-color: #93b4f5;
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.12);
+}
+
+.reports-content .page-content .btn {
+    box-shadow: none !important;
+    border-radius: 0.5rem;
+}
+
+.reports-content .page-content .nav-pills .nav-link {
+    color: #475569;
+    font-weight: 500 !important;
+}
+
+.reports-content .page-content .nav-pills .nav-link.active {
+    background-color: #eff6ff;
+    color: #1d4ed8;
+}
+
+.reports-content .page-content #reportFilterForm .form-label {
+    color: #475569 !important;
+}
+
+.reports-content .page-content #reportFilterForm + .d-flex {
+    border-color: #e9eef5 !important;
+}
+
+@media (max-width: 767.98px) {
+    .reports-content .page-content > .d-flex h4 {
+        font-size: 1.2rem;
+    }
+
+    .reports-content .page-content .table > :not(caption) > * > * {
+        padding: 0.55rem 0.6rem;
+    }
+}
