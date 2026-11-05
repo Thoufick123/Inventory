@@ -10350,8 +10350,11 @@ class ProductionController {
                 'Supplier'          => $damage['seller_name'] ?? '—',
                 'Company'           => $damage['seller_company'] ?? '—',
                 'Roll Number'       => $damage['roll_number'] ?? '—',
+                'Scanned QR Label'  => $damage['qr_code'] ?? '—',
                 'Color'             => $damage['roll_color'] ?? '—',
                 'Design'            => $damage['roll_design'] ?? '—',
+                'Damaged Quantity'  => number_format((int)($damage['damaged_quantity'] ?? 0)) . ' piece(s)',
+                'Damaged Weight'    => number_format((float)($damage['damaged_weight'] ?? 0), 2) . ' kg',
                 'Reason'            => $damage['damage_reason'] ?? '—',
                 'Notes'             => $damage['defect_notes'] ?? '—',
                 'Status'            => $damage['status'] ?? '—',
@@ -10364,7 +10367,14 @@ class ProductionController {
             ],
             [],
             [],
-            'Damage Details'
+            'Damage Details',
+            !empty($damage['qr_code']) ? [
+                'code' => $damage['qr_code'],
+                'roll_number' => $damage['roll_number'] ?? '',
+                'color' => $damage['roll_color'] ?? '',
+                'design' => $damage['roll_design'] ?? '',
+                'weight' => (float)($damage['damaged_weight'] ?? 0),
+            ] : []
         );
     }
 
@@ -10538,7 +10548,8 @@ class ProductionController {
         array $fields,
         array $items,
         array $itemColumns,
-        string $itemsTitle
+        string $itemsTitle,
+        array $qrLabel = []
     ): void {
         Response::view('production.record_view', [
             'pageTitle'    => $recordTitle,
@@ -10555,6 +10566,7 @@ class ProductionController {
             'items'        => $items,
             'itemColumns'  => $itemColumns,
             'itemsTitle'   => $itemsTitle,
+            'qrLabel'      => $qrLabel,
         ]);
     }
 }
