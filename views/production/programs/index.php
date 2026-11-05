@@ -14,20 +14,7 @@
 <div class="card shadow-sm border-0 mb-4">
     <div class="card-body p-3">
         <form method="GET" action="<?= url('production/programs') ?>" class="row g-3">
-            <div class="col-md-3">
-                <label class="form-label small text-muted fw-semibold">Status</label>
-                <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
-                    <option value="">All Statuses</option>
-                    <option value="DRAFT" <?= ($filters['status'] ?? '') === 'DRAFT' ? 'selected' : '' ?>>Draft</option>
-                    <option value="APPROVED" <?= ($filters['status'] ?? '') === 'APPROVED' ? 'selected' : '' ?>>Approved</option>
-                    <option value="SCHEDULED" <?= ($filters['status'] ?? '') === 'SCHEDULED' ? 'selected' : '' ?>>Scheduled</option>
-                    <option value="IN_PROGRESS" <?= ($filters['status'] ?? '') === 'IN_PROGRESS' ? 'selected' : '' ?>>In Progress</option>
-                    <option value="COMPLETED" <?= ($filters['status'] ?? '') === 'COMPLETED' ? 'selected' : '' ?>>Completed</option>
-                    <option value="HOLD" <?= ($filters['status'] ?? '') === 'HOLD' ? 'selected' : '' ?>>On Hold</option>
-                    <option value="CANCELLED" <?= ($filters['status'] ?? '') === 'CANCELLED' ? 'selected' : '' ?>>Cancelled</option>
-                </select>
-            </div>
-            <div class="col-md-3">
+            <div class="col-md-4">
                 <label class="form-label small text-muted fw-semibold">Production Unit</label>
                 <?php if (!empty($scopedUnitId)): 
                     $scopedUnitName = $units[0]['name'] ?? 'Assigned Unit';
@@ -58,13 +45,13 @@
                     <option value="URGENT" <?= ($filters['priority'] ?? '') === 'URGENT' ? 'selected' : '' ?>>Urgent</option>
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-4">
                 <label class="form-label small text-muted fw-semibold">Search</label>
                 <input type="text" name="search" id="programsSearchInput" class="form-control form-control-sm" placeholder="Program name, roll #, category..." value="<?= e($filters['search'] ?? '') ?>" autocomplete="off">
             </div>
-            <div class="col-md-1 d-flex align-items-end gap-1">
+            <div class="col-md-2 d-flex align-items-end gap-1">
                 <button type="submit" class="btn btn-secondary btn-sm flex-fill" title="Filter"><i class="bi bi-filter"></i></button>
-                <?php if (!empty($filters['status']) || !empty($filters['production_unit_id']) || !empty($filters['priority']) || !empty($filters['search'])): ?>
+                <?php if (!empty($filters['production_unit_id']) || !empty($filters['priority']) || !empty($filters['search'])): ?>
                     <a href="<?= url('production/programs') ?>" class="btn btn-outline-danger btn-sm" title="Clear Filters"><i class="bi bi-x-lg"></i></a>
                 <?php endif; ?>
             </div>
@@ -85,14 +72,13 @@
                         <th>Roll Specs</th>
                         <th>Schedule Dates</th>
                         <th>Priority</th>
-                        <th>Status</th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="programsTableBody">
                     <?php if (empty($programs)): ?>
                         <tr>
-                            <td colspan="8" class="text-center py-5 text-muted">
+                            <td colspan="7" class="text-center py-5 text-muted">
                                 <i class="bi bi-inbox fs-2 d-block mb-2"></i> No production programs found.
                             </td>
                         </tr>
@@ -105,16 +91,6 @@
                                     'MEDIUM' => 'bg-info text-dark',
                                     default  => 'bg-secondary'
                                 };
-                                $statusClass = match($prog['status']) {
-                                    'DRAFT'       => 'bg-secondary',
-                                    'APPROVED'    => 'bg-info text-dark',
-                                    'SCHEDULED'   => 'bg-primary',
-                                    'IN_PROGRESS' => 'bg-warning text-dark',
-                                    'COMPLETED'   => 'bg-success',
-                                    'HOLD'        => 'bg-danger',
-                                    default       => 'bg-dark'
-                                };
-
                                 // Build Category Path
                                 $catParts = [];
                                 if (!empty($prog['category_name'])) $catParts[] = $prog['category_name'];
@@ -195,7 +171,6 @@
                                     </div>
                                 </td>
                                 <td><span class="badge <?= $prioClass ?>"><?= e($prog['priority']) ?></span></td>
-                                <td><span class="badge <?= $statusClass ?>"><?= e($prog['status']) ?></span></td>
                                 <td class="text-end">
                                     <div class="btn-group btn-group-sm">
                                         <a href="<?= url('production/programs/view/' . $prog['id']) ?>" class="btn btn-outline-primary" title="View Details">
@@ -298,7 +273,7 @@ function initProgramsPagination() {
                 if (!noResultRow) {
                     noResultRow = document.createElement('tr');
                     noResultRow.id = 'noLiveProgramsResultsRow';
-                    noResultRow.innerHTML = `<td colspan="8" class="text-center py-5 text-muted">
+                    noResultRow.innerHTML = `<td colspan="7" class="text-center py-5 text-muted">
                         <i class="bi bi-search fs-2 d-block mb-2 text-secondary"></i>
                         <h6 class="fw-bold text-secondary">No production programs matching "${escapeHtml(searchInput.value)}"</h6>
                         <small class="text-muted">Try searching with a different keyword or clear the search filter.</small>
