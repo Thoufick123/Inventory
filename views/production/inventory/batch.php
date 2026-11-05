@@ -107,14 +107,6 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
         </span>
     </div>
     <div class="d-flex gap-2 flex-wrap">
-        <?php if (!empty($pieceItems)): ?>
-        <button type="button" class="btn btn-outline-primary" onclick="printAllBatchLabels()">
-            <i class="bi bi-printer me-1"></i> Print Batch Labels
-        </button>
-        <?php endif; ?>
-        <a href="<?= url('production/qc/inspect/' . $qcBatchId) ?>" class="btn btn-outline-secondary">
-            <i class="bi bi-clipboard-check me-1"></i> View QC Inspection
-        </a>
         <?php if ($remainingPieces > 0 && hasPermission('batches', 'create')): ?>
         <a href="<?= url('production/batches/create?qc_batch_id=' . $qcBatchId) ?>" class="btn btn-success">
             <i class="bi bi-box-seam me-1"></i> Pack into Box Batch (<?= number_format($remainingPieces) ?> pcs)
@@ -537,11 +529,6 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                                                     </button>
                                                 </li>
                                                 <?php endif; ?>
-                                                <li>
-                                                    <a class="dropdown-item" href="<?= url('production/qc/inspect/' . $it['qc_batch_id']) ?>">
-                                                        <i class="bi bi-eye me-2"></i>View QC Inspection
-                                                    </a>
-                                                </li>
                                             </ul>
                                         </div>
                                     </div>
@@ -667,6 +654,31 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
 
 <!-- QRCode JS CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<div class="modal fade" id="deleteInventoryPieceModal" tabindex="-1" aria-labelledby="deleteInventoryPieceModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header border-0 pb-0">
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center px-4 pt-0 pb-4">
+                <div class="rounded-circle bg-danger bg-opacity-10 text-danger d-inline-flex align-items-center justify-content-center mb-3" style="width: 64px; height: 64px;">
+                    <i class="bi bi-trash3 fs-3"></i>
+                </div>
+                <h5 id="deleteInventoryPieceModalTitle" class="fw-bold mb-2">Delete this QR from inventory?</h5>
+                <p class="text-muted mb-2">This will permanently remove the item from Production Unit Inventory and the Production QR Labels module.</p>
+                <span id="deleteInventoryPieceCode" class="badge bg-light text-dark border font-monospace fs-6"></span>
+                <p class="small text-muted mt-3 mb-0">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer border-0 justify-content-center pt-0 pb-4">
+                <button type="button" class="btn btn-light border px-4" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger px-4" id="confirmDeleteInventoryPieceButton">
+                    <i class="bi bi-trash3 me-1"></i>Delete QR
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- QR Code Batch Print Modal & Printable Area -->
 <div class="modal fade" id="qrPrintModal" tabindex="-1" aria-hidden="true">
@@ -1012,8 +1024,7 @@ function renderStickersToModal(itemsToPrint) {
         `;
 
         grid.appendChild(colDiv);
-        const qrPayload = `${tagCode}|${sku}|MRP:${fmtBase}|Disc:${fmtDisc}`;
-        generateQRCodeContainer(canvasId, qrPayload);
+        generateQRCodeContainer(canvasId, tagCode);
     });
 
     updatePrintModalSummary();
@@ -1168,11 +1179,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 async function deleteInventoryPiece(code, qcBatchId) {
-    if (!confirm(`Delete QR ${code} from Production Unit Inventory? This cannot be undone.`)) {
-        return;
-    }
-
     try {
+        const confirmed = await confirmInventoryPieceDeletion(code);
+        if (!confirmed) {
+            return;
+        }
+
         const response = await fetch(INVENTORY_PIECE_DELETE_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
@@ -1190,5 +1202,37 @@ async function deleteInventoryPiece(code, qcBatchId) {
     } catch (error) {
         alert(error.message || 'Could not delete this inventory QR.');
     }
+}
+
+function confirmInventoryPieceDeletion(code) {
+    const modalElement = document.getElementById('deleteInventoryPieceModal');
+    const codeElement = document.getElementById('deleteInventoryPieceCode');
+    const confirmButton = document.getElementById('confirmDeleteInventoryPieceButton');
+    if (!modalElement || !codeElement || !confirmButton || typeof bootstrap === 'undefined') {
+        return Promise.reject(new Error('The delete confirmation dialog is unavailable. Refresh the page and try again.'));
+    }
+
+    codeElement.textContent = code;
+    const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = confirmed => {
+            if (settled) return;
+            settled = true;
+            confirmButton.removeEventListener('click', onConfirm);
+            modalElement.removeEventListener('hidden.bs.modal', onCancel);
+            resolve(confirmed);
+        };
+        const onConfirm = () => {
+            finish(true);
+            modal.hide();
+        };
+        const onCancel = () => finish(false);
+
+        confirmButton.addEventListener('click', onConfirm);
+        modalElement.addEventListener('hidden.bs.modal', onCancel);
+        modal.show();
+    });
 }
 </script>

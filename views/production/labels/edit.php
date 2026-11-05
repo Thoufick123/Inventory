@@ -958,7 +958,7 @@ function generateQRCodeContainer(containerId, textPayload) {
 }
 
 function buildProductionLabelQrPayload(damageCode, sku, basePrice, discountPrice) {
-    return `${damageCode}|${sku}|MRP:${basePrice}|Disc:${discountPrice}`;
+    return String(damageCode || '').trim();
 }
 
 let deletedProductionLabelCodes = new Set();
