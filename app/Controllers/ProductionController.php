@@ -1607,37 +1607,106 @@ class ProductionController {
             return;
         }
 
+        $isAjax = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax']);
         $currentQty = max(1, (int)($roll['quantity'] ?? 1));
-        if ($currentQty <= 1) {
-            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax'])) {
-                Response::json(['success' => false, 'message' => 'Cannot delete the only label for this roll. Minimum 1 label is required.'], 400);
+        $startSeq = (int)($roll['start_seq'] ?? 1);
+        $endSeq = (int)($roll['end_seq'] ?? 0);
+        if ($endSeq < $startSeq) {
+            $endSeq = $startSeq + $currentQty - 1;
+        }
+
+        $requestedSequences = $_POST['sequences'] ?? [];
+        if (!is_array($requestedSequences) || empty($requestedSequences)) {
+            $deleteCount = max(1, (int)($_POST['count'] ?? 1));
+            $existingDeleted = array_map(
+                'intval',
+                array_column(
+                    Database::fetchAll("SELECT `sequence` FROM seller_roll_deleted_labels WHERE seller_roll_id = ?", [$rollId]),
+                    'sequence'
+                )
+            );
+            $deletedLookup = array_fill_keys($existingDeleted, true);
+            $requestedSequences = [];
+            for ($sequence = $endSeq; $sequence >= $startSeq && count($requestedSequences) < $deleteCount; $sequence--) {
+                if (!isset($deletedLookup[$sequence])) {
+                    $requestedSequences[] = $sequence;
+                }
+            }
+        }
+
+        $requestedSequences = array_values(array_unique(array_filter(
+            array_map('intval', $requestedSequences),
+            static fn(int $sequence): bool => $sequence > 0
+        )));
+        if (empty($requestedSequences)) {
+            $message = 'No valid label sequence was selected for deletion.';
+            if ($isAjax) {
+                Response::json(['success' => false, 'message' => $message], 400);
                 return;
             }
-            Session::flash('error', 'Cannot delete the only label for this roll. Minimum 1 label is required.');
+            Session::flash('error', $message);
             Response::back();
             return;
         }
 
-        $deleteCount = max(1, min($currentQty - 1, (int)($_POST['count'] ?? 1)));
-        $newQty = $currentQty - $deleteCount;
+        try {
+            Database::beginTransaction();
+            $lockedRoll = Database::fetchOne("SELECT quantity, start_seq, end_seq FROM seller_rolls WHERE id = ? FOR UPDATE", [$rollId]);
+            if (!$lockedRoll) {
+                Database::rollback();
+                Response::json(['success' => false, 'message' => 'Fabric roll not found.'], 404);
+                return;
+            }
+            $currentQty = max(1, (int)($lockedRoll['quantity'] ?? 1));
+            $startSeq = (int)($lockedRoll['start_seq'] ?? 1);
+            $endSeq = (int)($lockedRoll['end_seq'] ?? 0);
+            if ($endSeq < $startSeq) {
+                $endSeq = $startSeq + $currentQty - 1;
+            }
 
-        $startSeq = (int)($roll['start_seq'] ?? 1);
-        $prefix = !empty($roll['start_code']) ? substr($roll['start_code'], 0, 6) : ('FB' . date('my'));
-        $startCode = !empty($roll['start_code']) ? $roll['start_code'] : sprintf('%s%02d', $prefix, $startSeq);
+            $existingDeleted = array_map(
+                'intval',
+                array_column(
+                    Database::fetchAll("SELECT `sequence` FROM seller_roll_deleted_labels WHERE seller_roll_id = ?", [$rollId]),
+                    'sequence'
+                )
+            );
+            $deletedLookup = array_fill_keys($existingDeleted, true);
+            foreach ($requestedSequences as $sequence) {
+                if ($sequence < $startSeq || $sequence > $endSeq || isset($deletedLookup[$sequence])) {
+                    Database::rollback();
+                    Response::json(['success' => false, 'message' => 'A selected label is no longer available. Refresh the page and try again.'], 409);
+                    return;
+                }
+            }
 
-        $newEndSeq = $startSeq + $newQty - 1;
-        $newEndCode = sprintf('%s%02d', $prefix, $newEndSeq);
-        $newQrCode = ($newQty > 1) ? "{$startCode}-{$newEndCode}" : $startCode;
+            if ($currentQty - count($requestedSequences) < 1) {
+                Database::rollback();
+                $message = 'Cannot delete the only label for this roll. Minimum 1 label is required.';
+                if ($isAjax) {
+                    Response::json(['success' => false, 'message' => $message], 400);
+                    return;
+                }
+                Session::flash('error', $message);
+                Response::back();
+                return;
+            }
 
-        Database::execute(
-            "UPDATE seller_rolls SET 
-                quantity = ?, 
-                end_seq = ?, 
-                end_code = ?, 
-                qr_code = ? 
-             WHERE id = ?",
-            [$newQty, $newEndSeq, $newEndCode, $newQrCode, $rollId]
-        );
+            foreach ($requestedSequences as $sequence) {
+                Database::execute(
+                    "INSERT INTO seller_roll_deleted_labels (seller_roll_id, `sequence`) VALUES (?, ?)",
+                    [$rollId, $sequence]
+                );
+            }
+
+            $deleteCount = count($requestedSequences);
+            $newQty = $currentQty - $deleteCount;
+            Database::execute("UPDATE seller_rolls SET quantity = ? WHERE id = ?", [$newQty, $rollId]);
+            Database::commit();
+        } catch (Throwable $e) {
+            Database::rollback();
+            throw $e;
+        }
 
         // Recalculate seller summary totals
         $allRolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ?", [$seller['id']]);
@@ -1658,23 +1727,23 @@ class ProductionController {
             'action'        => 'delete_extra_labels',
             'roll_number'   => $roll['roll_number'],
             'removed_count' => $deleteCount,
-            'new_quantity'  => $newQty,
-            'new_end_code'  => $newEndCode
+            'deleted_sequences' => $requestedSequences,
+            'new_quantity'      => $newQty
         ]);
 
-        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax'])) {
+        if ($isAjax) {
             Response::json([
                 'success'      => true,
-                'message'      => "Removed {$deleteCount} label(s). Roll now has {$newQty} label(s) ending at {$newEndCode}.",
+                'message'      => "Removed {$deleteCount} label(s). Roll now has {$newQty} label(s).",
                 'removed_count'=> $deleteCount,
                 'new_quantity' => $newQty,
-                'new_end_code' => $newEndCode,
+                'deleted_sequences' => $requestedSequences,
                 'roll'         => [
                     'id'        => $rollId,
                     'quantity'  => $newQty,
-                    'end_seq'   => $newEndSeq,
-                    'end_code'  => $newEndCode,
-                    'qr_code'   => $newQrCode,
+                    'end_seq'   => $endSeq,
+                    'end_code'  => $roll['end_code'],
+                    'qr_code'   => $roll['qr_code'],
                 ]
             ]);
             return;
@@ -1719,6 +1788,10 @@ class ProductionController {
             }
 
             $startSeq = (int)($r['start_seq'] ?? 1);
+            $endSeq = (int)($r['end_seq'] ?? 0);
+            if ($endSeq < $startSeq) {
+                $endSeq = $startSeq + $qty - 1;
+            }
             $prefix = substr($r['start_code'], 0, 6);
 
             $rollNum = $r['roll_number'] ?: 'ROLL';
@@ -1727,9 +1800,24 @@ class ProductionController {
             $weight = (float)($r['weight'] ?? 0);
             $price = (float)($r['price'] ?? 0);
             $photo = !empty($r['photo_url']) ? $r['photo_url'] : ($seller['roll_photo'] ?? null);
+            $deletedSequences = array_fill_keys(
+                array_map(
+                    'intval',
+                    array_column(
+                        Database::fetchAll("SELECT `sequence` FROM seller_roll_deleted_labels WHERE seller_roll_id = ?", [(int)$r['id']]),
+                        'sequence'
+                    )
+                ),
+                true
+            );
+            $activeSequences = [];
+            for ($seq = $startSeq; $seq <= $endSeq; $seq++) {
+                if (!isset($deletedSequences[$seq])) {
+                    $activeSequences[] = $seq;
+                }
+            }
 
-            for ($i = 0; $i < $qty; $i++) {
-                $seq = $startSeq + $i;
+            foreach ($activeSequences as $i => $seq) {
                 $code = sprintf('%s%02d', $prefix, $seq);
                 $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$weight}KG";
 
@@ -1737,7 +1825,7 @@ class ProductionController {
                     'code'          => $code,
                     'seq'           => $seq,
                     'piece_index'   => $i + 1,
-                    'total_qty'     => $qty,
+                    'total_qty'     => count($activeSequences),
                     'roll_id'       => $r['id'] ?? 0,
                     'roll_number'   => $rollNum,
                     'color'         => $color,

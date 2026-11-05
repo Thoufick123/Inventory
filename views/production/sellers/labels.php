@@ -338,7 +338,7 @@
     <!-- Stickers Grid -->
     <div class="stickers-grid" id="stickersGrid">
         <?php foreach ($stickers as $idx => $stk): ?>
-            <div class="fabric-sticker-card" id="card_<?= $idx ?>" data-idx="<?= $idx ?>" data-code="<?= e($stk['code']) ?>" data-piece="<?= $stk['piece_index'] ?>" data-roll="<?= e($stk['roll_number']) ?>" data-roll-id="<?= (int)($stk['roll_id'] ?? 0) ?>">
+            <div class="fabric-sticker-card" id="card_<?= $idx ?>" data-idx="<?= $idx ?>" data-code="<?= e($stk['code']) ?>" data-seq="<?= (int)$stk['seq'] ?>" data-piece="<?= $stk['piece_index'] ?>" data-roll="<?= e($stk['roll_number']) ?>" data-roll-id="<?= (int)($stk['roll_id'] ?? 0) ?>">
                 <!-- Interactive Toolbar (hidden on physical print) -->
                 <div class="sticker-card-toolbar no-print">
                     <label class="form-check-label d-flex align-items-center gap-1 cursor-pointer mb-0">
@@ -602,6 +602,7 @@ function deleteSingleSticker(idx) {
     const piece = card.getAttribute('data-piece') || (idx + 1);
     const code = card.getAttribute('data-code') || '';
     const rollId = card.getAttribute('data-roll-id') || (stickersData[idx] ? stickersData[idx].roll_id : 0);
+    const sequence = card.getAttribute('data-seq') || (stickersData[idx] ? stickersData[idx].seq : 0);
 
     if (!confirm(`Are you sure you want to delete label Piece #${piece} (${code})?`)) {
         return;
@@ -609,7 +610,7 @@ function deleteSingleSticker(idx) {
 
     const formData = new FormData();
     formData.append('_csrf_token', csrfToken);
-    formData.append('count', 1);
+    formData.append('sequences[]', sequence);
     formData.append('ajax', '1');
 
     fetch(deleteExtraUrlBase + rollId, {
@@ -656,38 +657,57 @@ function deleteSelectedStickers() {
         return;
     }
 
-    const firstCard = checked[0].closest('.fabric-sticker-card');
-    const rollId = firstCard ? (firstCard.getAttribute('data-roll-id') || (stickersData[0] ? stickersData[0].roll_id : 0)) : 0;
+    const groups = new Map();
+    for (const checkbox of checked) {
+        const card = checkbox.closest('.fabric-sticker-card');
+        if (!card) continue;
 
-    const formData = new FormData();
-    formData.append('_csrf_token', csrfToken);
-    formData.append('count', count);
-    formData.append('ajax', '1');
-
-    fetch(deleteExtraUrlBase + rollId, {
-        method: 'POST',
-        headers: {
-            'X-CSRF-TOKEN': csrfToken,
-            'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: formData
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (!data.success) {
-            alert('Error: ' + (data.message || 'Failed to delete labels.'));
+        const rollId = card.getAttribute('data-roll-id');
+        const sequence = card.getAttribute('data-seq');
+        if (!rollId || !sequence) {
+            alert('Unable to identify a selected label. Refresh the page and try again.');
             return;
         }
 
-        checked.forEach(chk => {
-            const card = chk.closest('.fabric-sticker-card');
-            if (card) {
-                card.remove();
+        if (!groups.has(rollId)) groups.set(rollId, { sequences: [], cards: [] });
+        groups.get(rollId).sequences.push(sequence);
+        groups.get(rollId).cards.push(card);
+    }
+
+    Promise.all(Array.from(groups.entries()).map(async ([rollId, group]) => {
+        const formData = new FormData();
+        formData.append('_csrf_token', csrfToken);
+        formData.append('ajax', '1');
+        group.sequences.forEach(sequence => formData.append('sequences[]', sequence));
+
+        const response = await fetch(deleteExtraUrlBase + rollId, {
+            method: 'POST',
+            headers: {
+                'X-CSRF-TOKEN': csrfToken,
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: formData
+        });
+        const data = await response.json();
+        return { group, data };
+    }))
+    .then(results => {
+        let removedCount = 0;
+        const errors = [];
+        results.forEach(({ group, data }) => {
+            if (!data.success) {
+                errors.push(data.message || 'Failed to delete one or more labels.');
+                return;
             }
+            group.cards.forEach(card => card.remove());
+            removedCount += group.cards.length;
         });
 
-        refreshStickersFromDOM();
-        showToast(data.message || `Successfully removed ${count} label(s).`);
+        if (removedCount > 0) {
+            refreshStickersFromDOM();
+            showToast(`Successfully removed ${removedCount} label(s).`);
+        }
+        if (errors.length > 0) alert('Some labels could not be deleted: ' + errors.join(' '));
     })
     .catch(err => {
         alert('Request failed: ' + err.message);
@@ -697,6 +717,10 @@ function deleteSelectedStickers() {
 function refreshStickersFromDOM() {
     const cards = Array.from(document.querySelectorAll('.fabric-sticker-card'));
     const total = cards.length;
+    const stickersByCode = new Map(stickersData.map(sticker => [sticker.code, sticker]));
+    stickersData = cards
+        .map(card => stickersByCode.get(card.getAttribute('data-code')))
+        .filter(Boolean);
 
     document.getElementById('totalStickersBadge').textContent = total + ' Sticker' + (total === 1 ? '' : 's');
     document.getElementById('allCountSpan').textContent = total;
@@ -823,6 +847,7 @@ function submitAddExtraLabel() {
                 card.id = 'card_' + newIdx;
                 card.setAttribute('data-idx', newIdx);
                 card.setAttribute('data-code', stk.code);
+                card.setAttribute('data-seq', stk.seq);
                 card.setAttribute('data-piece', stk.piece_index);
                 card.setAttribute('data-roll', stk.roll_number);
                 card.setAttribute('data-roll-id', stk.roll_id);

@@ -1750,6 +1750,20 @@ CREATE TABLE `seller_rolls` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
+-- Table structure for table `seller_roll_deleted_labels`
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `seller_roll_deleted_labels`;
+CREATE TABLE `seller_roll_deleted_labels` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `seller_roll_id` int unsigned NOT NULL,
+  `sequence` int unsigned NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_seller_roll_deleted_sequence` (`seller_roll_id`, `sequence`),
+  CONSTRAINT `seller_roll_deleted_labels_ibfk_1` FOREIGN KEY (`seller_roll_id`) REFERENCES `seller_rolls` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
 -- Table structure for table `sellers`
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `sellers`;
