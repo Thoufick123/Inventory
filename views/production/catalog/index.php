@@ -9,11 +9,6 @@
             <i class="bi bi-plus-circle-fill me-1"></i> Add Product Style
         </a>
         <?php endif; ?>
-        <?php if (hasPermission('programs', 'create')): ?>
-        <a href="<?= url('production/programs/create') ?>" class="btn btn-outline-primary">
-            <i class="bi bi-kanban me-1"></i> Start Production Program
-        </a>
-        <?php endif; ?>
     </div>
 </div>
 
