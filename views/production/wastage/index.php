@@ -134,18 +134,8 @@
                     </select>
                 </div>
 
-                <!-- Payment Status -->
-                <div class="col-lg-2 col-md-4">
-                    <select name="payment_status" class="form-select form-select-sm" onchange="this.form.submit()">
-                        <option value="">-- All Payment Statuses --</option>
-                        <option value="PAID" <?= $paymentStatus === 'PAID' ? 'selected' : '' ?>>Paid</option>
-                        <option value="PARTIAL" <?= $paymentStatus === 'PARTIAL' ? 'selected' : '' ?>>Partial</option>
-                        <option value="PENDING" <?= $paymentStatus === 'PENDING' ? 'selected' : '' ?>>Pending</option>
-                    </select>
-                </div>
-
                 <!-- Date Range -->
-                <div class="col-lg-2 col-md-4">
+                <div class="col-lg-3 col-md-6">
                     <div class="input-group input-group-sm">
                         <input type="date" name="date_from" class="form-control form-control-sm" title="From Date" value="<?= e($dateFrom) ?>" onchange="this.form.submit()">
                         <input type="date" name="date_to" class="form-control form-control-sm" title="To Date" value="<?= e($dateTo) ?>" onchange="this.form.submit()">
@@ -153,7 +143,7 @@
                 </div>
 
                 <!-- Actions -->
-                <div class="col-lg-1 col-md-4 text-end">
+                <div class="col-lg-1 col-md-6 text-end">
                     <a href="<?= url('production/wastage') ?>" class="btn btn-sm btn-outline-secondary w-100" title="Reset Filters">
                         <i class="bi bi-arrow-counterclockwise"></i>
                     </a>
@@ -189,7 +179,6 @@
                                 <th>Cutting Batch &amp; Category</th>
                                 <th class="text-end">Weight &amp; Rate</th>
                                 <th class="text-end">Total Price</th>
-                                <th class="text-center">Payment Status</th>
                                 <th class="text-center">Bill / Proof</th>
                                 <th class="text-center" style="width: 130px;">Actions</th>
                             </tr>
@@ -263,27 +252,6 @@
                                     <!-- Total Selling Amount -->
                                     <td class="text-end">
                                         <div class="fw-bold text-success fs-6">₹ <?= number_format($s['total_amount'], 2) ?></div>
-                                        <?php if ($s['paid_amount'] > 0 && $s['paid_amount'] < $s['total_amount']): ?>
-                                            <small class="text-muted d-block">Paid: ₹<?= number_format($s['paid_amount'], 2) ?></small>
-                                            <small class="text-danger fw-semibold d-block">Due: ₹<?= number_format($s['total_amount'] - $s['paid_amount'], 2) ?></small>
-                                        <?php elseif ($s['paid_amount'] >= $s['total_amount']): ?>
-                                            <small class="text-success fw-semibold"><i class="bi bi-check-all me-1"></i>Full Paid</small>
-                                        <?php else: ?>
-                                            <small class="text-warning fw-semibold">Unpaid</small>
-                                        <?php endif; ?>
-                                    </td>
-
-                                    <!-- Payment Status -->
-                                    <td class="text-center">
-                                        <?php
-                                        $payBadge = match($s['payment_status']) {
-                                            'PAID'    => 'bg-success text-white',
-                                            'PARTIAL' => 'bg-warning text-dark',
-                                            default   => 'bg-danger text-white'
-                                        };
-                                        ?>
-                                        <span class="badge <?= $payBadge ?> px-2 py-1"><?= e($s['payment_status']) ?></span>
-                                        <div class="small text-muted mt-1"><?= e($s['payment_method']) ?></div>
                                     </td>
 
                                     <!-- Proof Photo -->
@@ -303,11 +271,6 @@
                                             <button type="button" class="btn btn-outline-info" title="View Wastage Sale Details" aria-label="View Wastage Sale Details" onclick="openWastageReceipt(<?= (int)$s['id'] ?>)">
                                                 <i class="bi bi-eye"></i>
                                             </button>
-                                            <!-- Print Receipt Button -->
-                                            <button type="button" class="btn btn-outline-secondary" title="Print Sale Receipt" aria-label="Print Sale Receipt" onclick='openWastageReceipt(<?= (int)$s['id'] ?>)'>
-                                                <i class="bi bi-printer"></i>
-                                            </button>
-
                                             <?php if (hasPermission('wastage', 'edit')): ?>
                                             <!-- Edit Button -->
                                             <button type="button" class="btn btn-outline-primary" title="Edit Sale Details" onclick='openEditWastageModal(<?= json_encode($s) ?>)'>

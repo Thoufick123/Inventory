@@ -8623,7 +8623,6 @@ class ProductionController {
     public function wastageList(): void {
         $search = trim($_GET['search'] ?? '');
         $type = trim($_GET['type'] ?? '');
-        $status = trim($_GET['payment_status'] ?? '');
         $batchFilter = trim($_GET['cutting_batch_id'] ?? '');
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
@@ -8662,11 +8661,6 @@ class ProductionController {
         if ($type !== '') {
             $sql .= " AND ws.wastage_type = ?";
             $params[] = $type;
-        }
-
-        if ($status !== '') {
-            $sql .= " AND ws.payment_status = ?";
-            $params[] = $status;
         }
 
         if ($batchFilter !== '') {
@@ -8741,7 +8735,6 @@ class ProductionController {
             'programs'       => $programs,
             'search'         => $search,
             'type'           => $type,
-            'paymentStatus'  => $status,
             'cuttingBatchId' => $batchFilter,
             'dateFrom'       => $dateFrom,
             'dateTo'         => $dateTo,
