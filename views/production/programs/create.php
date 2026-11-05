@@ -413,10 +413,11 @@ function addProgramRollRow(rollData = null) {
             </select>
         </div>
 
-        <div class="row g-2 mb-2">
-            <div class="col-md-4">
-                <label class="form-label small fw-semibold text-muted mb-1">
-                    Roll Qty (pcs) <span class="badge bg-light text-secondary border ms-1" id="disp_avail_qty_${idx}" style="font-size: 10px;">Stock: 0</span>
+        <div class="row g-3 mb-2 align-items-start">
+            <div class="col-12 col-sm-4">
+                <label for="roll_qty_${idx}" class="form-label small fw-semibold text-muted mb-1 roll-field-label">
+                    <span class="roll-field-label-text">Roll Qty (pcs)</span>
+                    <span class="roll-field-meta"><span class="badge bg-light text-secondary border" id="disp_avail_qty_${idx}" style="font-size: 10px;">Stock: 0</span></span>
                 </label>
                 <div class="input-group input-group-sm">
                     <span class="input-group-text bg-light"><i class="bi bi-box-seam"></i></span>
@@ -425,16 +426,22 @@ function addProgramRollRow(rollData = null) {
                 </div>
                 <div id="roll_qty_warning_${idx}" class="text-danger small mt-1 fw-semibold d-none" style="font-size: 11px;"></div>
             </div>
-            <div class="col-md-4">
-                <label class="form-label small fw-semibold text-muted mb-1">Roll Weight (kg)</label>
+            <div class="col-12 col-sm-4">
+                <label for="roll_weight_${idx}" class="form-label small fw-semibold text-muted mb-1 roll-field-label">
+                    <span class="roll-field-label-text">Roll Weight (kg)</span>
+                    <span class="roll-field-meta" aria-hidden="true">&nbsp;</span>
+                </label>
                 <div class="input-group input-group-sm">
                     <span class="input-group-text bg-light"><i class="bi bi-speedometer2"></i></span>
                     <input type="number" step="0.01" min="0" name="rolls[${idx}][roll_weight]" id="roll_weight_${idx}" class="form-control fw-bold roll-weight-input bg-light" placeholder="0.00" value="${initWeight}" readonly style="cursor: not-allowed;" required>
                     <span class="input-group-text bg-light">kg</span>
                 </div>
             </div>
-            <div class="col-md-4">
-                <label class="form-label small fw-semibold text-muted mb-1">Roll Price (₹)</label>
+            <div class="col-12 col-sm-4">
+                <label for="roll_price_${idx}" class="form-label small fw-semibold text-muted mb-1 roll-field-label">
+                    <span class="roll-field-label-text">Roll Price (₹)</span>
+                    <span class="roll-field-meta" aria-hidden="true">&nbsp;</span>
+                </label>
                 <div class="input-group input-group-sm">
                     <span class="input-group-text bg-light">₹</span>
                     <input type="number" step="0.01" min="0" name="rolls[${idx}][roll_price]" id="roll_price_${idx}" class="form-control fw-bold text-primary roll-price-input bg-light" placeholder="0.00" value="${initPrice}" readonly style="cursor: not-allowed;" required>
@@ -1228,3 +1235,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
+<style>
+.roll-field-label {
+    display: block;
+    min-height: 2.45rem;
+}
+
+.roll-field-label-text,
+.roll-field-meta {
+    display: block;
+    line-height: 1.15;
+}
+
+.roll-field-meta {
+    min-height: 14px;
+    margin-top: 2px;
+}
+</style>
