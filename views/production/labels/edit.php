@@ -141,7 +141,7 @@
                     </h5>
                     <div class="d-flex align-items-center gap-2">
                         <span class="badge bg-primary-subtle text-primary border px-3 py-2 fs-6" id="totalRequiredBadge">
-                            <i class="bi bi-tag me-1"></i><?= number_format($batch['required_qty']) ?> Required Tags
+                            <i class="bi bi-tag me-1"></i><?= number_format($batch['required_qty']) ?> Remaining Tags
                         </span>
                         <button type="button" class="btn btn-outline-dark btn-sm px-3 py-2 fw-semibold shadow-sm" onclick="openPrinterSettingsModal()" title="Calibrate TSC TE244 printer alignment and font sizes">
                             <i class="bi bi-gear-fill me-1 text-primary"></i>Printer & Alignment Settings
@@ -179,7 +179,7 @@
                                 <tr>
                                     <th style="min-width: 170px;">Attribute (Size / Color)</th>
                                     <th style="width: 110px;" class="text-center text-success"><i class="bi bi-threads me-1"></i>Stitched</th>
-                                    <th style="width: 120px;" class="text-center">Required Tags <span class="text-danger">*</span></th>
+                                    <th style="width: 120px;" class="text-center">Remaining Tags <span class="text-danger">*</span></th>
                                     <th style="width: 100px;" class="text-center">QR Action</th>
                                 </tr>
                             </thead>
@@ -813,6 +813,7 @@ function renderLabelVariants(items) {
         }
 
         const itemCatalogAbbr = getCatalogAbbreviation(itemCatalogHierarchy, it);
+        it._label_catalog_hierarchy = itemCatalogHierarchy;
         const startCode = it.start_code || getLabelCode(itemStartSeq, itemCatalogHierarchy, it);
         const endCode = it.end_code || getLabelCode(itemEndSeq, itemCatalogHierarchy, it);
 
@@ -820,6 +821,7 @@ function renderLabelVariants(items) {
         it._end_seq = itemEndSeq;
         it._start_code = startCode;
         it._end_code = endCode;
+        it._total_label_qty = itemEndSeq - itemStartSeq + 1;
 
         const formatPriceStr = (val) => {
             const num = parseFloat(val || 0);
@@ -887,8 +889,33 @@ function renderLabelVariants(items) {
         tbody.appendChild(tr);
     });
 
-    calcLabelTotals();
+    applyDeletedLabelCounts();
     updateCatalogTabsUI();
+}
+
+function getRemainingProductionLabelCount(item, totalQty) {
+    const startSeq = parseInt(item._start_seq || item.start_seq || 1, 10);
+    const count = Math.max(0, parseInt(totalQty, 10) || 0);
+    let remaining = 0;
+    for (let offset = 0; offset < count; offset++) {
+        const code = getLabelCode(startSeq + offset, item._label_catalog_hierarchy || item.catalog_hierarchy || currentCatalogHierarchy, item);
+        if (!deletedProductionLabelCodes.has(code.toUpperCase())) remaining++;
+    }
+    return remaining;
+}
+
+function applyDeletedLabelCounts() {
+    currentVariantItems.forEach((item, index) => {
+        const row = document.querySelectorAll('#variantsTableBody tr')[index];
+        const quantityInput = row?.querySelector('.label-req-input');
+        if (!quantityInput) return;
+        const totalQty = item._total_label_qty || parseInt(quantityInput.value, 10) || 0;
+        const remainingQty = getRemainingProductionLabelCount(item, totalQty);
+        quantityInput.value = remainingQty;
+        const printedInput = row.querySelector('.printed-qty-input');
+        if (printedInput) printedInput.value = remainingQty;
+    });
+    calcLabelTotals();
 }
 
 function calcLabelTotals() {
@@ -898,7 +925,7 @@ function calcLabelTotals() {
     });
     const reqBadge = document.getElementById('totalRequiredBadge');
     if (reqBadge) {
-        reqBadge.innerHTML = '<i class="bi bi-tag me-1"></i>' + totalReq.toLocaleString() + ' Required Tags';
+        reqBadge.innerHTML = '<i class="bi bi-tag me-1"></i>' + totalReq.toLocaleString() + ' Remaining Tags';
     }
 }
 
@@ -966,6 +993,7 @@ async function persistDeletedProductionLabelCode(code) {
             throw new Error(data.message || 'Could not delete the Production QR label.');
         }
         deletedProductionLabelCodes.add(String(data.code).toUpperCase());
+        applyDeletedLabelCounts();
         return true;
     } catch (error) {
         alert(error.message || 'Could not save the deleted Production QR label.');
@@ -1374,7 +1402,7 @@ async function openQRPrintModal() {
 
     currentVariantItems.forEach((it, vIdx) => {
         const reqInp = document.querySelectorAll('.label-req-input')[vIdx];
-        const reqQty = reqInp ? (parseInt(reqInp.value) || 0) : (parseInt(it.required_qty) || 0);
+        const reqQty = Math.max(0, parseInt(it._total_label_qty || reqInp?.value || it.required_qty || 0, 10) || 0);
         if (reqQty <= 0) return;
 
         const sizeName = it.size_name || it.display_size || 'Standard';
@@ -1458,6 +1486,7 @@ async function removeSingleStickerCard(btn) {
     const code = col?.querySelector('.lbl-damage-code')?.textContent.trim().toUpperCase();
     if (col && code && await persistDeletedProductionLabelCode(code)) {
         col.remove();
+        applyDeletedLabelCounts();
         updatePrintModalSummary();
     }
 }
@@ -1486,6 +1515,7 @@ async function removeLabelByCode() {
 
     if (removedCount > 0) {
         input.value = '';
+        applyDeletedLabelCounts();
         updatePrintModalSummary();
     } else {
         alert(`Label code "${targetCode}" not found.`);
@@ -1755,7 +1785,14 @@ function validateLabelBatchForm(e) {
     return true;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        await loadDeletedProductionLabelCodes();
+    } catch (error) {
+        alert(error.message || 'Could not load deleted Production QR labels.');
+        return;
+    }
+
     if (currentVariantItems && currentVariantItems.length > 0) {
         renderLabelVariants(currentVariantItems);
     }

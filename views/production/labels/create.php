@@ -145,7 +145,7 @@
                     </h5>
                     <div class="d-flex align-items-center gap-2">
                         <span class="badge bg-primary-subtle text-primary border px-3 py-2 fs-6" id="totalRequiredBadge">
-                            <i class="bi bi-tag me-1"></i>0 Required Tags
+                            <i class="bi bi-tag me-1"></i>0 Remaining Tags
                         </span>
                         <button type="button" class="btn btn-outline-dark btn-sm px-3 py-2 fw-semibold shadow-sm" onclick="openPrinterSettingsModal()" title="Calibrate TSC TE244 printer alignment and font sizes">
                             <i class="bi bi-gear-fill me-1 text-primary"></i>Printer & Alignment Settings
@@ -195,7 +195,7 @@
                                 <tr>
                                     <th style="min-width: 170px;">Attribute (Size / Color)</th>
                                     <th style="width: 110px;" class="text-center text-success"><i class="bi bi-threads me-1"></i>Stitched</th>
-                                    <th style="width: 120px;" class="text-center">Required Tags <span class="text-danger">*</span></th>
+                                    <th style="width: 120px;" class="text-center">Remaining Tags <span class="text-danger">*</span></th>
                                     <th style="width: 100px;" class="text-center">QR Action</th>
                                 </tr>
                             </thead>
@@ -675,7 +675,7 @@ function filterVariantsByCatalog(catalogName, btnEl) {
     });
 }
 
-function handleStitchingBatchChange(stitchingBatchId) {
+async function handleStitchingBatchChange(stitchingBatchId) {
     if (!stitchingBatchId) {
         document.getElementById('stitchingDetailsBox').style.display = 'none';
         document.getElementById('noStitchingSelectedState').style.display = 'block';
@@ -686,6 +686,13 @@ function handleStitchingBatchChange(stitchingBatchId) {
         currentCatalogSequences = {};
         updateCatalogTabsUI();
         calcLabelTotals();
+        return;
+    }
+
+    try {
+        await loadDeletedProductionLabelCodes();
+    } catch (error) {
+        alert(error.message || 'Could not load deleted Production QR labels.');
         return;
     }
 
@@ -933,6 +940,7 @@ function renderLabelVariants(items) {
         catalogRunningSeq[catKey] = itemEndSeq + 1;
 
         const itemCatalogAbbr = getCatalogAbbreviation(itemCatalogHierarchy, it);
+        it._label_catalog_hierarchy = itemCatalogHierarchy;
         const startCode = getLabelCode(itemStartSeq, itemCatalogHierarchy, it);
         const endCode = getLabelCode(itemEndSeq, itemCatalogHierarchy, it);
 
@@ -940,6 +948,7 @@ function renderLabelVariants(items) {
         it._end_seq = itemEndSeq;
         it._start_code = startCode;
         it._end_code = endCode;
+        it._total_label_qty = itemEndSeq - itemStartSeq + 1;
 
         const formatPriceStr = (val) => {
             const num = parseFloat(val || 0);
@@ -962,7 +971,7 @@ function renderLabelVariants(items) {
                 <input type="hidden" name="items[${idx}][color_name]" value="${colorName}">
                 <input type="hidden" name="items[${idx}][base_price]" value="${basePrice}">
                 <input type="hidden" name="items[${idx}][discount_price]" value="${discountPrice}">
-                <input type="hidden" name="items[${idx}][printed_qty]" value="${printedQty}">
+                <input type="hidden" name="items[${idx}][printed_qty]" class="printed-qty-input" value="${printedQty}">
                 <input type="hidden" name="items[${idx}][damaged_qty]" value="${damagedQty}">
                 <input type="hidden" name="items[${idx}][start_seq]" value="${itemStartSeq}">
                 <input type="hidden" name="items[${idx}][end_seq]" value="${itemEndSeq}">
@@ -1006,8 +1015,33 @@ function renderLabelVariants(items) {
         tbody.appendChild(tr);
     });
 
-    calcLabelTotals();
+    applyDeletedLabelCounts();
     updateCatalogTabsUI();
+}
+
+function getRemainingProductionLabelCount(item, totalQty) {
+    const startSeq = parseInt(item._start_seq || item.start_seq || 1, 10);
+    const count = Math.max(0, parseInt(totalQty, 10) || 0);
+    let remaining = 0;
+    for (let offset = 0; offset < count; offset++) {
+        const code = getLabelCode(startSeq + offset, item._label_catalog_hierarchy || item.catalog_hierarchy || currentCatalogHierarchy, item);
+        if (!deletedProductionLabelCodes.has(code.toUpperCase())) remaining++;
+    }
+    return remaining;
+}
+
+function applyDeletedLabelCounts() {
+    currentVariantItems.forEach((item, index) => {
+        const row = document.querySelectorAll('#variantsTableBody tr')[index];
+        const quantityInput = row?.querySelector('.label-req-input');
+        if (!quantityInput) return;
+        const totalQty = item._total_label_qty || parseInt(quantityInput.value, 10) || 0;
+        const remainingQty = getRemainingProductionLabelCount(item, totalQty);
+        quantityInput.value = remainingQty;
+        const printedInput = row.querySelector('.printed-qty-input');
+        if (printedInput) printedInput.value = remainingQty;
+    });
+    calcLabelTotals();
 }
 
 function calcLabelTotals() {
@@ -1017,7 +1051,7 @@ function calcLabelTotals() {
     });
     const reqBadge = document.getElementById('totalRequiredBadge');
     if (reqBadge) {
-        reqBadge.innerHTML = '<i class="bi bi-tag me-1"></i>' + totalReq.toLocaleString() + ' Required Tags';
+        reqBadge.innerHTML = '<i class="bi bi-tag me-1"></i>' + totalReq.toLocaleString() + ' Remaining Tags';
     }
 }
 
@@ -1085,6 +1119,7 @@ async function persistDeletedProductionLabelCode(code) {
             throw new Error(data.message || 'Could not delete the Production QR label.');
         }
         deletedProductionLabelCodes.add(String(data.code).toUpperCase());
+        applyDeletedLabelCounts();
         return true;
     } catch (error) {
         alert(error.message || 'Could not save the deleted Production QR label.');
@@ -1515,6 +1550,7 @@ async function removeLabelByCode() {
 
     if (removedCount > 0) {
         input.value = '';
+        applyDeletedLabelCounts();
         updatePrintModalSummary();
     } else {
         alert(`Label code "${targetCode}" not found in current printable stickers.`);
@@ -1526,6 +1562,7 @@ async function removeSingleStickerCard(btn) {
     const code = col?.querySelector('.lbl-damage-code')?.textContent.trim().toUpperCase();
     if (col && code && await persistDeletedProductionLabelCode(code)) {
         col.remove();
+        applyDeletedLabelCounts();
         updatePrintModalSummary();
     }
 }
@@ -1577,7 +1614,7 @@ async function openQRPrintModal() {
         }
 
         const reqInp = document.querySelectorAll('.label-req-input')[idx];
-        const count = reqInp ? (parseInt(reqInp.value) || 1) : 1;
+        const count = Math.max(0, parseInt(item._total_label_qty || reqInp?.value || 0, 10) || 0);
         const startSeq = item._start_seq || item.start_seq || 1;
 
         for (let i = 0; i < count; i++) {
@@ -1907,10 +1944,15 @@ function validateLabelBatchForm(e) {
     return true;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     const stitchingSelect = document.getElementById('stitchingBatchSelect');
-    if (stitchingSelect && stitchingSelect.value) {
-        handleStitchingBatchChange(stitchingSelect.value);
+    try {
+        await loadDeletedProductionLabelCodes();
+        if (stitchingSelect && stitchingSelect.value) {
+            handleStitchingBatchChange(stitchingSelect.value);
+        }
+    } catch (error) {
+        alert(error.message || 'Could not load deleted Production QR labels.');
     }
 });
 </script>
