@@ -901,6 +901,12 @@
                         <small class="text-muted">10-digit mobile number</small>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label fw-600">GST Number</label>
+                        <input type="text" name="gst_number" id="unit_gst_number" class="form-control font-monospace text-uppercase" placeholder="33AAAAA0000A1Z5" maxlength="15" pattern="[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]" title="Enter a valid 15-character GSTIN" oninput="this.value = this.value.toUpperCase()">
+                        <div class="invalid-feedback">Enter a valid 15-character GSTIN.</div>
+                        <small class="text-muted">Optional 15-character GSTIN</small>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label fw-600">Facility Address</label>
                         <textarea name="address" id="unit_address" class="form-control" rows="2" placeholder="Full address of the production unit..."></textarea>
                     </div>
@@ -954,6 +960,12 @@
                         <small class="text-muted">10-digit mobile number</small>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label fw-600">GST Number</label>
+                        <input type="text" name="gst_number" id="wh_gst_number" class="form-control font-monospace text-uppercase" placeholder="33AAAAA0000A1Z5" maxlength="15" pattern="[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]" title="Enter a valid 15-character GSTIN" oninput="this.value = this.value.toUpperCase()">
+                        <div class="invalid-feedback">Enter a valid 15-character GSTIN.</div>
+                        <small class="text-muted">Optional 15-character GSTIN</small>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label fw-600">Warehouse Address</label>
                         <textarea name="address" id="wh_address" class="form-control" rows="2" placeholder="Full address of the warehouse facility..."></textarea>
                     </div>
@@ -1003,7 +1015,9 @@
                     <div class="row g-2 mb-3">
                         <div class="col-md-6">
                             <label class="form-label fw-600">GST Number</label>
-                            <input type="text" name="gst_number" id="shop_gst_number" class="form-control font-monospace" placeholder="33AAAAA0000A1Z5">
+                            <input type="text" name="gst_number" id="shop_gst_number" class="form-control font-monospace text-uppercase" placeholder="33AAAAA0000A1Z5" maxlength="15" pattern="[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]" title="Enter a valid 15-character GSTIN" oninput="this.value = this.value.toUpperCase()">
+                            <div class="invalid-feedback">Enter a valid 15-character GSTIN.</div>
+                            <small class="text-muted">Optional 15-character GSTIN</small>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-600">Contact Phone</label>
@@ -1065,6 +1079,12 @@
                             <label class="form-label fw-600">Contact Phone</label>
                             <input type="tel" name="phone" id="chan_phone" class="form-control" placeholder="10-digit number" maxlength="10" pattern="[0-9]{10}" title="Must be exactly 10 digits" oninput="this.value = this.value.replace(/\D/g, '').slice(0, 10)">
                             <div class="invalid-feedback">Please enter a valid 10-digit phone number.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-600">GST Number</label>
+                            <input type="text" name="gst_number" id="chan_gst_number" class="form-control font-monospace text-uppercase" placeholder="33AAAAA0000A1Z5" maxlength="15" pattern="[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]" title="Enter a valid 15-character GSTIN" oninput="this.value = this.value.toUpperCase()">
+                            <div class="invalid-feedback">Enter a valid 15-character GSTIN.</div>
+                            <small class="text-muted">Optional 15-character GSTIN</small>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -1132,6 +1152,7 @@ function resetUnitModal() {
     document.getElementById('unit_code').value = '';
     document.getElementById('unit_manager_name').value = '';
     document.getElementById('unit_phone').value = '';
+    document.getElementById('unit_gst_number').value = '';
     document.getElementById('unit_address').value = '';
     document.getElementById('unit_is_active').checked = true;
     document.getElementById('btnSubmitUnit').textContent = 'Save Production Unit';
@@ -1145,6 +1166,7 @@ function editUnit(unit) {
     document.getElementById('unit_code').value = unit.code || '';
     document.getElementById('unit_manager_name').value = unit.manager_name || '';
     document.getElementById('unit_phone').value = unit.phone || '';
+    document.getElementById('unit_gst_number').value = unit.gst_number || '';
     document.getElementById('unit_address').value = unit.address || '';
     document.getElementById('unit_is_active').checked = (unit.is_active == 1);
     document.getElementById('btnSubmitUnit').textContent = 'Update Production Unit';
@@ -1161,6 +1183,7 @@ function resetWarehouseModal() {
     document.getElementById('wh_code').value = '';
     document.getElementById('wh_manager_name').value = '';
     document.getElementById('wh_phone').value = '';
+    document.getElementById('wh_gst_number').value = '';
     document.getElementById('wh_address').value = '';
     document.getElementById('wh_is_active').checked = true;
     document.getElementById('btnSubmitWarehouse').textContent = 'Save Warehouse';
@@ -1174,6 +1197,7 @@ function editWarehouse(wh) {
     document.getElementById('wh_code').value = wh.code || '';
     document.getElementById('wh_manager_name').value = wh.manager_name || '';
     document.getElementById('wh_phone').value = wh.phone || '';
+    document.getElementById('wh_gst_number').value = wh.gst_number || '';
     document.getElementById('wh_address').value = wh.address || '';
     document.getElementById('wh_is_active').checked = (wh.is_active == 1);
     document.getElementById('btnSubmitWarehouse').textContent = 'Update Warehouse';
@@ -1230,6 +1254,7 @@ function resetChannelModal(type) {
     document.getElementById('chan_code').value = '';
     document.getElementById('chan_manager_name').value = '';
     document.getElementById('chan_phone').value = '';
+    document.getElementById('chan_gst_number').value = '';
     document.getElementById('chan_description').value = '';
     document.getElementById('chan_is_active').checked = true;
     document.getElementById('btnSubmitChannel').className = `btn ${bgClass} text-white fw-600`;
@@ -1253,6 +1278,7 @@ function editChannel(chan) {
     document.getElementById('chan_code').value = chan.code || '';
     document.getElementById('chan_manager_name').value = chan.manager_name || '';
     document.getElementById('chan_phone').value = chan.phone || '';
+    document.getElementById('chan_gst_number').value = chan.gst_number || '';
     document.getElementById('chan_description').value = chan.description || '';
     document.getElementById('chan_is_active').checked = (chan.is_active == 1);
     

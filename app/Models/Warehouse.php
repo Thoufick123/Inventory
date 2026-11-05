@@ -104,14 +104,15 @@ class Warehouse {
     public static function create(array $data): int {
         self::ensureSchema();
         Database::execute(
-            "INSERT INTO warehouses (name, code, manager_name, address, phone, manager_id, is_active, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())",
+            "INSERT INTO warehouses (name, code, manager_name, address, phone, gst_number, manager_id, is_active, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
                 trim($data['name']),
                 strtoupper(trim($data['code'])),
                 trim($data['manager_name'] ?? ''),
                 $data['address'] ?? null,
                 trim($data['phone'] ?? ''),
+                $data['gst_number'] ?? null,
                 !empty($data['manager_id']) ? (int)$data['manager_id'] : null,
                 $data['is_active'] ?? 1
             ]
@@ -126,7 +127,7 @@ class Warehouse {
         self::ensureSchema();
         return Database::execute(
             "UPDATE warehouses 
-             SET name = ?, code = ?, manager_name = ?, address = ?, phone = ?, manager_id = ?, is_active = ?, updated_at = NOW()
+             SET name = ?, code = ?, manager_name = ?, address = ?, phone = ?, gst_number = ?, manager_id = ?, is_active = ?, updated_at = NOW()
              WHERE id = ?",
             [
                 trim($data['name']),
@@ -134,6 +135,7 @@ class Warehouse {
                 trim($data['manager_name'] ?? ''),
                 $data['address'] ?? null,
                 trim($data['phone'] ?? ''),
+                $data['gst_number'] ?? null,
                 !empty($data['manager_id']) ? (int)$data['manager_id'] : null,
                 isset($data['is_active']) ? (int)$data['is_active'] : 1,
                 $id

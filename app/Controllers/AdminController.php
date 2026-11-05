@@ -13,6 +13,10 @@ require_once BASE_PATH . '/app/Services/AuditService.php';
 
 class AdminController {
 
+    private function isValidGstNumber(string $gstNumber): bool {
+        return $gstNumber === '' || preg_match('/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/', $gstNumber) === 1;
+    }
+
     /**
      * Admin Dashboard.
      */
@@ -946,6 +950,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production Unit Name is required.');
@@ -956,6 +961,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             $id = ProductionUnit::create([
@@ -965,6 +973,7 @@ class AdminController {
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
+                'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
             ]);
 
@@ -985,6 +994,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production Unit Name is required.');
@@ -995,6 +1005,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             ProductionUnit::update($unitId, [
@@ -1004,6 +1017,7 @@ class AdminController {
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
+                'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
             ]);
 
@@ -1055,6 +1069,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::jsonError('Production Unit Name is required.');
@@ -1065,6 +1080,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::jsonError('Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::jsonError('Enter a valid 15-character GSTIN.');
+        }
 
         try {
             $id = ProductionUnit::create([
@@ -1074,6 +1092,7 @@ class AdminController {
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
+                'gst_number'   => $gstNumber,
                 'is_active'    => 1,
             ]);
 
@@ -1098,6 +1117,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse Name is required.');
@@ -1108,6 +1128,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             $id = Warehouse::create([
@@ -1117,6 +1140,7 @@ class AdminController {
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
+                'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
             ]);
 
@@ -1137,6 +1161,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse Name is required.');
@@ -1147,6 +1172,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             Warehouse::update($whId, [
@@ -1156,6 +1184,7 @@ class AdminController {
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
+                'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
             ]);
 
@@ -1211,6 +1240,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop Name is required.');
@@ -1221,6 +1251,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             $id = Shop::create([
@@ -1228,7 +1261,7 @@ class AdminController {
                 'code'         => $code,
                 'manager_name' => $managerName,
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'gst_number'   => trim($_POST['gst_number'] ?? ''),
+                'gst_number'   => $gstNumber,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
@@ -1251,6 +1284,7 @@ class AdminController {
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
 
         if (empty($name)) {
             Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop Name is required.');
@@ -1261,6 +1295,9 @@ class AdminController {
         if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
             Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Contact phone must be exactly 10 digits.');
         }
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             Shop::update($shopId, [
@@ -1268,7 +1305,7 @@ class AdminController {
                 'code'         => $code,
                 'manager_name' => $managerName,
                 'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'gst_number'   => trim($_POST['gst_number'] ?? ''),
+                'gst_number'   => $gstNumber,
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
@@ -1331,8 +1368,12 @@ class AdminController {
 
         $manager_name = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
         $description = trim($_POST['description'] ?? '');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             if (empty($code)) {
@@ -1356,8 +1397,8 @@ class AdminController {
             }
 
             Database::execute(
-                "INSERT INTO sales_channels (name, code, manager_name, phone, description, channel_type, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [$name, $code, $manager_name, $phone, $description, $type, $is_active]
+                "INSERT INTO sales_channels (name, code, manager_name, phone, gst_number, description, channel_type, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active]
             );
             $id = Database::lastInsertId();
             AuditService::log('admin', 'create_channel', 'sales_channels', $id, null, $_POST);
@@ -1381,8 +1422,12 @@ class AdminController {
 
         $manager_name = trim($_POST['manager_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
+        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
         $description = trim($_POST['description'] ?? '');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
+        if (!$this->isValidGstNumber($gstNumber)) {
+            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enter a valid 15-character GSTIN.');
+        }
 
         try {
             $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND id != ?", [$code, $id]);
@@ -1392,8 +1437,8 @@ class AdminController {
             }
 
             Database::execute(
-                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, description = ?, channel_type = ?, is_active = ? WHERE id = ?",
-                [$name, $code, $manager_name, $phone, $description, $type, $is_active, $id]
+                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, gst_number = ?, description = ?, channel_type = ?, is_active = ? WHERE id = ?",
+                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active, $id]
             );
             AuditService::log('admin', 'update_channel', 'sales_channels', $id, null, $_POST);
             Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'success', "Channel '{$name}' updated successfully.");
