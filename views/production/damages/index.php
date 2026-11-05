@@ -345,15 +345,20 @@
                 <div class="modal-body p-4">
                     <div class="row g-3">
                         <div class="col-12">
-                            <label for="damageRollQrScan" class="form-label fw-bold">Scan Fabric Roll QR</label>
-                            <input type="text" id="damageRollQrScan" class="form-control form-control-lg" placeholder="Scan or enter the roll QR code, then press Enter" autocomplete="off">
+                            <label for="damageRollQrScan" class="form-label fw-bold">Scan Exact Fabric Piece QR</label>
+                            <input type="text" id="damageRollQrScan" class="form-control form-control-lg" placeholder="Scan or enter one piece QR code, then press Enter" autocomplete="off">
                             <div id="damageRollScanStatus" class="small mt-1" role="status" aria-live="polite"></div>
+                            <div id="damageScannedLabel" class="alert alert-success py-2 mt-2 mb-0 d-none">
+                                <i class="bi bi-qr-code-scan me-1"></i>
+                                Scanned item <strong id="damageScannedCode"></strong>
+                                <span class="ms-2">Piece weight: <strong id="damageScannedWeight"></strong> kg</span>
+                            </div>
                         </div>
 
                         <!-- Supplier Selection -->
                         <div class="col-md-6">
                             <label class="form-label fw-bold required">Material Supplier / Mill</label>
-                            <select name="seller_id" id="modalSellerSelect" class="form-select form-select-lg" required onchange="loadSupplierRolls(this.value)">
+                            <select id="modalSellerSelect" class="form-select form-select-lg" disabled>
                                 <option value="">-- Choose Supplier --</option>
                                 <?php foreach ($sellers as $s): ?>
                                     <option value="<?= $s['id'] ?>">
@@ -366,10 +371,14 @@
                         <!-- Roll Selection (Dynamically Loaded) -->
                         <div class="col-md-6">
                             <label class="form-label fw-bold required">Defective Fabric Roll</label>
-                            <select name="seller_roll_id" id="modalRollSelect" class="form-select form-select-lg" required onchange="handleRollSelectionChange(this)">
+                            <select id="modalRollSelect" class="form-select form-select-lg" disabled>
                                 <option value="">-- Select Supplier First --</option>
                             </select>
                         </div>
+                        <input type="hidden" name="seller_id" id="damageSellerId">
+                        <input type="hidden" name="seller_roll_id" id="damageSellerRollId">
+                        <input type="hidden" name="qr_code" id="damageScannedQrCode">
+                        <input type="hidden" name="damaged_quantity" value="1">
 
                         <!-- Roll Info Callout (Dynamic) -->
                         <div class="col-12" id="rollInfoBox" style="display: none;">
@@ -409,18 +418,8 @@
                             <small class="text-muted d-block mt-1" id="reportReasonHelp">Select defect type or describe custom reason in notes below</small>
                         </div>
 
-                        <!-- Damaged Quantity (Cannot exceed available stock) -->
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold required">Damaged Quantity</label>
-                            <div class="input-group">
-                                <input type="number" name="damaged_quantity" id="inputDamagedQty" class="form-control" value="1" min="1" required oninput="onReportQtyChange()">
-                                <span class="input-group-text bg-light">pcs</span>
-                            </div>
-                            <small class="text-muted d-block mt-1" id="reportQtyHelp">1 pc = 0.00 kg</small>
-                        </div>
-
                         <!-- Damaged Weight (Disabled with clear visibility - Auto-calculated) -->
-                        <div class="col-md-3">
+                        <div class="col-md-6">
                             <label class="form-label fw-bold text-dark">
                                 Damaged Weight <span class="badge bg-secondary-subtle text-secondary border ms-1">Auto</span>
                             </label>
@@ -789,11 +788,25 @@ function setDamageRollScanStatus(message, isError = false) {
     status.className = `small mt-1 ${isError ? 'text-danger' : 'text-success'}`;
 }
 
+function clearDamageRollSelection() {
+    loadedRollsMap = {};
+    document.getElementById('damageSellerId').value = '';
+    document.getElementById('damageSellerRollId').value = '';
+    document.getElementById('damageScannedQrCode').value = '';
+    document.getElementById('modalSellerSelect').value = '';
+    document.getElementById('modalRollSelect').innerHTML = '<option value="">-- Scan Fabric Roll QR First --</option>';
+    document.getElementById('rollInfoBox').style.display = 'none';
+    document.getElementById('damageScannedLabel').classList.add('d-none');
+    document.getElementById('inputDamagedWeight').value = '';
+    document.getElementById('inputEstimatedLoss').value = '';
+}
+
 function scanDamageRollQr() {
     const scanInput = document.getElementById('damageRollQrScan');
     const scannedCode = scanInput ? scanInput.value.trim() : '';
     if (!scannedCode) return;
 
+    clearDamageRollSelection();
     setDamageRollScanStatus('Looking up fabric roll…');
     fetch('<?= url('api/production/damages/scan-roll') ?>?code=' + encodeURIComponent(scannedCode))
         .then(async response => {
@@ -817,10 +830,22 @@ function scanDamageRollQr() {
                 throw new Error('The roll was found, but its details could not be loaded.');
             }
             const m = getRollMetrics(roll);
-            const allocationText = m.usedQty > 0 ? ` ${m.usedQty} pcs are assigned to active production programs.` : '';
-            setDamageRollScanStatus(`Found ${data.code} — ${data.roll_number}. Damageable balance: ${m.availQty} pcs.${allocationText}`);
+            if (m.availQty < 1) {
+                throw new Error('This roll has no remaining undamaged labels available.');
+            }
+            const pieceWeight = m.weightPerPc;
+            document.getElementById('damageSellerId').value = data.seller_id;
+            document.getElementById('damageSellerRollId').value = data.roll_id;
+            document.getElementById('damageScannedQrCode').value = data.code;
+            document.getElementById('damageScannedCode').textContent = data.code;
+            document.getElementById('damageScannedWeight').textContent = pieceWeight.toFixed(2);
+            document.getElementById('damageScannedLabel').classList.remove('d-none');
+            document.getElementById('inputDamagedWeight').value = pieceWeight.toFixed(2);
+            updateReportCalculations(m, 1, pieceWeight);
+            setDamageRollScanStatus(`Found ${data.code} — ${data.roll_number}. Only this QR label will be marked damaged.`);
         })
         .catch(error => {
+            clearDamageRollSelection();
             setDamageRollScanStatus(error.message || 'Unable to scan this fabric roll.', true);
         });
 }
@@ -927,52 +952,11 @@ function updateReportCalculations(m, qty, weight) {
     const rateBadge = document.getElementById('reportRateBadge');
     if (rateBadge) rateBadge.textContent = `₹${m.ratePerKg.toFixed(2)} / kg`;
 
-    const qtyHelp = document.getElementById('reportQtyHelp');
-    if (qtyHelp) qtyHelp.textContent = `1 pc = ${m.weightPerPc.toFixed(2)} kg (Max damageable: ${m.availQty} pcs)`;
-
     const weightHelp = document.getElementById('reportWeightHelp');
     if (weightHelp) weightHelp.textContent = `Rate: ₹${m.ratePerKg.toFixed(2)} / kg`;
 
     const lossHelp = document.getElementById('reportLossCalcHelp');
     if (lossHelp) lossHelp.textContent = `Calculated: ${weight.toFixed(2)} kg × ₹${m.ratePerKg.toFixed(2)}/kg = ₹${lossVal.toFixed(2)}`;
-}
-
-function onReportQtyChange() {
-    const rollId = document.getElementById('modalRollSelect').value;
-    if (!rollId || !loadedRollsMap[rollId]) return;
-    const m = getRollMetrics(loadedRollsMap[rollId]);
-
-    const qtyInput = document.getElementById('inputDamagedQty');
-    let qty = parseInt(qtyInput.value) || 0;
-    const maxQty = m.availQty;
-
-    if (qty > maxQty) {
-        alert(`Damaged Quantity (${qty} pcs) cannot exceed the available roll quantity (${maxQty} pcs) in supplier stock.`);
-        qty = maxQty;
-        qtyInput.value = maxQty;
-    } else if (qty < 1 && qtyInput.value !== '' && maxQty > 0) {
-        qty = 1;
-        qtyInput.value = 1;
-    }
-
-    const calcWeight = qty * m.weightPerPc;
-    const weightInput = document.getElementById('inputDamagedWeight');
-    if (weightInput) {
-        weightInput.value = calcWeight.toFixed(2);
-    }
-    
-    updateReportCalculations(m, qty, calcWeight);
-}
-
-function onReportWeightChange() {
-    const rollId = document.getElementById('modalRollSelect').value;
-    if (!rollId || !loadedRollsMap[rollId]) return;
-    const m = getRollMetrics(loadedRollsMap[rollId]);
-
-    const weight = parseFloat(document.getElementById('inputDamagedWeight').value) || 0;
-    const qty = parseInt(document.getElementById('inputDamagedQty').value) || 1;
-    
-    updateReportCalculations(m, qty, weight);
 }
 
 function handleRollSelectionChange(selectEl) {
@@ -1001,26 +985,14 @@ function handleRollSelectionChange(selectEl) {
     }
     document.getElementById('infoRollPrice').textContent = `Total Lot: ₹${m.totPrice.toFixed(2)}`;
 
-    // Set quantity = 1 by default (or min(1, availQty))
-    const defaultQty = 1;
-    const qtyInput = document.getElementById('inputDamagedQty');
-    if (qtyInput) {
-        qtyInput.value = Math.min(defaultQty, m.availQty);
-        qtyInput.max = m.availQty;
-        qtyInput.disabled = m.availQty < 1;
-        qtyInput.min = m.availQty > 0 ? 1 : 0;
-    }
-
-    // Calculate initial damaged weight accurately based on 1 unit weight
-    const selectedQty = Math.min(defaultQty, m.availQty);
-    const defaultWeight = selectedQty * m.weightPerPc;
+    const defaultWeight = m.weightPerPc;
     const weightInput = document.getElementById('inputDamagedWeight');
     if (weightInput) {
         weightInput.value = defaultWeight.toFixed(2);
         weightInput.max = m.availWeight.toFixed(2);
     }
 
-    updateReportCalculations(m, selectedQty, defaultWeight);
+    updateReportCalculations(m, 1, defaultWeight);
     syncReportReasonAndNotes();
 
     if (infoBox) infoBox.style.display = '';
@@ -1261,6 +1233,19 @@ function handleResolutionTypeChange(type) {
 document.addEventListener('DOMContentLoaded', () => {
     const scanInput = document.getElementById('damageRollQrScan');
     if (scanInput) {
+        const damageModal = document.getElementById('reportDamageModal');
+        damageModal.addEventListener('shown.bs.modal', () => scanInput.focus());
+        damageModal.addEventListener('hidden.bs.modal', () => {
+            clearDamageRollSelection();
+            scanInput.value = '';
+            setDamageRollScanStatus('');
+        });
+        scanInput.addEventListener('input', () => {
+            if (document.getElementById('damageScannedQrCode').value) {
+                clearDamageRollSelection();
+                setDamageRollScanStatus('Press Enter after scanning the QR to confirm that exact label.');
+            }
+        });
         scanInput.addEventListener('keydown', function(event) {
             if (event.key === 'Enter') {
                 event.preventDefault();
@@ -1292,36 +1277,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const reportForm = document.getElementById('reportDamageForm');
     if (reportForm) {
         reportForm.addEventListener('submit', function(e) {
-            const sellerId = document.getElementById('modalSellerSelect').value;
-            const rollId = document.getElementById('modalRollSelect').value;
+            const sellerId = document.getElementById('damageSellerId').value;
+            const rollId = document.getElementById('damageSellerRollId').value;
+            const qrCode = document.getElementById('damageScannedQrCode').value;
             const reason = document.getElementById('reportReasonSelect').value.trim();
             const notes = document.getElementById('reportDefectNotes').value.trim();
-            const qty = parseInt(document.getElementById('inputDamagedQty').value) || 0;
             const photoInput = document.getElementById('reportPhotoInput');
 
-            if (!sellerId) {
-                alert('Please choose a Material Supplier / Mill.');
+            if (!qrCode || !sellerId || !rollId) {
+                alert('Scan a valid fabric QR label first. Only the scanned item will be marked damaged.');
                 e.preventDefault();
                 return false;
-            }
-            if (!rollId) {
-                alert('Please select a Defective Fabric Roll.');
-                e.preventDefault();
-                return false;
-            }
-            if (rollId && loadedRollsMap[rollId]) {
-                const m = getRollMetrics(loadedRollsMap[rollId]);
-                const maxQty = m.availQty;
-                if (qty > maxQty) {
-                    alert(`Damaged Quantity (${qty} pcs) cannot exceed the available roll quantity (${maxQty} pcs).`);
-                    e.preventDefault();
-                    return false;
-                }
-                if (qty < 1) {
-                    alert('Damaged Quantity must be at least 1 pc.');
-                    e.preventDefault();
-                    return false;
-                }
             }
             if (!reason && !notes) {
                 alert('Please select a Damage / Defect Reason OR provide details in Defect Notes & Observations.');
@@ -1386,16 +1352,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Deep-linking from Supplier view
     const urlParams = new URLSearchParams(window.location.search);
     const reportSellerId = urlParams.get('report_seller_id');
-    const reportRollId = urlParams.get('report_roll_id');
-
     if (reportSellerId) {
-        const sellerSelect = document.getElementById('modalSellerSelect');
-        if (sellerSelect) {
-            sellerSelect.value = reportSellerId;
-            loadSupplierRolls(reportSellerId, reportRollId);
-            const modal = new bootstrap.Modal(document.getElementById('reportDamageModal'));
-            modal.show();
-        }
+        const modal = new bootstrap.Modal(document.getElementById('reportDamageModal'));
+        modal.show();
+        setDamageRollScanStatus('Scan the specific fabric QR label to report damage.');
     }
 
     // Initialize Damage Records Table Pagination

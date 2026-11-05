@@ -1594,6 +1594,7 @@ CREATE TABLE `roll_damages` (
   `damage_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `seller_id` int unsigned DEFAULT NULL,
   `seller_roll_id` int unsigned DEFAULT NULL,
+  `qr_code` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `damaged_quantity` int DEFAULT '0',
   `damaged_weight` decimal(10,2) DEFAULT '0.00',
   `loss_amount` decimal(12,2) DEFAULT '0.00',
@@ -1614,6 +1615,7 @@ CREATE TABLE `roll_damages` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_roll_damages_number` (`damage_number`),
+  UNIQUE KEY `uniq_roll_damages_qr_code` (`qr_code`),
   KEY `idx_roll_damages_seller` (`seller_id`),
   KEY `idx_roll_damages_roll` (`seller_roll_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
