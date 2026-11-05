@@ -271,7 +271,7 @@ $canDeleteCatalog = hasPermission('wh_catalog', 'delete');
 
 <!-- MODAL: UNIFIED ADD CATEGORY HIERARCHY & PRE-SET ATTRIBUTES -->
 <div class="modal fade" id="modalUnifiedCategory" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
-    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-0 shadow-lg rounded-3">
             <div class="modal-header bg-primary text-white py-3 px-4">
                 <div>
@@ -415,7 +415,7 @@ $canDeleteCatalog = hasPermission('wh_catalog', 'delete');
 </div>
 <!-- MODAL: FULL FORM EDIT CATEGORY HIERARCHY & PRE-SET ATTRIBUTES -->
 <div class="modal fade" id="modalUnifiedEditCategory" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
-    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-0 shadow-lg rounded-3 overflow-hidden">
             <div class="modal-header bg-dark text-white py-3 px-4">
                 <div class="d-flex align-items-center gap-2">
