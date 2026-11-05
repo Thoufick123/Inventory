@@ -5,22 +5,12 @@
             <span class="text-muted">Update supplier details, fabric roll specifications, bill attachments, and payment terms</span>
         </div>
         <div class="d-flex gap-2 align-items-center">
-            <a href="<?= url('production/sellers/' . $seller['id'] . '/labels') ?>" class="btn btn-outline-dark shadow-sm" target="_blank" title="Print Fabric QR Labels">
-                <i class="bi bi-qr-code me-1"></i> Print Labels
-            </a>
             <a href="<?= url('production/sellers') ?>" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left me-1"></i> Back to Suppliers
             </a>
-            <button type="button" class="btn btn-outline-danger shadow-sm" onclick="if(confirm('Are you sure you want to delete Supplier \'<?= e(addslashes($seller['name'])) ?>\' and its associated roll creations?')) document.getElementById('deleteSupplierForm').submit();">
-                <i class="bi bi-trash me-1"></i> Delete Supplier
-            </button>
         </div>
     </div>
 </div>
-
-<form method="POST" action="<?= url('production/sellers/delete/' . $seller['id']) ?>" id="deleteSupplierForm" class="d-none">
-    <?= CSRF::field() ?>
-</form>
 
 <form method="POST" action="<?= url('production/sellers/update/' . $seller['id']) ?>" enctype="multipart/form-data" id="supplierEditForm" class="needs-validation" novalidate>
     <?= CSRF::field() ?>

@@ -17,24 +17,9 @@
             </span>
         </div>
         <div class="d-flex gap-2 align-items-center flex-wrap">
-            <button type="button" class="btn btn-dark shadow-sm" onclick="openFabricLotLabelsModal()">
-                <i class="bi bi-qr-code me-1 text-warning"></i> Preview Labels
-            </button>
-            <a href="<?= url('production/sellers/' . $seller['id'] . '/labels') ?>" class="btn btn-outline-dark shadow-sm" target="_blank" title="Open full print sheet in new tab">
-                <i class="bi bi-printer me-1"></i> Print Labels
-            </a>
             <a href="<?= url('production/sellers') ?>" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left me-1"></i> Back to Suppliers
             </a>
-            <a href="<?= url('production/sellers/edit/' . $seller['id']) ?>" class="btn btn-primary shadow-sm">
-                <i class="bi bi-pencil me-1"></i> Edit Supplier & Rolls
-            </a>
-            <form method="POST" action="<?= url('production/sellers/delete/' . $seller['id']) ?>" class="d-inline" onsubmit="return confirm('Are you sure you want to delete Supplier \'<?= e(addslashes($seller['name'])) ?>\' and all associated fabric roll creations?');">
-                <?= CSRF::field() ?>
-                <button type="submit" class="btn btn-outline-danger shadow-sm" title="Delete Supplier & Rolls">
-                    <i class="bi bi-trash me-1"></i> Delete Supplier
-                </button>
-            </form>
         </div>
     </div>
 </div>
