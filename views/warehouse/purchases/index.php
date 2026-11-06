@@ -624,24 +624,24 @@ $oneTimeCount = count($oneTimeCustomers ?? []) + count($unregisteredPurchases ??
 
             <!-- Modal Nav Tabs -->
             <div class="bg-light px-4 pt-2 border-bottom">
-                <ul class="nav nav-tabs border-0" id="customerProfileTabs" role="tablist">
+                <ul class="nav nav-tabs border-0 customer-profile-tabs" id="customerProfileTabs" role="tablist">
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link active fw-semibold text-dark py-2.5 px-3 border-0 border-bottom border-primary border-3 bg-transparent" 
-                                id="tab-products-btn" data-bs-toggle="tab" data-bs-target="#tab-products-pane" type="button" role="tab">
+                        <button class="nav-link active fw-semibold py-2.5 px-3 border-0 bg-transparent"
+                                id="tab-products-btn" data-bs-target="#tab-products-pane" type="button" role="tab" aria-controls="tab-products-pane" aria-selected="true">
                             <i class="bi bi-bag-check me-1.5 text-primary"></i>Purchased Products Summary 
                             <span class="badge bg-primary-subtle text-primary rounded-pill ms-1" id="badgeTotalProductsCount">0</span>
                         </button>
                     </li>
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link fw-semibold text-secondary py-2.5 px-3 border-0 bg-transparent" 
-                                id="tab-orders-btn" data-bs-toggle="tab" data-bs-target="#tab-orders-pane" type="button" role="tab">
+                        <button class="nav-link fw-semibold py-2.5 px-3 border-0 bg-transparent"
+                                id="tab-orders-btn" data-bs-target="#tab-orders-pane" type="button" role="tab" aria-controls="tab-orders-pane" aria-selected="false">
                             <i class="bi bi-receipt-cutoff me-1.5 text-success"></i>Separate Purchase Invoices 
                             <span class="badge bg-secondary-subtle text-secondary rounded-pill ms-1" id="badgeTotalOrdersCount">0</span>
                         </button>
                     </li>
                     <li class="nav-item" role="presentation">
-                        <button class="nav-link fw-semibold text-secondary py-2.5 px-3 border-0 bg-transparent" 
-                                id="tab-details-btn" data-bs-toggle="tab" data-bs-target="#tab-details-pane" type="button" role="tab">
+                        <button class="nav-link fw-semibold py-2.5 px-3 border-0 bg-transparent"
+                                id="tab-details-btn" data-bs-target="#tab-details-pane" type="button" role="tab" aria-controls="tab-details-pane" aria-selected="false">
                             <i class="bi bi-person-lines-fill me-1.5 text-info"></i>Customer Information
                         </button>
                     </li>
@@ -661,7 +661,7 @@ $oneTimeCount = count($oneTimeCustomers ?? []) + count($unregisteredPurchases ??
                     <div class="tab-content" id="customerProfileTabContent">
                         
                         <!-- TAB 1: SEPARATELY PURCHASED PRODUCTS SUMMARY -->
-                        <div class="tab-pane fade show active" id="tab-products-pane" role="tabpanel">
+                        <div class="tab-pane fade show active" id="tab-products-pane" role="tabpanel" aria-labelledby="tab-products-btn">
                             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
                                 <div>
                                     <h6 class="fw-bold mb-0 text-dark">
@@ -702,7 +702,7 @@ $oneTimeCount = count($oneTimeCustomers ?? []) + count($unregisteredPurchases ??
                         </div>
 
                         <!-- TAB 2: SEPARATE PURCHASE ORDERS & TAX INVOICES -->
-                        <div class="tab-pane fade" id="tab-orders-pane" role="tabpanel">
+                        <div class="tab-pane fade" id="tab-orders-pane" role="tabpanel" aria-labelledby="tab-orders-btn">
                             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
                                 <div>
                                     <h6 class="fw-bold mb-0 text-dark">
@@ -734,7 +734,7 @@ $oneTimeCount = count($oneTimeCustomers ?? []) + count($unregisteredPurchases ??
                         </div>
 
                         <!-- TAB 3: CUSTOMER CONTACT & PROFILE INFORMATION -->
-                        <div class="tab-pane fade" id="tab-details-pane" role="tabpanel">
+                        <div class="tab-pane fade" id="tab-details-pane" role="tabpanel" aria-labelledby="tab-details-btn">
                             <div class="row g-3">
                                 <div class="col-md-6">
                                     <div class="card border rounded-3 shadow-none h-100">
@@ -835,12 +835,33 @@ $oneTimeCount = count($oneTimeCustomers ?? []) + count($unregisteredPurchases ??
     color: #ffffff !important;
     border-color: #4f46e5 !important;
 }
+.customer-profile-tabs .nav-link {
+    border-bottom: 3px solid transparent !important;
+    color: var(--bs-secondary-color);
+    transition: color 0.2s ease, border-color 0.2s ease;
+}
+.customer-profile-tabs .nav-link.active {
+    border-bottom-color: var(--bs-primary) !important;
+    color: var(--bs-dark) !important;
+}
 </style>
 
 <script>
 let currentLoadedCustomer = null;
 let currentLoadedProducts = [];
 let currentLoadedOrders = [];
+
+document.addEventListener('click', function(event) {
+    const button = event.target.closest('#customerProfileTabs [data-bs-target]');
+    if (!button) return;
+
+    if (typeof bootstrap === 'undefined' || !bootstrap.Tab) {
+        console.error('Bootstrap tabs are unavailable for the customer profile.');
+        return;
+    }
+
+    bootstrap.Tab.getOrCreateInstance(button).show();
+});
 
 function openCustomerInvoicesModal(button) {
     const modalEl = document.getElementById('customerInvoicesModal');
