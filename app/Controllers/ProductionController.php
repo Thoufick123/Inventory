@@ -209,12 +209,7 @@ class ProductionController {
              ORDER BY sr.id ASC",
             [(int)$id]
         );
-        $damageReasons = Database::fetchAll(
-            "SELECT DISTINCT TRIM(damage_reason) AS damage_reason
-             FROM roll_damages
-             WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
-             ORDER BY damage_reason ASC"
-        );
+        $damageReasons = $this->getDamageReasonOptions();
 
         Response::view('production.sellers.view', [
             'pageTitle'    => 'Supplier Details — ' . ($seller['name'] ?? ''),
@@ -1940,18 +1935,24 @@ class ProductionController {
     // FABRIC & ROLL DAMAGES / DEFECT MANAGEMENT
     // =========================================================================
 
+    private function getDamageReasonOptions(): array {
+        return Database::fetchAll(
+            "SELECT reason AS damage_reason FROM roll_damage_reasons
+             UNION
+             SELECT DISTINCT TRIM(damage_reason) AS damage_reason
+             FROM roll_damages
+             WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
+             ORDER BY damage_reason ASC"
+        );
+    }
+
     public function damageList(): void {
         $search = trim($_GET['search'] ?? '');
         $sellerId = !empty($_GET['seller_id']) ? (int)$_GET['seller_id'] : null;
         $reason = trim($_GET['reason'] ?? '');
         $status = trim($_GET['status'] ?? '');
         $resolutionType = trim($_GET['resolution_type'] ?? '');
-        $damageReasons = Database::fetchAll(
-            "SELECT DISTINCT TRIM(damage_reason) AS damage_reason
-             FROM roll_damages
-             WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
-             ORDER BY damage_reason ASC"
-        );
+        $damageReasons = $this->getDamageReasonOptions();
 
         $sql = "SELECT rd.*, 
                        s.name as seller_name, 
@@ -2054,6 +2055,36 @@ class ProductionController {
                 ['label' => 'Damages'],
             ],
         ]);
+    }
+
+    public function storeDamageReason(): void {
+        if (!CSRF::validateRequest()) {
+            Response::json(['success' => false, 'message' => 'Invalid security token or session expired.'], 403);
+        }
+
+        $reason = trim((string)($_POST['reason'] ?? ''));
+        if ($reason === '') {
+            Response::json(['success' => false, 'message' => 'Please enter a damage reason.'], 400);
+        }
+        if (mb_strlen($reason) > 255) {
+            Response::json(['success' => false, 'message' => 'Damage reason must not exceed 255 characters.'], 400);
+        }
+
+        try {
+            Database::execute("INSERT IGNORE INTO roll_damage_reasons (reason) VALUES (?)", [$reason]);
+            $savedReason = Database::fetchOne(
+                "SELECT reason FROM roll_damage_reasons WHERE reason = ?",
+                [$reason]
+            );
+            if (!$savedReason) {
+                throw new RuntimeException('Saved damage reason could not be read back.');
+            }
+
+            Response::json(['success' => true, 'reason' => $savedReason['reason']]);
+        } catch (\Throwable $e) {
+            error_log('Unable to save Production damage reason: ' . $e->getMessage());
+            Response::json(['success' => false, 'message' => 'Unable to save this damage reason. Please try again.'], 500);
+        }
     }
 
     public function storeDamage(): void {

@@ -365,7 +365,10 @@
                         <!-- Damage Reason -->
                         <div class="col-md-6">
                             <label class="form-label fw-bold" for="reportReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
-                            <input type="text" name="damage_reason" id="reportReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                            <div class="input-group">
+                                <input type="text" name="damage_reason" id="reportReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                                <button type="button" class="btn btn-outline-primary" onclick="addDamageReason('reportReasonInput')"><i class="bi bi-plus-lg me-1"></i>Add New</button>
+                            </div>
                             <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
                         </div>
 
@@ -491,7 +494,10 @@
                         <!-- Damage Reason -->
                         <div class="col-md-6">
                             <label class="form-label fw-bold" for="editReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
-                            <input type="text" name="damage_reason" id="editReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                            <div class="input-group">
+                                <input type="text" name="damage_reason" id="editReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                                <button type="button" class="btn btn-outline-primary" onclick="addDamageReason('editReasonInput')"><i class="bi bi-plus-lg me-1"></i>Add New</button>
+                            </div>
                             <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
                         </div>
 
@@ -1205,4 +1211,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 });
+
+async function addDamageReason(inputId) {
+    const newReason = window.prompt('Enter the new damage / defect reason:');
+    if (newReason === null) return;
+
+    const reason = newReason.trim();
+    if (!reason) {
+        window.alert('Please enter a damage reason.');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('_csrf_token', '<?= CSRF::token() ?>');
+    formData.append('reason', reason);
+
+    try {
+        const response = await fetch('<?= url('production/damages/reasons/store') ?>', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body: formData
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            throw new Error(result.message || 'Unable to save this damage reason.');
+        }
+
+        const datalist = document.getElementById('damageReasonOptions');
+        const savedReason = result.reason;
+        if (datalist && !Array.from(datalist.options).some(option => option.value.toLowerCase() === savedReason.toLowerCase())) {
+            const option = document.createElement('option');
+            option.value = savedReason;
+            datalist.appendChild(option);
+        }
+        const input = document.getElementById(inputId);
+        if (input) input.value = savedReason;
+    } catch (error) {
+        window.alert(error.message || 'Unable to save this damage reason.');
+    }
+}
 </script>

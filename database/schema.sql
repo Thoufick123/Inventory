@@ -1631,6 +1631,17 @@ CREATE TABLE `roll_damages` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
+-- Table structure for table `roll_damage_reasons`
+-- --------------------------------------------------------
+CREATE TABLE `roll_damage_reasons` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `reason` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_roll_damage_reasons_reason` (`reason`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
 -- Table structure for table `sale_items`
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `sale_items`;

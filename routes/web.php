@@ -343,6 +343,7 @@ class Router {
         // Production Fabric & Roll Damages
         $this->get('production/damages', 'ProductionController', 'damageList', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'view']]);
         $this->get('api/production/damages/scan-roll', 'ProductionController', 'ajaxLookupDamageRoll', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'create']]);
+        $this->post('production/damages/reasons/store', 'ProductionController', 'storeDamageReason', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'create']]);
         $this->post('production/damages/store', 'ProductionController', 'storeDamage', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'create']]);
         $this->get('production/damages/view/{id}', 'ProductionController', 'viewDamage', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'view']]);
         $this->post('production/damages/update/{id}', 'ProductionController', 'updateDamage', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'edit']]);
