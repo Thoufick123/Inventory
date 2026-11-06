@@ -240,6 +240,7 @@ $existingItems = array_map(static function (array $item): array {
             priceInput.min = '0';
             priceInput.step = '0.01';
             priceInput.className = 'form-control form-control-sm';
+            priceInput.name = `items[${index}][unit_price]`;
             priceInput.value = Number(item.unit_price).toFixed(2);
             priceInput.addEventListener('input', () => {
                 item.unit_price = Math.max(0, Number(priceInput.value) || 0);
@@ -255,6 +256,7 @@ $existingItems = array_map(static function (array $item): array {
             gstTopRow.className = 'd-flex gap-1';
             const gstTypeSelect = document.createElement('select');
             gstTypeSelect.className = 'form-select form-select-sm';
+            gstTypeSelect.name = `items[${index}][gst_type]`;
             gstTypeSelect.setAttribute('aria-label', 'GST type');
             [
                 ['SGST', 'SGST'],
@@ -272,6 +274,7 @@ $existingItems = array_map(static function (array $item): array {
 
             const taxInputTypeSelect = document.createElement('select');
             taxInputTypeSelect.className = 'form-select form-select-sm';
+            taxInputTypeSelect.name = `items[${index}][tax_input_type]`;
             taxInputTypeSelect.setAttribute('aria-label', 'Tax input type');
             [['PERCENT', 'Percentage (%)'], ['FIXED', 'Fixed amount / piece']].forEach(([value, label]) => {
                 const option = document.createElement('option');
@@ -351,7 +354,7 @@ $existingItems = array_map(static function (array $item): array {
             });
             removeCell.append(removeButton);
 
-            [['qc_item_id', item.qc_item_id], ['unit_price', item.unit_price], ['gst_type', item.gst_type || 'BOTH'], ['tax_input_type', item.tax_input_type || 'PERCENT']].forEach(([key, value]) => {
+            [['qc_item_id', item.qc_item_id]].forEach(([key, value]) => {
                 const input = document.createElement('input');
                 input.type = 'hidden';
                 input.name = `items[${index}][${key}]`;
