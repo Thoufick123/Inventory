@@ -553,20 +553,25 @@ class ProductionController {
             $gstType = strtoupper(trim((string)($submitted['gst_type'] ?? 'EXEMPTED')));
             $taxMode = strtoupper(trim((string)($submitted['tax_mode'] ?? 'PERCENT')));
             $taxInput = $submitted['tax_value'] ?? '0';
+            $cgstTaxInput = $submitted['cgst_tax_value'] ?? '0';
             if (!in_array($type, ['FABRIC_ROLL', 'GENERAL_SUPPLY'], true) || $quantity <= 0 || $unitPrice < 0) {
                 Session::flash('error', 'Each purchase line needs a valid item type, quantity, and non-negative price.');
                 Response::back();
                 return;
             }
-            if (!in_array($gstType, ['SGST', 'IGST', 'CGST', 'EXEMPTED'], true)
+            if (!in_array($gstType, ['SGST', 'IGST', 'CGST', 'BOTH', 'EXEMPTED'], true)
                 || !in_array($taxMode, ['PERCENT', 'AMOUNT'], true)
                 || !is_numeric($taxInput) || (float)$taxInput < 0
-                || ($gstType !== 'EXEMPTED' && $taxMode === 'PERCENT' && (float)$taxInput > 100)) {
+                || !is_numeric($cgstTaxInput) || (float)$cgstTaxInput < 0
+                || ($gstType !== 'EXEMPTED' && $taxMode === 'PERCENT' && (
+                    (float)$taxInput > 100 || ($gstType === 'BOTH' && (float)$cgstTaxInput > 100)
+                ))) {
                 Session::flash('error', 'Choose a valid GST type and enter a non-negative tax value; percentage tax cannot exceed 100%.');
                 Response::back();
                 return;
             }
             $taxValue = $gstType === 'EXEMPTED' ? 0.0 : (float)$taxInput;
+            $cgstTaxValue = $gstType === 'BOTH' ? (float)$cgstTaxInput : 0.0;
 
             if ($type === 'FABRIC_ROLL') {
                 $rollNumber = mb_strtoupper(trim((string)($submitted['roll_number'] ?? '')));
@@ -586,18 +591,25 @@ class ProductionController {
                 }
                 $quantity = (int)$quantity;
                 $baseTotal = round($unitPrice, 2);
-                $taxAmount = $gstType === 'EXEMPTED' ? 0.0 : $calculateTaxAmount($baseTotal, $taxMode, $taxValue);
+                $sgstAmount = in_array($gstType, ['SGST', 'BOTH'], true)
+                    ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue) : 0.0;
+                $cgstAmount = $gstType === 'CGST'
+                    ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue)
+                    : ($gstType === 'BOTH' ? $calculateTaxAmount($baseTotal, $taxMode, $cgstTaxValue) : 0.0);
+                $igstAmount = $gstType === 'IGST' ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue) : 0.0;
+                $taxAmount = $sgstAmount + $cgstAmount + $igstAmount;
                 $items[] = [
                     'type' => $type, 'item_name' => $fabricDescription, 'quantity' => $quantity,
                     'unit' => 'PCS', 'weight' => $weight, 'unit_price' => $unitPrice,
                     'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
+                    'cgst_tax_value' => $cgstTaxValue,
                     'tax_amount' => $taxAmount,
-                    'sgst_value' => $gstType === 'SGST' ? $taxValue : 0,
-                    'cgst_value' => $gstType === 'CGST' ? $taxValue : 0,
+                    'sgst_value' => in_array($gstType, ['SGST', 'BOTH'], true) ? $taxValue : 0,
+                    'cgst_value' => $gstType === 'CGST' ? $taxValue : $cgstTaxValue,
                     'igst_value' => $gstType === 'IGST' ? $taxValue : 0,
-                    'sgst_amount' => $gstType === 'SGST' ? $taxAmount : 0,
-                    'cgst_amount' => $gstType === 'CGST' ? $taxAmount : 0,
-                    'igst_amount' => $gstType === 'IGST' ? $taxAmount : 0,
+                    'sgst_amount' => $sgstAmount,
+                    'cgst_amount' => $cgstAmount,
+                    'igst_amount' => $igstAmount,
                     'line_total' => $baseTotal + $taxAmount,
                     'roll_number' => $rollNumber, 'color' => $color,
                     'design_name' => $design, 'design_count' => $designCount,
@@ -618,18 +630,25 @@ class ProductionController {
                 return;
             }
             $baseTotal = round($quantity * $unitPrice, 2);
-            $taxAmount = $gstType === 'EXEMPTED' ? 0.0 : $calculateTaxAmount($baseTotal, $taxMode, $taxValue);
+            $sgstAmount = in_array($gstType, ['SGST', 'BOTH'], true)
+                ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue) : 0.0;
+            $cgstAmount = $gstType === 'CGST'
+                ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue)
+                : ($gstType === 'BOTH' ? $calculateTaxAmount($baseTotal, $taxMode, $cgstTaxValue) : 0.0);
+            $igstAmount = $gstType === 'IGST' ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue) : 0.0;
+            $taxAmount = $sgstAmount + $cgstAmount + $igstAmount;
             $items[] = [
                 'type' => $type, 'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
                 'unit' => $unit, 'weight' => null, 'unit_price' => $unitPrice,
                 'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
+                'cgst_tax_value' => $cgstTaxValue,
                 'tax_amount' => $taxAmount,
-                'sgst_value' => $gstType === 'SGST' ? $taxValue : 0,
-                'cgst_value' => $gstType === 'CGST' ? $taxValue : 0,
+                'sgst_value' => in_array($gstType, ['SGST', 'BOTH'], true) ? $taxValue : 0,
+                'cgst_value' => $gstType === 'CGST' ? $taxValue : $cgstTaxValue,
                 'igst_value' => $gstType === 'IGST' ? $taxValue : 0,
-                'sgst_amount' => $gstType === 'SGST' ? $taxAmount : 0,
-                'cgst_amount' => $gstType === 'CGST' ? $taxAmount : 0,
-                'igst_amount' => $gstType === 'IGST' ? $taxAmount : 0,
+                'sgst_amount' => $sgstAmount,
+                'cgst_amount' => $cgstAmount,
+                'igst_amount' => $igstAmount,
                 'line_total' => $baseTotal + $taxAmount, 'roll_number' => null,
                 'color' => null, 'design_name' => null, 'design_count' => null, 'photo_url' => null,
             ];

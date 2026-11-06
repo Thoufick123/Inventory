@@ -68,6 +68,7 @@ $taxLabels = ['SGST' => 'SGST', 'CGST' => 'CGST', 'IGST' => 'IGST'];
                     ? trim(($item['item_name'] ?? '') . ' — ' . ($item['roll_number'] ?? '') . ' — ' . ($item['color'] ?? '') . ' / ' . ($item['design_name'] ?? ''), ' —/')
                     : ($item['item_name'] ?? '');
                 if ($taxType === 'LEGACY') $taxType = $itemTax > 0 ? 'SGST / CGST' : 'Exempted';
+                if ($taxType === 'BOTH') $taxType = 'SGST + CGST';
             ?>
             <tr>
                 <td><?= $index + 1 ?></td>

@@ -64,7 +64,7 @@
                                 ?>
                                 <small class="d-block text-muted">
                                     Base ₹<?= number_format((float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1), 2) ?>
-                                    · <?= e($purchaseItemTaxType === 'LEGACY' ? 'Legacy SGST/CGST' : $purchaseItemTaxType) ?> ₹<?= number_format($purchaseItemTaxAmount, 2) ?>
+                                    · <?= e($purchaseItemTaxType === 'LEGACY' ? 'Legacy SGST/CGST' : ($purchaseItemTaxType === 'BOTH' ? 'SGST + CGST' : $purchaseItemTaxType)) ?> ₹<?= number_format($purchaseItemTaxAmount, 2) ?>
                                     · Line total ₹<?= number_format((float)$item['total_price'], 2) ?>
                                 </small>
                             </div>
