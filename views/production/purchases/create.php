@@ -140,6 +140,23 @@
         </div>
         <div class="card-body" id="suppliesContainer">
             <div id="emptySupplyMessage" class="small text-muted">No general supplies added.</div>
+            <div class="card border shadow-sm mt-3">
+                <div class="card-header bg-light py-2 px-3 d-flex align-items-center justify-content-between">
+                    <span class="fw-bold small"><i class="bi bi-table me-1 text-success"></i>Other Garment Supplies Details Table</span>
+                    <span class="badge bg-secondary-subtle text-secondary border" id="supplyTableCountBadge">0 Items</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover table-bordered align-middle mb-0" style="font-size:13px">
+                        <thead class="table-light small text-uppercase">
+                            <tr><th class="text-center">#</th><th>Item Name / Description</th><th class="text-end">Quantity</th><th>Unit</th><th class="text-end">Unit Price</th><th class="text-end">Base Value</th><th class="text-end">SGST</th><th class="text-end">CGST</th><th class="text-end bg-success-subtle text-success">Total Value</th></tr>
+                        </thead>
+                        <tbody id="supplyDetailsTableBody">
+                            <tr><td colspan="9" class="text-center text-muted py-4">Add garment supplies to see their purchase details.</td></tr>
+                        </tbody>
+                        <tfoot id="supplyDetailsTableFoot" class="table-light fw-bold"></tfoot>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -326,12 +343,30 @@
             const taxes = readItemTaxes(card, base);
             return sum + base + taxes.sgst + taxes.cgst;
         }, 0);
-        const supplies = Array.from(suppliesContainer.querySelectorAll('.supply-row')).reduce((sum, row) => {
-            const base = (Number(row.querySelector('.supply-quantity').value) || 0) * (Number(row.querySelector('.supply-price').value) || 0);
-            const taxes = readItemTaxes(row, base);
-            return sum + base + taxes.sgst + taxes.cgst;
-        }, 0);
-        document.getElementById('purchaseTotal').textContent = money(rolls + supplies);
+        const supplyRows = Array.from(suppliesContainer.querySelectorAll('.supply-row'));
+        const supplyTotals = {base: 0, sgst: 0, cgst: 0, total: 0};
+        const tableBody = document.getElementById('supplyDetailsTableBody');
+        const tableFoot = document.getElementById('supplyDetailsTableFoot');
+        document.getElementById('supplyTableCountBadge').textContent = supplyRows.length + (supplyRows.length === 1 ? ' Item' : ' Items');
+        if (!supplyRows.length) {
+            tableBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Add garment supplies to see their purchase details.</td></tr>';
+            tableFoot.innerHTML = '';
+        } else {
+            tableBody.innerHTML = supplyRows.map((row, index) => {
+                const quantity = Number(row.querySelector('.supply-quantity').value) || 0;
+                const unitPrice = Number(row.querySelector('.supply-price').value) || 0;
+                const base = quantity * unitPrice;
+                const taxes = readItemTaxes(row, base);
+                const total = base + taxes.sgst + taxes.cgst;
+                supplyTotals.base += base;
+                supplyTotals.sgst += taxes.sgst;
+                supplyTotals.cgst += taxes.cgst;
+                supplyTotals.total += total;
+                return `<tr><td class="text-center">${index + 1}</td><td>${safe(row.querySelector('.supply-name').value.trim() || '—')}</td><td class="text-end">${quantity.toLocaleString('en-IN', {maximumFractionDigits:3})}</td><td>${safe(row.querySelector('.supply-unit').selectedOptions[0].textContent)}</td><td class="text-end">${money(unitPrice)}</td><td class="text-end">${money(base)}</td><td class="text-end">${money(taxes.sgst)}</td><td class="text-end">${money(taxes.cgst)}</td><td class="text-end fw-bold text-success">${money(total)}</td></tr>`;
+            }).join('');
+            tableFoot.innerHTML = `<tr><td colspan="5" class="text-end">Totals</td><td class="text-end">${money(supplyTotals.base)}</td><td class="text-end">${money(supplyTotals.sgst)}</td><td class="text-end">${money(supplyTotals.cgst)}</td><td class="text-end text-success">${money(supplyTotals.total)}</td></tr>`;
+        }
+        document.getElementById('purchaseTotal').textContent = money(rolls + supplyTotals.total);
     }
 
     function updateCodes() {
