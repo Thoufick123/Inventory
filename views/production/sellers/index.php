@@ -138,6 +138,14 @@
                                 $rollNumbers = implode(' ', array_filter(array_column($s['rolls'] ?? [], 'roll_number')));
                                 $designNames = implode(' ', array_filter(array_column($s['rolls'] ?? [], 'design_name')));
                                 $rollColors  = implode(' ', array_filter(array_column($s['rolls'] ?? [], 'color')));
+                                $stickerRanges = array_values(array_filter(
+                                    $s['rolls'] ?? [],
+                                    static fn($roll) => !empty($roll['start_code'])
+                                ));
+                                $stickerCodes = implode(' ', array_merge(
+                                    array_column($stickerRanges, 'start_code'),
+                                    array_column($stickerRanges, 'end_code')
+                                ));
                                 $totalRollQuantity = array_sum(array_map(
                                     static fn($roll) => (int)($roll['quantity'] ?? 0),
                                     $s['rolls'] ?? []
@@ -151,7 +159,7 @@
                                 data-gst="<?= strtolower(e($s['gst_number'] ?? '')) ?>"
                                 data-material="<?= strtolower(e($s['material_type'] ?? '')) ?>"
                                 data-colors="<?= strtolower(e($s['colors'] ?? '')) ?> <?= strtolower(e($rollColors)) ?>"
-                                data-rolls="<?= strtolower(e($rollNumbers)) ?>"
+                                data-rolls="<?= strtolower(e($rollNumbers . ' ' . $stickerCodes)) ?>"
                                 data-designs="<?= strtolower(e($designNames)) ?>"
                                 data-status="<?= $s['is_active'] ? '1' : '0' ?>">
                                 <!-- Supplier / Mill Name & Contacts -->
@@ -255,6 +263,20 @@
                                             </span>
                                         <?php endif; ?>
                                     </div>
+                                    <?php if (!empty($stickerRanges)): ?>
+                                        <div class="d-flex flex-wrap gap-1 mt-2" aria-label="Fabric QR sticker ranges">
+                                            <?php foreach ($stickerRanges as $stickerRoll): ?>
+                                                <?php
+                                                    $rangeStart = (string)$stickerRoll['start_code'];
+                                                    $rangeEnd = (string)($stickerRoll['end_code'] ?? '');
+                                                    $rangeText = $rangeStart . ($rangeEnd !== '' && $rangeEnd !== $rangeStart ? ' – ' . $rangeEnd : '');
+                                                ?>
+                                                <span class="badge bg-light text-dark border font-monospace" title="<?= e(($stickerRoll['roll_number'] ?? 'Roll') . ': ' . $rangeText) ?>">
+                                                    <i class="bi bi-qr-code text-primary me-1"></i><?= e($rangeText) ?>
+                                                </span>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </td>
 
                                 <!-- Weight & Total Price -->
