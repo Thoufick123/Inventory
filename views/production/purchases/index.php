@@ -44,17 +44,24 @@
                     <td>
                         <?php foreach ($purchase['items'] as $item): ?>
                             <div class="small">
+                                <span class="badge <?= $item['item_type'] === 'FABRIC_ROLL' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary' ?>">
+                                    <?= $item['item_type'] === 'FABRIC_ROLL' ? 'Fabric roll' : 'Supply' ?>
+                                </span>
                                 <?php if ($item['item_type'] === 'FABRIC_ROLL'): ?>
-                                    <span class="badge bg-primary-subtle text-primary">Fabric roll</span>
                                     <?= e($item['roll_number']) ?> · RQ <?= number_format((float)$item['quantity']) ?> · <?= number_format((float)$item['weight_kg'], 2) ?> kg
                                     <?php if (!empty($item['start_code'])): ?><span class="font-monospace text-muted"><?= e($item['start_code']) ?>–<?= e($item['end_code']) ?></span><?php endif; ?>
                                     <?php if (!empty($item['seller_roll_id'])): ?>
                                         <a href="<?= url('production/sellers/roll-labels/' . $item['seller_roll_id']) ?>" target="_blank" rel="noopener" class="text-nowrap"><i class="bi bi-qr-code me-1"></i>Labels</a>
                                     <?php endif; ?>
                                 <?php else: ?>
-                                    <span class="badge bg-secondary-subtle text-secondary">Supply</span>
                                     <?= e($item['item_name']) ?> · <?= number_format((float)$item['quantity'], 3) ?> <?= e($item['unit']) ?>
                                 <?php endif; ?>
+                                <small class="d-block text-muted">
+                                    Base ₹<?= number_format((float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1), 2) ?>
+                                    · SGST ₹<?= number_format((float)$item['sgst_amount'], 2) ?>
+                                    · CGST ₹<?= number_format((float)$item['cgst_amount'], 2) ?>
+                                    · Line total ₹<?= number_format((float)$item['total_price'], 2) ?>
+                                </small>
                             </div>
                         <?php endforeach; ?>
                     </td>

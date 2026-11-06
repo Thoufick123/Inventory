@@ -113,9 +113,9 @@
                 <div class="table-responsive">
                     <table class="table table-hover table-bordered align-middle mb-0" style="font-size:13px">
                         <thead class="table-light small text-uppercase">
-                            <tr><th class="text-center">#</th><th>Photo</th><th>Roll Code</th><th>Color / Shade</th><th>Design / Pattern</th><th class="text-center">Designs</th><th class="text-end">Total RQ</th><th class="text-end">Weight</th><th class="text-end">Price</th><th class="text-end bg-success-subtle text-success">Total Value</th><th class="text-center">Status</th></tr>
+                            <tr><th class="text-center">#</th><th>Photo</th><th>Roll Code</th><th>Color / Shade</th><th>Design / Pattern</th><th class="text-center">Designs</th><th class="text-end">Total RQ</th><th class="text-end">Weight</th><th class="text-end">Price</th><th class="text-end">SGST</th><th class="text-end">CGST</th><th class="text-end bg-success-subtle text-success">Total Value</th><th class="text-center">Status</th></tr>
                         </thead>
-                        <tbody id="rollDetailsTableBody"><tr><td colspan="11" class="text-center text-muted py-4">Add fabric rolls to see their inventory details.</td></tr></tbody>
+                        <tbody id="rollDetailsTableBody"><tr><td colspan="13" class="text-center text-muted py-4">Add fabric rolls to see their inventory details.</td></tr></tbody>
                         <tfoot id="rollDetailsTableFoot" class="table-light fw-bold"></tfoot>
                     </table>
                 </div>
@@ -127,7 +127,7 @@
                     <div><small class="text-muted d-block">Total RQ</small><strong id="summaryTotalRQ">0 RQ</strong></div>
                     <div><small class="text-muted d-block">Colors / Designs</small><strong id="summaryColorsDesigns">0 Colors • 0 Designs</strong></div>
                     <div><small class="text-muted d-block">Total Weight</small><strong id="summaryTotalWeight">0.00 kg</strong></div>
-                    <div><small class="text-muted d-block">Total Price</small><strong id="summaryTotalPrice" class="text-success">₹0.00</strong></div>
+                    <div><small class="text-muted d-block">Total incl. Tax</small><strong id="summaryTotalPrice" class="text-success">₹0.00</strong></div>
                 </div>
             </div>
         </div>
@@ -189,6 +189,9 @@
                 <div class="col-lg-1 col-md-3"><label class="form-label required">RQ *</label><input type="number" class="form-control roll-quantity" min="1" step="1" value="1" required></div>
                 <div class="col-lg-2 col-md-3"><label class="form-label required">Weight (kg) *</label><div class="input-group"><input type="number" class="form-control roll-weight" min="0.01" step="0.01" required><span class="input-group-text">kg</span></div></div>
                 <div class="col-lg-2 col-md-3"><label class="form-label required">Price (₹) *</label><div class="input-group"><span class="input-group-text">₹</span><input type="number" class="form-control roll-price" min="0.01" step="0.01" required></div></div>
+                <div class="col-lg-3 col-md-4"><label class="form-label">Tax Input Type</label><select class="form-select item-tax-mode"><option value="PERCENT">Percentage (%)</option><option value="AMOUNT">Amount (₹)</option></select></div>
+                <div class="col-lg-3 col-md-4"><label class="form-label">SGST <span class="tax-unit">(%)</span></label><input type="number" class="form-control item-sgst" min="0" max="100" step="0.01" value="0"></div>
+                <div class="col-lg-3 col-md-4"><label class="form-label">CGST <span class="tax-unit">(%)</span></label><input type="number" class="form-control item-cgst" min="0" max="100" step="0.01" value="0"></div>
                 <div class="col-md-6"><label class="form-label">Roll Sample Photo <small class="text-muted">(Optional — JPG, PNG, WEBP)</small></label><input type="file" class="form-control roll-photo" accept=".jpg,.jpeg,.png,.webp"></div>
                 <div class="col-md-6 roll-preview d-none"><img class="img-thumbnail" style="height:54px" alt="Roll photo preview"></div>
             </div>
@@ -204,6 +207,9 @@
         <div class="col-md-2"><label class="form-label">Unit Price (₹) *</label><input type="number" class="form-control supply-price" min="0" step="0.01" value="0" required></div>
         <div class="col-md-1"><button type="button" class="btn btn-outline-danger remove-supply" title="Remove supply"><i class="bi bi-trash"></i></button></div>
         <div class="col-md-3 custom-unit d-none"><label class="form-label">Unit Name *</label><input class="form-control custom-unit-name" maxlength="30"></div>
+        <div class="col-md-3"><label class="form-label">Tax Input Type</label><select class="form-select item-tax-mode"><option value="PERCENT">Percentage (%)</option><option value="AMOUNT">Amount (₹)</option></select></div>
+        <div class="col-md-3"><label class="form-label">SGST <span class="tax-unit">(%)</span></label><input type="number" class="form-control item-sgst" min="0" max="100" step="0.01" value="0"></div>
+        <div class="col-md-3"><label class="form-label">CGST <span class="tax-unit">(%)</span></label><input type="number" class="form-control item-cgst" min="0" max="100" step="0.01" value="0"></div>
     </div>
 </template>
 
@@ -223,6 +229,30 @@
     let sequencePrefix = 'FB<?= date('my') ?>';
     const money = value => '₹' + (Number(value) || 0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
     const safe = value => String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const calculateTaxes = (base, mode, sgstValue, cgstValue) => {
+        const sgst = Number(sgstValue) || 0;
+        const cgst = Number(cgstValue) || 0;
+        if (mode === 'AMOUNT') return {sgst, cgst};
+        return {sgst: Math.round(base * sgst) / 100, cgst: Math.round(base * cgst) / 100};
+    };
+
+    function updateTaxInputLabels(item) {
+        const isPercentage = item.querySelector('.item-tax-mode').value === 'PERCENT';
+        item.querySelectorAll('.tax-unit').forEach(label => { label.textContent = isPercentage ? '(%)' : '(₹)'; });
+        item.querySelectorAll('.item-sgst, .item-cgst').forEach(input => {
+            if (isPercentage) input.max = '100';
+            else input.removeAttribute('max');
+        });
+    }
+
+    function readItemTaxes(item, base) {
+        return calculateTaxes(
+            base,
+            item.querySelector('.item-tax-mode').value,
+            item.querySelector('.item-sgst').value,
+            item.querySelector('.item-cgst').value
+        );
+    }
 
     function updateSupplierDetails() {
         const selected = supplierSelect.options[supplierSelect.selectedIndex];
@@ -251,7 +281,11 @@
         const cards = Array.from(rollsContainer.querySelectorAll('.roll-card'));
         document.getElementById('fabricDescription').required = cards.length > 0;
         const totalWeight = cards.reduce((sum, card) => sum + (Number(card.querySelector('.roll-weight').value) || 0), 0);
-        const totalPrice = cards.reduce((sum, card) => sum + (Number(card.querySelector('.roll-price').value) || 0), 0);
+        const totalPrice = cards.reduce((sum, card) => {
+            const price = Number(card.querySelector('.roll-price').value) || 0;
+            const taxes = readItemTaxes(card, price);
+            return sum + price + taxes.sgst + taxes.cgst;
+        }, 0);
         const totalRq = cards.reduce((sum, card) => sum + (Number(card.querySelector('.roll-quantity').value) || 0), 0);
         const colors = new Set(cards.map(card => card.querySelector('.roll-color').value.trim().toUpperCase()).filter(Boolean));
         const designs = new Set(cards.map(card => card.querySelector('.roll-design').value.trim().toUpperCase()).filter(Boolean));
@@ -265,12 +299,14 @@
 
         const body = document.getElementById('rollDetailsTableBody');
         if (!cards.length) {
-            body.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">Add fabric rolls to see their inventory details.</td></tr>';
+            body.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-4">Add fabric rolls to see their inventory details.</td></tr>';
         } else {
             body.innerHTML = cards.map((card, index) => {
                 const qty = Number(card.querySelector('.roll-quantity').value) || 0;
                 const weight = Number(card.querySelector('.roll-weight').value) || 0;
                 const price = Number(card.querySelector('.roll-price').value) || 0;
+                const taxes = readItemTaxes(card, price);
+                const totalValue = price + taxes.sgst + taxes.cgst;
                 const start = Number(card.dataset.startSeq) || 0;
                 const end = start + Math.max(qty, 1) - 1;
                 const codeStart = start ? sequencePrefix + String(start).padStart(2, '0') : '—';
@@ -278,15 +314,23 @@
                 const photo = card.querySelector('.roll-photo').files[0];
                 const previewImg = card.querySelector('.roll-preview img');
                 const photoHtml = photo && previewImg.src ? `<img src="${previewImg.src}" alt="Roll" style="width:38px;height:38px;object-fit:cover">` : '<span class="text-muted"><i class="bi bi-camera"></i></span>';
-                return `<tr><td class="text-center">${index + 1}</td><td>${photoHtml}</td><td><strong>${safe(card.querySelector('.roll-number').value)}</strong><small class="d-block font-monospace">${safe(codeStart)}${codeStart !== codeEnd ? '–' + safe(codeEnd) : ''}</small></td><td>${safe(card.querySelector('.roll-color').value || '—')}</td><td>${safe(card.querySelector('.roll-design').value || '—')}</td><td class="text-center">${Number(card.querySelector('.roll-design-count').value) || 0}</td><td class="text-end">${qty.toLocaleString('en-IN')} RQ</td><td class="text-end">${weight.toFixed(2)} kg</td><td class="text-end">${money(price)}</td><td class="text-end fw-bold text-success">${money(price)}</td><td class="text-center"><span class="badge bg-success-subtle text-success">New Roll (${qty} RQ)</span></td></tr>`;
+                return `<tr><td class="text-center">${index + 1}</td><td>${photoHtml}</td><td><strong>${safe(card.querySelector('.roll-number').value)}</strong><small class="d-block font-monospace">${safe(codeStart)}${codeStart !== codeEnd ? '–' + safe(codeEnd) : ''}</small></td><td>${safe(card.querySelector('.roll-color').value || '—')}</td><td>${safe(card.querySelector('.roll-design').value || '—')}</td><td class="text-center">${Number(card.querySelector('.roll-design-count').value) || 0}</td><td class="text-end">${qty.toLocaleString('en-IN')} RQ</td><td class="text-end">${weight.toFixed(2)} kg</td><td class="text-end">${money(price)}</td><td class="text-end">${money(taxes.sgst)}</td><td class="text-end">${money(taxes.cgst)}</td><td class="text-end fw-bold text-success">${money(totalValue)}</td><td class="text-center"><span class="badge bg-success-subtle text-success">New Roll (${qty} RQ)</span></td></tr>`;
             }).join('');
         }
         updateTotal();
     }
 
     function updateTotal() {
-        const rolls = Array.from(rollsContainer.querySelectorAll('.roll-price')).reduce((sum, input) => sum + (Number(input.value) || 0), 0);
-        const supplies = Array.from(suppliesContainer.querySelectorAll('.supply-row')).reduce((sum, row) => sum + (Number(row.querySelector('.supply-quantity').value) || 0) * (Number(row.querySelector('.supply-price').value) || 0), 0);
+        const rolls = Array.from(rollsContainer.querySelectorAll('.roll-card')).reduce((sum, card) => {
+            const base = Number(card.querySelector('.roll-price').value) || 0;
+            const taxes = readItemTaxes(card, base);
+            return sum + base + taxes.sgst + taxes.cgst;
+        }, 0);
+        const supplies = Array.from(suppliesContainer.querySelectorAll('.supply-row')).reduce((sum, row) => {
+            const base = (Number(row.querySelector('.supply-quantity').value) || 0) * (Number(row.querySelector('.supply-price').value) || 0);
+            const taxes = readItemTaxes(row, base);
+            return sum + base + taxes.sgst + taxes.cgst;
+        }, 0);
         document.getElementById('purchaseTotal').textContent = money(rolls + supplies);
     }
 
@@ -313,7 +357,8 @@
         const names = {
             '.roll-number': 'roll_number', '.roll-color': 'color', '.roll-design': 'design_name',
             '.roll-design-count': 'design_count', '.roll-quantity': 'quantity', '.roll-weight': 'weight_kg',
-            '.roll-price': 'unit_price', '.roll-photo': null
+            '.roll-price': 'unit_price', '.item-tax-mode': 'tax_mode', '.item-sgst': 'sgst_value',
+            '.item-cgst': 'cgst_value', '.roll-photo': null
         };
         Object.entries(names).forEach(([selector, field]) => {
             const input = card.querySelector(selector);
@@ -331,6 +376,10 @@
             updateCodes();
         });
         card.querySelectorAll('input').forEach(input => input.addEventListener('input', updateCodes));
+        card.querySelector('.item-tax-mode').addEventListener('change', () => {
+            updateTaxInputLabels(card);
+            updateCodes();
+        });
         card.querySelector('.roll-photo').addEventListener('change', event => {
             const file = event.target.files[0];
             const preview = card.querySelector('.roll-preview');
@@ -357,6 +406,9 @@
         row.querySelector('.supply-quantity').name = `items[${index + 1000}][quantity]`;
         row.querySelector('.supply-unit').name = `items[${index + 1000}][unit]`;
         row.querySelector('.supply-price').name = `items[${index + 1000}][unit_price]`;
+        row.querySelector('.item-tax-mode').name = `items[${index + 1000}][tax_mode]`;
+        row.querySelector('.item-sgst').name = `items[${index + 1000}][sgst_value]`;
+        row.querySelector('.item-cgst').name = `items[${index + 1000}][cgst_value]`;
         const type = document.createElement('input');
         type.type = 'hidden'; type.name = `items[${index + 1000}][item_type]`; type.value = 'GENERAL_SUPPLY'; row.appendChild(type);
         row.querySelector('.supply-unit').addEventListener('change', event => {
@@ -370,6 +422,11 @@
             updateTotal();
         });
         row.querySelectorAll('input').forEach(input => input.addEventListener('input', updateTotal));
+        row.querySelector('.item-tax-mode').addEventListener('change', () => {
+            updateTaxInputLabels(row);
+            updateTotal();
+        });
+        updateTaxInputLabels(row);
         row.querySelector('.remove-supply').addEventListener('click', () => { row.remove(); if (!suppliesContainer.querySelector('.supply-row')) document.getElementById('emptySupplyMessage').classList.remove('d-none'); updateTotal(); });
         document.getElementById('emptySupplyMessage').classList.add('d-none');
         suppliesContainer.appendChild(row);

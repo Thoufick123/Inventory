@@ -489,18 +489,36 @@ class ProductionController {
         $items = [];
         $allowedUnits = ['PCS', 'KG', 'METRE', 'LITRE', 'BOX', 'PACK', 'PAIR', 'SET', 'BUNDLE'];
         $fabricDescription = mb_strtoupper(trim((string)($_POST['fabric_description'] ?? '')));
+        $calculateTaxAmount = static function (float $base, string $mode, float $value): float {
+            return round($mode === 'AMOUNT' ? $value : ($base * $value / 100), 2);
+        };
         foreach ($submittedItems as $index => $submitted) {
             if (!is_array($submitted)) {
                 continue;
             }
             $type = strtoupper(trim((string)($submitted['item_type'] ?? '')));
-            $quantity = (float)($submitted['quantity'] ?? 0);
-            $unitPrice = (float)($submitted['unit_price'] ?? -1);
+            $quantityInput = $submitted['quantity'] ?? null;
+            $unitPriceInput = $submitted['unit_price'] ?? null;
+            $quantity = is_numeric($quantityInput) ? (float)$quantityInput : 0;
+            $unitPrice = is_numeric($unitPriceInput) ? (float)$unitPriceInput : -1;
+            $taxMode = strtoupper(trim((string)($submitted['tax_mode'] ?? 'PERCENT')));
+            $sgstInput = $submitted['sgst_value'] ?? '0';
+            $cgstInput = $submitted['cgst_value'] ?? '0';
             if (!in_array($type, ['FABRIC_ROLL', 'GENERAL_SUPPLY'], true) || $quantity <= 0 || $unitPrice < 0) {
                 Session::flash('error', 'Each purchase line needs a valid item type, quantity, and non-negative price.');
                 Response::back();
                 return;
             }
+            if (!in_array($taxMode, ['PERCENT', 'AMOUNT'], true)
+                || !is_numeric($sgstInput) || !is_numeric($cgstInput)
+                || (float)$sgstInput < 0 || (float)$cgstInput < 0
+                || ($taxMode === 'PERCENT' && ((float)$sgstInput > 100 || (float)$cgstInput > 100))) {
+                Session::flash('error', 'SGST and CGST must be non-negative values; percentage taxes cannot exceed 100%.');
+                Response::back();
+                return;
+            }
+            $sgstValue = (float)$sgstInput;
+            $cgstValue = (float)$cgstInput;
 
             if ($type === 'FABRIC_ROLL') {
                 $rollNumber = mb_strtoupper(trim((string)($submitted['roll_number'] ?? '')));
@@ -519,10 +537,17 @@ class ProductionController {
                     return;
                 }
                 $quantity = (int)$quantity;
+                $baseTotal = round($unitPrice, 2);
+                $sgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $sgstValue);
+                $cgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $cgstValue);
                 $items[] = [
                     'type' => $type, 'item_name' => $fabricDescription, 'quantity' => $quantity,
                     'unit' => 'PCS', 'weight' => $weight, 'unit_price' => $unitPrice,
-                    'line_total' => $unitPrice, 'roll_number' => $rollNumber, 'color' => $color,
+                    'tax_mode' => $taxMode,
+                    'sgst_value' => $sgstValue, 'cgst_value' => $cgstValue,
+                    'sgst_amount' => $sgstAmount, 'cgst_amount' => $cgstAmount,
+                    'line_total' => $baseTotal + $sgstAmount + $cgstAmount,
+                    'roll_number' => $rollNumber, 'color' => $color,
                     'design_name' => $design, 'design_count' => $designCount,
                     'form_index' => (string)$index, 'photo_url' => null,
                 ];
@@ -540,10 +565,16 @@ class ProductionController {
                 Response::back();
                 return;
             }
+            $baseTotal = round($quantity * $unitPrice, 2);
+            $sgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $sgstValue);
+            $cgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $cgstValue);
             $items[] = [
                 'type' => $type, 'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
                 'unit' => $unit, 'weight' => null, 'unit_price' => $unitPrice,
-                'line_total' => round($quantity * $unitPrice, 2), 'roll_number' => null,
+                'tax_mode' => $taxMode,
+                'sgst_value' => $sgstValue, 'cgst_value' => $cgstValue,
+                'sgst_amount' => $sgstAmount, 'cgst_amount' => $cgstAmount,
+                'line_total' => $baseTotal + $sgstAmount + $cgstAmount, 'roll_number' => null,
                 'color' => null, 'design_name' => null, 'design_count' => null, 'photo_url' => null,
             ];
         }
@@ -640,10 +671,12 @@ class ProductionController {
                 Database::execute(
                     "INSERT INTO production_purchase_items
                         (purchase_id, item_type, item_name, quantity, unit, weight_kg, unit_price, total_price,
+                         tax_input_type, sgst_value, cgst_value, sgst_amount, cgst_amount,
                          roll_number, color, design_name, design_count, seller_roll_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [$purchaseId, $item['type'], $item['item_name'], $item['quantity'], $item['unit'], $item['weight'],
-                        $item['unit_price'], $item['line_total'], $item['roll_number'], $item['color'],
+                        $item['unit_price'], $item['line_total'], $item['tax_mode'], $item['sgst_value'], $item['cgst_value'],
+                        $item['sgst_amount'], $item['cgst_amount'], $item['roll_number'], $item['color'],
                         $item['design_name'], $item['design_count'], $sellerRollId]
                 );
             }
