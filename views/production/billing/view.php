@@ -13,21 +13,24 @@
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body">
         <div class="row g-4">
+            <?php if (($bill['buyer_type'] ?? 'COMPANY') === 'CUSTOMER'): ?>
             <div class="col-md-6">
-                <div class="text-uppercase text-muted small fw-semibold mb-2">Buyer company</div>
-                <h5><?= htmlspecialchars($bill['company_name']) ?></h5>
-                <div><?= nl2br(htmlspecialchars($bill['company_address'] ?? '')) ?></div>
-                <div><?= htmlspecialchars($bill['company_phone'] ?? '') ?> <?= htmlspecialchars($bill['company_email'] ?? '') ?></div>
-                <?php if (!empty($bill['company_gstin'])): ?><div class="small text-muted">GSTIN: <?= htmlspecialchars($bill['company_gstin']) ?></div><?php endif; ?>
-            </div>
-            <div class="col-md-6">
-                <div class="text-uppercase text-muted small fw-semibold mb-2">Customer / contact</div>
-                <h5><?= htmlspecialchars($bill['customer_name']) ?></h5>
-                <div><?= htmlspecialchars($bill['customer_phone']) ?></div>
+                <div class="text-uppercase text-muted small fw-semibold mb-2">Customer</div>
+                <h5><?= htmlspecialchars($bill['customer_name'] ?? '') ?></h5>
+                <div><?= htmlspecialchars($bill['customer_phone'] ?? '') ?></div>
                 <div><?= nl2br(htmlspecialchars($bill['customer_address'] ?? '')) ?></div>
                 <div><?= htmlspecialchars(trim(($bill['customer_city'] ?? '') . ' ' . ($bill['customer_state'] ?? ''))) ?></div>
                 <?php if (!empty($bill['customer_gstin'])): ?><div class="small text-muted">GSTIN: <?= htmlspecialchars($bill['customer_gstin']) ?></div><?php endif; ?>
             </div>
+            <?php else: ?>
+            <div class="col-md-6">
+                <div class="text-uppercase text-muted small fw-semibold mb-2">Buyer company</div>
+                <h5><?= htmlspecialchars($bill['company_name'] ?? '') ?></h5>
+                <div><?= nl2br(htmlspecialchars($bill['company_address'] ?? '')) ?></div>
+                <div><?= htmlspecialchars($bill['company_phone'] ?? '') ?> <?= htmlspecialchars($bill['company_email'] ?? '') ?></div>
+                <?php if (!empty($bill['company_gstin'])): ?><div class="small text-muted">GSTIN: <?= htmlspecialchars($bill['company_gstin']) ?></div><?php endif; ?>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>

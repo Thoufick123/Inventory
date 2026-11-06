@@ -15,8 +15,7 @@
                 <tr>
                     <th>Bill No.</th>
                     <th>Date</th>
-                    <th>Buyer Company</th>
-                    <th>Customer / Contact</th>
+                    <th>Bill To</th>
                     <th class="text-center">Lines</th>
                     <th class="text-end">Total</th>
                     <th>Status</th>
@@ -31,10 +30,10 @@
                         <tr>
                             <td class="fw-semibold"><?= htmlspecialchars($bill['bill_number']) ?></td>
                             <td><?= htmlspecialchars(date('d M Y', strtotime($bill['bill_date']))) ?></td>
-                            <td><?= htmlspecialchars($bill['company_name']) ?></td>
                             <td>
-                                <div><?= htmlspecialchars($bill['customer_name']) ?></div>
-                                <small class="text-muted"><?= htmlspecialchars($bill['customer_phone']) ?></small>
+                                <span class="badge text-bg-light"><?= htmlspecialchars($bill['buyer_type'] ?? 'COMPANY') ?></span>
+                                <div class="fw-semibold"><?= htmlspecialchars(($bill['buyer_type'] ?? 'COMPANY') === 'CUSTOMER' ? ($bill['customer_name'] ?? '') : ($bill['company_name'] ?? '')) ?></div>
+                                <small class="text-muted"><?= htmlspecialchars(($bill['buyer_type'] ?? 'COMPANY') === 'CUSTOMER' ? ($bill['customer_phone'] ?? '') : ($bill['company_phone'] ?? '')) ?></small>
                             </td>
                             <td class="text-center"><?= (int)$bill['line_count'] ?></td>
                             <td class="text-end fw-semibold">₹<?= number_format((float)$bill['total_amount'], 2) ?></td>

@@ -275,16 +275,46 @@ class ProductionBillingController
     {
         $isNewBill = $billId === null;
         $companyName = trim((string)($_POST['company_name'] ?? ''));
+        $companyAddress = trim((string)($_POST['company_address'] ?? ''));
+        $companyPhone = trim((string)($_POST['company_phone'] ?? ''));
+        $companyEmail = trim((string)($_POST['company_email'] ?? ''));
+        $companyGstin = trim((string)($_POST['company_gstin'] ?? ''));
         $customerName = trim((string)($_POST['customer_name'] ?? ''));
         $customerPhone = preg_replace('/\s+/', '', (string)($_POST['customer_phone'] ?? ''));
+        $customerAddress = trim((string)($_POST['customer_address'] ?? ''));
+        $customerCity = trim((string)($_POST['customer_city'] ?? ''));
+        $customerState = trim((string)($_POST['customer_state'] ?? ''));
+        $customerGstin = trim((string)($_POST['customer_gstin'] ?? ''));
+        $buyerType = strtoupper(trim((string)($_POST['buyer_type'] ?? 'COMPANY')));
         $billDate = trim((string)($_POST['bill_date'] ?? date('Y-m-d')));
         $taxType = strtoupper(trim((string)($_POST['tax_type'] ?? 'CGST_SGST')));
         $paymentMethod = strtoupper(trim((string)($_POST['payment_method'] ?? 'CASH')));
         $submittedItems = $_POST['items'] ?? [];
 
-        if ($companyName === '' || $customerName === '' || $customerPhone === '') {
-            Response::redirect($billId ? 'production/billing/edit/' . $billId : 'production/billing/create', 'error', 'Company name, customer name, and phone are required.');
+        if (!in_array($buyerType, ['COMPANY', 'CUSTOMER'], true)) {
+            Response::redirect($billId ? 'production/billing/edit/' . $billId : 'production/billing/create', 'error', 'Select whether this bill is for a company or customer.');
             return;
+        }
+        if (($buyerType === 'COMPANY' && $companyName === '') || ($buyerType === 'CUSTOMER' && ($customerName === '' || $customerPhone === ''))) {
+            $requiredMessage = $buyerType === 'COMPANY'
+                ? 'Company name is required.'
+                : 'Customer name and phone are required.';
+            Response::redirect($billId ? 'production/billing/edit/' . $billId : 'production/billing/create', 'error', $requiredMessage);
+            return;
+        }
+        if ($buyerType === 'COMPANY') {
+            $customerName = null;
+            $customerPhone = null;
+            $customerAddress = null;
+            $customerCity = null;
+            $customerState = null;
+            $customerGstin = null;
+        } else {
+            $companyName = null;
+            $companyAddress = null;
+            $companyPhone = null;
+            $companyEmail = null;
+            $companyGstin = null;
         }
         $dateParts = preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $billDate, $dateMatch) ? $dateMatch : null;
         if (!$dateParts || !checkdate((int)$dateParts[2], (int)$dateParts[3], (int)$dateParts[1]) || !in_array($taxType, ['CGST_SGST', 'IGST'], true)) {
@@ -419,17 +449,18 @@ class ProductionBillingController
 
         $paymentStatus = $paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID';
         $header = [
+            $buyerType,
             $companyName,
-            trim((string)($_POST['company_address'] ?? '')),
-            trim((string)($_POST['company_phone'] ?? '')),
-            trim((string)($_POST['company_email'] ?? '')),
-            trim((string)($_POST['company_gstin'] ?? '')),
+            $companyAddress,
+            $companyPhone,
+            $companyEmail,
+            $companyGstin,
             $customerName,
             $customerPhone,
-            trim((string)($_POST['customer_address'] ?? '')),
-            trim((string)($_POST['customer_city'] ?? '')),
-            trim((string)($_POST['customer_state'] ?? '')),
-            trim((string)($_POST['customer_gstin'] ?? '')),
+            $customerAddress,
+            $customerCity,
+            $customerState,
+            $customerGstin,
             $billDate,
             $paymentMethod,
             $paymentStatus,
@@ -454,18 +485,18 @@ class ProductionBillingController
                 $billNumber = 'PB-' . date('Y') . '-' . date('mdHis') . '-' . random_int(10, 99);
                 Database::execute(
                     "INSERT INTO production_bills
-                     (bill_number, company_name, company_address, company_phone, company_email, company_gstin,
+                     (bill_number, buyer_type, company_name, company_address, company_phone, company_email, company_gstin,
                       customer_name, customer_phone, customer_address, customer_city, customer_state, customer_gstin,
                       bill_date, payment_method, payment_status, tax_type, cash_amount, upi_amount, upi_reference,
                       gross_amount, discount_amount, subtotal, cgst_amount, sgst_amount, igst_amount, tax_amount,
                       total_amount, notes, created_by)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     array_merge([$billNumber], $header, [(int)(Auth::id() ?? 0) ?: null])
                 );
                 $billId = (int)Database::lastInsertId();
             } else {
                 Database::execute(
-                    "UPDATE production_bills SET company_name = ?, company_address = ?, company_phone = ?, company_email = ?,
+                    "UPDATE production_bills SET buyer_type = ?, company_name = ?, company_address = ?, company_phone = ?, company_email = ?,
                      company_gstin = ?, customer_name = ?, customer_phone = ?, customer_address = ?, customer_city = ?,
                      customer_state = ?, customer_gstin = ?, bill_date = ?, payment_method = ?, payment_status = ?,
                      tax_type = ?, cash_amount = ?, upi_amount = ?, upi_reference = ?, gross_amount = ?, discount_amount = ?,

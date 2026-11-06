@@ -18,9 +18,12 @@ $seller = static fn(string $key): string => htmlspecialchars((string)($sellerCom
         <div><h2 style="margin:0 0 6px"><?= $seller('company_name') ?></h2><div><?= nl2br($seller('company_address')) ?></div><div><?= $seller('company_phone') ?> · <?= $seller('company_email') ?></div><div>GSTIN: <?= $seller('company_gstin') ?></div></div>
         <div class="right"><h2 style="margin:0 0 6px">TAX INVOICE</h2><div><strong>Bill:</strong> <?= htmlspecialchars($bill['bill_number']) ?></div><div><strong>Date:</strong> <?= htmlspecialchars(date('d M Y', strtotime($bill['bill_date']))) ?></div></div>
     </div>
-    <div class="section parties">
+    <div class="section">
+        <?php if (($bill['buyer_type'] ?? 'COMPANY') === 'CUSTOMER'): ?>
+            <div class="label">Customer</div><strong><?= htmlspecialchars($bill['customer_name'] ?? '') ?></strong><div><?= htmlspecialchars($bill['customer_phone'] ?? '') ?></div><div><?= nl2br(htmlspecialchars($bill['customer_address'] ?? '')) ?></div><div><?= htmlspecialchars(trim(($bill['customer_city'] ?? '') . ' ' . ($bill['customer_state'] ?? ''))) ?></div><div>GSTIN: <?= htmlspecialchars($bill['customer_gstin'] ?? '') ?></div>
+        <?php else: ?>
         <div><div class="label">Buyer company</div><strong><?= htmlspecialchars($bill['company_name']) ?></strong><div><?= nl2br(htmlspecialchars($bill['company_address'] ?? '')) ?></div><div><?= htmlspecialchars($bill['company_phone'] ?? '') ?> · <?= htmlspecialchars($bill['company_email'] ?? '') ?></div><div>GSTIN: <?= htmlspecialchars($bill['company_gstin'] ?? '') ?></div></div>
-        <div><div class="label">Customer / contact</div><strong><?= htmlspecialchars($bill['customer_name']) ?></strong><div><?= htmlspecialchars($bill['customer_phone']) ?></div><div><?= nl2br(htmlspecialchars($bill['customer_address'] ?? '')) ?></div><div><?= htmlspecialchars(trim(($bill['customer_city'] ?? '') . ' ' . ($bill['customer_state'] ?? ''))) ?></div><div>GSTIN: <?= htmlspecialchars($bill['customer_gstin'] ?? '') ?></div></div>
+        <?php endif; ?>
     </div>
     <div class="section">
         <table>

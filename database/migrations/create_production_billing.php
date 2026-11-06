@@ -12,13 +12,14 @@ try {
         "CREATE TABLE IF NOT EXISTS production_bills (
             id int unsigned NOT NULL AUTO_INCREMENT,
             bill_number varchar(50) NOT NULL,
-            company_name varchar(200) NOT NULL,
+            buyer_type enum('COMPANY','CUSTOMER') NOT NULL DEFAULT 'COMPANY',
+            company_name varchar(200) DEFAULT NULL,
             company_address text,
             company_phone varchar(30) DEFAULT NULL,
             company_email varchar(150) DEFAULT NULL,
             company_gstin varchar(30) DEFAULT NULL,
-            customer_name varchar(150) NOT NULL,
-            customer_phone varchar(20) NOT NULL,
+            customer_name varchar(150) DEFAULT NULL,
+            customer_phone varchar(20) DEFAULT NULL,
             customer_address text,
             customer_city varchar(100) DEFAULT NULL,
             customer_state varchar(100) DEFAULT NULL,
@@ -50,6 +51,24 @@ try {
             CONSTRAINT production_bills_ibfk_1 FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+
+    $columnExists = static function (string $column): bool {
+        return (bool)Database::fetchOne(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'production_bills' AND COLUMN_NAME = ?",
+            [$column]
+        );
+    };
+
+    if (!$columnExists('buyer_type')) {
+        Database::execute(
+            "ALTER TABLE production_bills
+             ADD COLUMN buyer_type enum('COMPANY','CUSTOMER') NOT NULL DEFAULT 'COMPANY' AFTER bill_number"
+        );
+    }
+    Database::execute("ALTER TABLE production_bills MODIFY company_name varchar(200) DEFAULT NULL");
+    Database::execute("ALTER TABLE production_bills MODIFY customer_name varchar(150) DEFAULT NULL");
+    Database::execute("ALTER TABLE production_bills MODIFY customer_phone varchar(20) DEFAULT NULL");
 
     Database::execute(
         "CREATE TABLE IF NOT EXISTS production_bill_items (

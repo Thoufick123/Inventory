@@ -28,9 +28,19 @@ $existingItems = array_map(static function (array $item): array {
     <div class="row g-3">
         <div class="col-xl-4">
             <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body">
+                    <label class="form-label fw-semibold" for="buyerType">Bill To</label>
+                    <select class="form-select" name="buyer_type" id="buyerType">
+                        <option value="COMPANY" <?= ($bill['buyer_type'] ?? 'COMPANY') === 'COMPANY' ? 'selected' : '' ?>>Company</option>
+                        <option value="CUSTOMER" <?= ($bill['buyer_type'] ?? '') === 'CUSTOMER' ? 'selected' : '' ?>>Customer</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="card border-0 shadow-sm mb-3" id="companyFields">
                 <div class="card-header bg-white fw-semibold"><i class="bi bi-building me-2 text-primary"></i>Company (Buyer)</div>
                 <div class="card-body">
-                    <div class="mb-3"><label class="form-label">Company name <span class="text-danger">*</span></label><input class="form-control" name="company_name" required value="<?= $escape($bill['company_name'] ?? '') ?>"></div>
+                    <div class="mb-3"><label class="form-label">Company name <span class="text-danger">*</span></label><input class="form-control" name="company_name" data-required-for="COMPANY" value="<?= $escape($bill['company_name'] ?? '') ?>"></div>
                     <div class="mb-3"><label class="form-label">Address</label><textarea class="form-control" name="company_address" rows="2"><?= $escape($bill['company_address'] ?? '') ?></textarea></div>
                     <div class="row g-2">
                         <div class="col-md-6"><label class="form-label">Phone</label><input class="form-control" name="company_phone" value="<?= $escape($bill['company_phone'] ?? '') ?>"></div>
@@ -40,11 +50,11 @@ $existingItems = array_map(static function (array $item): array {
                 </div>
             </div>
 
-            <div class="card border-0 shadow-sm mb-3">
+            <div class="card border-0 shadow-sm mb-3" id="customerFields">
                 <div class="card-header bg-white fw-semibold"><i class="bi bi-person-vcard me-2 text-primary"></i>Customer / Contact</div>
                 <div class="card-body">
-                    <div class="mb-3"><label class="form-label">Customer name <span class="text-danger">*</span></label><input class="form-control" name="customer_name" required value="<?= $escape($bill['customer_name'] ?? '') ?>"></div>
-                    <div class="mb-3"><label class="form-label">Phone <span class="text-danger">*</span></label><input class="form-control" name="customer_phone" required value="<?= $escape($bill['customer_phone'] ?? '') ?>"></div>
+                    <div class="mb-3"><label class="form-label">Customer name <span class="text-danger">*</span></label><input class="form-control" name="customer_name" data-required-for="CUSTOMER" value="<?= $escape($bill['customer_name'] ?? '') ?>"></div>
+                    <div class="mb-3"><label class="form-label">Phone <span class="text-danger">*</span></label><input class="form-control" name="customer_phone" data-required-for="CUSTOMER" value="<?= $escape($bill['customer_phone'] ?? '') ?>"></div>
                     <div class="mb-3"><label class="form-label">Address</label><textarea class="form-control" name="customer_address" rows="2"><?= $escape($bill['customer_address'] ?? '') ?></textarea></div>
                     <div class="row g-2">
                         <div class="col-md-6"><label class="form-label">City</label><input class="form-control" name="customer_city" value="<?= $escape($bill['customer_city'] ?? '') ?>"></div>
@@ -136,8 +146,18 @@ $existingItems = array_map(static function (array $item): array {
     const search = document.getElementById('inventorySearch');
     const resultBox = document.getElementById('searchResults');
     const cartBody = document.getElementById('billCart');
+    const buyerType = document.getElementById('buyerType');
     const money = value => '₹' + Number(value || 0).toFixed(2);
     let searchTimer;
+
+    function updateBuyerFields() {
+        const selectedType = buyerType.value;
+        document.getElementById('companyFields').classList.toggle('d-none', selectedType !== 'COMPANY');
+        document.getElementById('customerFields').classList.toggle('d-none', selectedType !== 'CUSTOMER');
+        form.querySelectorAll('[data-required-for]').forEach(input => {
+            input.required = input.dataset.requiredFor === selectedType;
+        });
+    }
 
     initialItems.forEach(item => cart.set(Number(item.qc_item_id), {
         ...item,
@@ -398,6 +418,7 @@ $existingItems = array_map(static function (array $item): array {
         }
     });
     document.getElementById('taxType').addEventListener('change', updateTotals);
+    buyerType.addEventListener('change', updateBuyerFields);
     document.getElementById('paymentMethod').addEventListener('change', event => {
         document.getElementById('splitPaymentFields').classList.toggle('d-none', event.target.value !== 'CASH_UPI');
         updateTotals();
@@ -414,6 +435,7 @@ $existingItems = array_map(static function (array $item): array {
             document.getElementById('cartMessage').textContent = 'Check the item price and GST values.';
         }
     });
+    updateBuyerFields();
     renderCart();
 })();
 </script>
