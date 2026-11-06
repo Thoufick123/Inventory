@@ -1330,13 +1330,13 @@ let monthEditFabricPrefix = 'FB<?= date('my') ?>';
 fetch('<?= url("api/sellers/next-roll-codes") ?>')
     .then(res => res.json())
     .then(res => {
-        if (res && res.success && res.data) {
-            baseEditFabricNextSeq = res.data.next_seq;
+        if (res && res.success && res.data && Number.isInteger(Number(res.data.start_seq)) && res.data.prefix) {
+            baseEditFabricNextSeq = Number(res.data.start_seq);
             monthEditFabricPrefix = res.data.prefix;
             updateEditRollCodeSequencePreviews();
         }
     })
-    .catch(e => console.log('Sequence fetch err:', e));
+    .catch(e => console.error('Could not load the next fabric roll code sequence:', e));
 
 function updateEditRollCodeSequencePreviews() {
     const cards = document.querySelectorAll('.roll-card');

@@ -36,157 +36,19 @@ class ProductionController {
     // SELLERS (Material Suppliers)
     // =========================================================================
 
-    private function storeSupplierProfile(): void {
-        $validator = Validator::make($_POST, [
-            'name' => 'required|minLength:2|maxLength:200',
-            'company' => 'required|minLength:2|maxLength:300',
-            'phone' => 'required',
-            'email' => 'maxLength:255',
-            'city' => 'required|maxLength:100',
-            'state' => 'required|maxLength:100',
-            'address' => 'required|maxLength:500',
-            'gst_number' => 'maxLength:20',
-            'payment_terms' => 'maxLength:200',
-        ]);
-        if ($validator->fails()) {
-            Session::flash('error', $validator->firstError());
-            Response::back();
-            return;
-        }
-
-        $name = mb_strtoupper(trim((string)$_POST['name']));
-        $company = mb_strtoupper(trim((string)$_POST['company']));
-        $phone = trim((string)$_POST['phone']);
-        $email = trim((string)($_POST['email'] ?? ''));
-        $city = mb_strtoupper(trim((string)$_POST['city']));
-        $state = mb_strtoupper(trim((string)$_POST['state']));
-        $address = mb_strtoupper(trim((string)$_POST['address']));
-        $gstNumber = mb_strtoupper(trim((string)($_POST['gst_number'] ?? '')));
-        $paymentTerms = mb_strtoupper(trim((string)($_POST['payment_terms'] ?? '')));
-
-        if (preg_match('/[0-9]/', $name) || preg_match('/[0-9]/', $company)
-            || preg_match('/[0-9]/', $city) || preg_match('/[0-9]/', $state)) {
-            Session::flash('error', 'Supplier, company, city, and state fields cannot contain numbers.');
-            Response::back();
-            return;
-        }
-        if (!preg_match('/^[0-9]{10}$/', $phone)) {
-            Session::flash('error', 'Phone number must be exactly 10 digits.');
-            Response::back();
-            return;
-        }
-        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            Session::flash('error', 'Please enter a valid email address.');
-            Response::back();
-            return;
-        }
-        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
-            Session::flash('error', 'GST number must be a valid 15-character alphanumeric code.');
-            Response::back();
-            return;
-        }
-
-        Database::execute(
-            "INSERT INTO sellers (name, company, phone, email, gst_number, city, state, address, payment_terms, seller_type, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'MATERIAL_SUPPLIER', 1)",
-            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null, $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null]
-        );
-        $sellerId = (int)Database::lastInsertId();
-        AuditService::log('production', 'CREATE', 'sellers', $sellerId, null, [
-            'Supplier Name' => $name,
-            'Company / Mill' => $company,
-            'Phone' => $phone,
-            'Email' => $email,
-            'City' => $city,
-            'State' => $state,
-        ]);
-        Session::flash('success', 'Supplier details saved. Record goods and invoices in Production Purchases.');
-        Response::redirect(url('production/sellers'));
-    }
-
-    private function updateSupplierProfile(int $sellerId): void {
-        $existing = Database::fetchOne(
-            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
-            [$sellerId]
-        );
-        if (!$existing) {
-            Session::flash('error', 'Material supplier not found.');
-            Response::redirect(url('production/sellers'));
-            return;
-        }
-
-        $validator = Validator::make($_POST, [
-            'name' => 'required|minLength:2|maxLength:200',
-            'company' => 'required|minLength:2|maxLength:300',
-            'phone' => 'required',
-            'email' => 'maxLength:255',
-            'city' => 'required|maxLength:100',
-            'state' => 'required|maxLength:100',
-            'address' => 'required|maxLength:500',
-            'gst_number' => 'maxLength:20',
-            'payment_terms' => 'maxLength:200',
-        ]);
-        if ($validator->fails()) {
-            Session::flash('error', $validator->firstError());
-            Response::back();
-            return;
-        }
-
-        $name = mb_strtoupper(trim((string)$_POST['name']));
-        $company = mb_strtoupper(trim((string)$_POST['company']));
-        $phone = trim((string)$_POST['phone']);
-        $email = trim((string)($_POST['email'] ?? ''));
-        $city = mb_strtoupper(trim((string)$_POST['city']));
-        $state = mb_strtoupper(trim((string)$_POST['state']));
-        $address = mb_strtoupper(trim((string)$_POST['address']));
-        $gstNumber = mb_strtoupper(trim((string)($_POST['gst_number'] ?? '')));
-        $paymentTerms = mb_strtoupper(trim((string)($_POST['payment_terms'] ?? '')));
-
-        if (preg_match('/[0-9]/', $name) || preg_match('/[0-9]/', $company)
-            || preg_match('/[0-9]/', $city) || preg_match('/[0-9]/', $state)) {
-            Session::flash('error', 'Supplier, company, city, and state fields cannot contain numbers.');
-            Response::back();
-            return;
-        }
-        if (!preg_match('/^[0-9]{10}$/', $phone)) {
-            Session::flash('error', 'Phone number must be exactly 10 digits.');
-            Response::back();
-            return;
-        }
-        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            Session::flash('error', 'Please enter a valid email address.');
-            Response::back();
-            return;
-        }
-        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
-            Session::flash('error', 'GST number must be a valid 15-character alphanumeric code.');
-            Response::back();
-            return;
-        }
-
-        Database::execute(
-            "UPDATE sellers SET name = ?, company = ?, phone = ?, email = ?, gst_number = ?, city = ?, state = ?,
-                    address = ?, payment_terms = ?, is_active = ?, updated_at = NOW()
-             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
-            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
-                $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null,
-                isset($_POST['is_active']) ? 1 : 0, $sellerId]
-        );
-        AuditService::log('production', 'UPDATE', 'sellers', $sellerId, $existing, [
-            'name' => $name, 'company' => $company, 'phone' => $phone, 'email' => $email,
-            'gst_number' => $gstNumber, 'city' => $city, 'state' => $state, 'address' => $address,
-            'payment_terms' => $paymentTerms, 'is_active' => isset($_POST['is_active']) ? 1 : 0,
-        ]);
-        Session::flash('success', 'Supplier details updated.');
-        Response::redirect(url('production/sellers'));
-    }
-
     public function sellerList(): void {
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['status'] ?? '';
         $city = trim($_GET['city'] ?? '');
 
-        $sql = "SELECT s.* FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER'";
+        $sql = "SELECT s.*,
+                    (SELECT COUNT(*) FROM seller_rolls sr WHERE sr.seller_id = s.id) AS fabric_roll_count,
+                    (SELECT COALESCE(SUM(sr.quantity), 0) FROM seller_rolls sr WHERE sr.seller_id = s.id) AS total_roll_quantity,
+                    (SELECT GROUP_CONCAT(
+                        CONCAT(COALESCE(sr.start_code, '—'), '–', COALESCE(sr.end_code, '—'))
+                        ORDER BY sr.id SEPARATOR ', '
+                     ) FROM seller_rolls sr WHERE sr.seller_id = s.id) AS sticker_ranges
+                FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER'";
         $params = [];
 
         if ($search !== '') {
@@ -228,8 +90,8 @@ class ProductionController {
     }
 
     public function createSeller(): void {
-        Response::view('production.sellers.profile_create', [
-            'pageTitle'    => 'Add Supplier',
+        Response::view('production.sellers.create', [
+            'pageTitle'    => 'Add Material Supplier',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
             'breadcrumb'   => [
@@ -309,11 +171,6 @@ class ProductionController {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
         }
-        if (!empty($_POST['supplier_profile_only'])) {
-            $this->storeSupplierProfile();
-            return;
-        }
-
         $validator = Validator::make($_POST, [
             'name'          => 'required|minLength:2|maxLength:200',
             'company'       => 'required|minLength:2|maxLength:300',
@@ -669,8 +526,8 @@ class ProductionController {
             [(int)$id]
         );
 
-        Response::view('production.sellers.profile_edit', [
-            'pageTitle'    => 'Edit Supplier Details',
+        Response::view('production.sellers.edit', [
+            'pageTitle'    => 'Edit Material Supplier',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
             'seller'       => $seller,
@@ -688,11 +545,6 @@ class ProductionController {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
         }
-        if (!empty($_POST['supplier_profile_only'])) {
-            $this->updateSupplierProfile((int)$id);
-            return;
-        }
-
         $existing = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$id]);
         if (!$existing) {
             Session::flash('error', 'Supplier not found.');
