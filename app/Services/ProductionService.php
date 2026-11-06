@@ -1075,7 +1075,9 @@ class ProductionService {
         $activePrograms = Database::fetchOne(
             "SELECT COUNT(*) as count, COALESCE(SUM(planned_quantity), 0) as total_planned, COALESCE(SUM(completed_quantity), 0) as total_completed
              FROM production_programs
-             WHERE status IN ('APPROVED', 'SCHEDULED', 'IN_PROGRESS')$unitClauseProg"
+             WHERE status IN ('APPROVED', 'SCHEDULED', 'IN_PROGRESS')
+               AND (is_active IS NULL OR is_active = 1)
+               AND (COALESCE(planned_quantity, 0) <= 0 OR COALESCE(completed_quantity, 0) < COALESCE(planned_quantity, 0))$unitClauseProg"
         );
 
         // Pending Cutting
@@ -1119,13 +1121,15 @@ class ProductionService {
              WHERE MONTH(po.created_at) = MONTH(CURRENT_DATE()) AND YEAR(po.created_at) = YEAR(CURRENT_DATE())$unitClausePP"
         );
 
-        // Recent active programs
+        // Active programs not yet completed against their planned quantity
         $recentPrograms = Database::fetchAll(
             "SELECT pp.*, COALESCE(p.name, pp.name, 'General Apparel') as product_name, p.code as product_code, pu.name as unit_name
              FROM production_programs pp
              LEFT JOIN products p ON pp.product_id = p.id
              JOIN production_units pu ON pp.production_unit_id = pu.id
-             WHERE 1=1$unitClausePP
+             WHERE pp.status IN ('APPROVED', 'SCHEDULED', 'IN_PROGRESS')
+               AND (pp.is_active IS NULL OR pp.is_active = 1)
+               AND (COALESCE(pp.planned_quantity, 0) <= 0 OR COALESCE(pp.completed_quantity, 0) < COALESCE(pp.planned_quantity, 0))$unitClausePP
              ORDER BY pp.created_at DESC LIMIT 6"
         );
 

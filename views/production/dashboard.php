@@ -177,13 +177,17 @@
                             <?php if (empty($recentPrograms)): ?>
                                 <tr>
                                     <td colspan="7" class="text-center py-4 text-muted">
-                                        <i class="bi bi-inbox fs-3 d-block mb-1"></i> No production programs created yet.
+                                        <i class="bi bi-inbox fs-3 d-block mb-1"></i> No active production programs.
                                     </td>
                                 </tr>
                             <?php else: ?>
                                 <?php foreach ($recentPrograms as $prog): ?>
                                     <?php 
-                                        $pct = $prog['planned_quantity'] > 0 ? round(($prog['completed_quantity'] / $prog['planned_quantity']) * 100) : 0;
+                                        $plannedQuantity = (int)($prog['planned_quantity'] ?? 0);
+                                        $completedQuantity = max(0, (int)($prog['completed_quantity'] ?? 0));
+                                        $pct = $plannedQuantity > 0
+                                            ? min(100, (int)round(($completedQuantity / $plannedQuantity) * 100))
+                                            : 0;
                                         $prioClass = match($prog['priority']) {
                                             'URGENT' => 'bg-danger',
                                             'HIGH'   => 'bg-warning text-dark',
@@ -214,7 +218,7 @@
                                         <td><span class="badge bg-light text-dark border"><?= e($prog['unit_name'] ?? 'Unit') ?></span></td>
                                         <td style="min-width: 140px;">
                                             <div class="d-flex justify-content-between small mb-1">
-                                                <span><?= number_format($prog['completed_quantity']) ?> / <?= number_format($prog['planned_quantity']) ?></span>
+                                                <span><?= number_format($completedQuantity) ?> / <?= number_format($plannedQuantity) ?></span>
                                                 <span class="fw-bold"><?= $pct ?>%</span>
                                             </div>
                                             <div class="progress" style="height: 6px;">
