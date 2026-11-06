@@ -1098,7 +1098,7 @@
                                 <div class="overflow-hidden flex-grow-1" style="font-size: 0.76rem;">
                                     <div class="fw-bold text-truncate text-dark"><?= e($rp['customer_name']) ?></div>
                                     <div class="text-muted font-monospace" style="font-size: 0.70rem;">
-                                        <a href="<?= url('warehouse/purchases/return-invoice/' . $rp['return_id']) ?>" class="text-decoration-none text-primary">
+                                        <a href="<?= url('warehouse/purchases/returns/invoice/' . $rp['return_id']) ?>" class="text-decoration-none text-primary">
                                             <?= e($rp['return_number']) ?>
                                         </a>
                                         · <?= !empty($rp['returned_at']) ? date('d M y', strtotime($rp['returned_at'])) : '' ?>
@@ -1136,7 +1136,7 @@
                             <?php foreach ($variantReturns as $vr): ?>
                                 <tr>
                                     <td class="ps-3 text-nowrap">
-                                        <a href="<?= url('warehouse/purchases/return-invoice/' . $vr['return_id']) ?>" class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle text-decoration-none fw-bold p-1.5">
+                                        <a href="<?= url('warehouse/purchases/returns/invoice/' . $vr['return_id']) ?>" class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle text-decoration-none fw-bold p-1.5">
                                             <i class="bi bi-arrow-return-left me-1"></i><?= e($vr['return_number']) ?>
                                         </a>
                                         <?php if (!empty($vr['po_number'])): ?>
@@ -1194,7 +1194,7 @@
                                         </span>
                                     </td>
                                     <td class="pe-3 text-end text-nowrap">
-                                        <a href="<?= url('warehouse/purchases/return-invoice/' . $vr['return_id']) ?>" class="btn btn-xs btn-outline-warning py-1 px-2 text-dark">
+                                        <a href="<?= url('warehouse/purchases/returns/invoice/' . $vr['return_id']) ?>" class="btn btn-xs btn-outline-warning py-1 px-2 text-dark">
                                             <i class="bi bi-file-earmark-text me-1"></i>Invoice
                                         </a>
                                     </td>
