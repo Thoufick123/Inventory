@@ -1600,7 +1600,7 @@ class ProductionController {
         for ($i = 0; $i < $count; $i++) {
             $seq = $newStartSeq + $i;
             $code = sprintf('%s%02d', $prefix, $seq);
-            $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$pieceWeight}KG";
+            $payload = $code;
             $pieceIndex = $currentQty + $i + 1;
 
             $newStickers[] = [
@@ -1902,7 +1902,7 @@ class ProductionController {
 
             foreach ($activeSequences as $i => $seq) {
                 $code = sprintf('%s%02d', $prefix, $seq);
-                $payload = "{$code}|{$supplierName}|{$rollNum}|{$color}|{$design}|{$pieceWeight}KG";
+                $payload = $code;
 
                 $stickers[] = [
                     'code'          => $code,

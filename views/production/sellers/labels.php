@@ -199,6 +199,11 @@
             text-overflow: ellipsis;
         }
 
+        .piece-count-item {
+            font-weight: 700;
+            color: #0f172a;
+        }
+
         /* Print Media Styles */
         @media print {
             body {
@@ -382,6 +387,7 @@
                             <?php if ($stk['weight'] > 0): ?>
                                 <div class="spec-item weight-item"><strong>Piece Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
                             <?php endif; ?>
+                            <div class="spec-item piece-count-item">Piece <?= (int)$stk['piece_index'] ?> of <?= (int)$stk['total_qty'] ?></div>
                         </div>
                     </div>
                 </div>
@@ -477,7 +483,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Render QR codes on cards
 function renderAllQRCodes() {
     stickersData.forEach((stk, idx) => {
-        renderQRCodeForIndex(idx, stk.qr_payload || stk.code);
+        renderQRCodeForIndex(idx, stk.code);
     });
 }
 
@@ -721,6 +727,7 @@ function refreshStickersFromDOM() {
     stickersData = cards
         .map(card => stickersByCode.get(card.getAttribute('data-code')))
         .filter(Boolean);
+    updatePieceCountsByRoll();
 
     document.getElementById('totalStickersBadge').textContent = total + ' Sticker' + (total === 1 ? '' : 's');
     document.getElementById('allCountSpan').textContent = total;
@@ -728,13 +735,10 @@ function refreshStickersFromDOM() {
     cards.forEach((card, newIdx) => {
         card.id = 'card_' + newIdx;
         card.setAttribute('data-idx', newIdx);
-        card.setAttribute('data-piece', newIdx + 1);
 
         const chk = card.querySelector('.sticker-check');
         if (chk) {
             chk.setAttribute('data-idx', newIdx);
-            const numSpan = chk.closest('label').querySelector('span');
-            if (numSpan) numSpan.textContent = '#' + (newIdx + 1);
         }
 
         const printBtn = card.querySelector('.btn-single-print');
@@ -746,6 +750,30 @@ function refreshStickersFromDOM() {
     });
 
     updateSelectedCount();
+}
+
+function updatePieceCountsByRoll() {
+    const cardsByRoll = new Map();
+    const stickersByCode = new Map(stickersData.map(sticker => [sticker.code, sticker]));
+    document.querySelectorAll('.fabric-sticker-card').forEach(card => {
+        const rollId = card.getAttribute('data-roll-id');
+        if (!cardsByRoll.has(rollId)) cardsByRoll.set(rollId, []);
+        cardsByRoll.get(rollId).push(card);
+    });
+
+    cardsByRoll.forEach(cards => {
+        cards.forEach((card, index) => {
+            const sticker = stickersByCode.get(card.getAttribute('data-code'));
+            if (!sticker) return;
+            sticker.piece_index = index + 1;
+            sticker.total_qty = cards.length;
+            card.setAttribute('data-piece', String(index + 1));
+            const toolbarIndex = card.querySelector('.sticker-card-toolbar .fw-semibold');
+            if (toolbarIndex) toolbarIndex.textContent = '#' + (index + 1);
+            const pieceCount = card.querySelector('.piece-count-item');
+            if (pieceCount) pieceCount.textContent = `Piece ${index + 1} of ${cards.length}`;
+        });
+    });
 }
 
 // -------------------------------------------------------------
@@ -844,9 +872,12 @@ function submitAddExtraLabel() {
                 if (String(sticker.roll_id) !== String(rollId)) return;
                 sticker.weight = unitWeight;
                 sticker.roll_weight = Number(firstNewSticker.roll_weight) || 0;
-                sticker.qr_payload = `${sticker.code}|${sticker.supplier_name}|${sticker.roll_number}|${sticker.color}|${sticker.design_name}|${unitWeight}KG`;
-                renderQRCodeForIndex(index, sticker.qr_payload);
+                sticker.qr_payload = sticker.code;
+                sticker.total_qty = Number(firstNewSticker.total_qty) || sticker.total_qty;
+                renderQRCodeForIndex(index, sticker.code);
                 const card = document.getElementById('card_' + index);
+                const pieceCount = card ? card.querySelector('.piece-count-item') : null;
+                if (pieceCount) pieceCount.textContent = `Piece ${sticker.piece_index} of ${sticker.total_qty}`;
                 const weightItem = card ? card.querySelector('.weight-item') : null;
                 if (weightItem) {
                     weightItem.innerHTML = `<strong>Piece Weight:</strong> ${unitWeight.toFixed(2)} kg`;
@@ -910,13 +941,14 @@ function submitAddExtraLabel() {
                                 ${safeColor}
                                 ${safeDesign}
                                 ${safeWeight}
+                                <div class="spec-item piece-count-item">Piece ${stk.piece_index} of ${stk.total_qty}</div>
                             </div>
                         </div>
                     </div>
                 `;
 
                 grid.appendChild(card);
-                renderQRCodeForIndex(newIdx, stk.qr_payload || stk.code);
+                renderQRCodeForIndex(newIdx, stk.code);
                 card.scrollIntoView({ behavior: 'smooth', block: 'center' });
             });
 
