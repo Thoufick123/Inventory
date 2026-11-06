@@ -84,7 +84,7 @@
 
                         <!-- Email Address -->
                         <div class="col-md-6">
-                            <label class="form-label fw-semibold required">Email Address <span class="text-danger">*</span></label>
+                            <label class="form-label fw-semibold">Email Address <span class="text-muted">(Optional)</span></label>
                             <div class="input-group has-validation">
                                 <span class="input-group-text bg-light"><i class="bi bi-envelope"></i></span>
                                 <input type="email" 
@@ -92,7 +92,6 @@
                                        id="emailInput"
                                        class="form-control" 
                                        maxlength="255" 
-                                       required
                                        placeholder="e.g. sales@grm.in or supplier@gmail.com"
                                        value="<?= e($seller['email']) ?>">
                                 <div class="invalid-feedback" id="emailError">Please enter a valid email address (e.g. name@domain.in or name@gmail.com).</div>
@@ -286,7 +285,7 @@
                                         <th>Color / Shade</th>
                                         <th>Design / Pattern</th>
                                         <th class="text-center">Designs</th>
-                                        <th class="text-end">Total Qty</th>
+                                        <th class="text-end">Total RQ</th>
                                         <th class="text-end">Total Wgt</th>
                                         <th class="text-end">Price</th>
                                         <th class="text-end text-danger bg-danger-subtle bg-opacity-25">Damages</th>
@@ -546,8 +545,8 @@ function validateEmail(input) {
     const val = input.value.trim();
     const errEl = document.getElementById('emailError');
     if (val === '') {
-        setFieldInvalid(input, errEl, 'Email address is required.');
-        return false;
+        input.classList.remove('is-invalid', 'is-valid');
+        return true;
     }
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(val)) {
@@ -798,7 +797,7 @@ function addRollCard(data = {}) {
 
                 <!-- Roll Quantity -->
                 <div class="col-md-3 col-lg-1">
-                    <label class="form-label small fw-semibold required">Roll Qty <span class="text-danger">*</span></label>
+                    <label class="form-label small fw-semibold required">RQ (Roll Quantity) <span class="text-danger">*</span></label>
                     <input type="number" 
                            name="rolls[${index}][quantity]" 
                            class="form-control form-control-sm text-end roll-qty-input" 
@@ -808,7 +807,7 @@ function addRollCard(data = {}) {
                            placeholder="1" 
                            value="${escapeHtml(quantity)}"
                            oninput="recalculateMultiRollMetrics(); validateRollInput(this);">
-                    <div class="invalid-feedback">Min 1 qty required.</div>
+                    <div class="invalid-feedback">Minimum 1 RQ (Roll Quantity) required.</div>
                 </div>
 
                 <!-- Roll Weight (KG) -->
@@ -986,7 +985,7 @@ function recalculateMultiRollMetrics() {
     document.getElementById('summaryColorsDesigns').innerText = colorsSet.size + ' Colors • ' + Math.max(designsSet.size, totalDesignCount) + ' Designs';
     document.getElementById('summaryTotalWeight').innerText = totalWeight.toFixed(2) + ' kg';
     document.getElementById('summaryTotalPrice').innerText = '₹ ' + totalPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    document.getElementById('summaryAvailableStock').innerText = totalAvailQty + ' qty (' + totalAvailWeight.toFixed(2) + ' kg)';
+    document.getElementById('summaryAvailableStock').innerText = totalAvailQty + ' RQ (' + totalAvailWeight.toFixed(2) + ' kg)';
 
     if (totalWeight > 0 && totalPrice > 0) {
         document.getElementById('summaryRatePerKg').innerText = '₹ ' + (totalPrice / totalWeight).toFixed(2) + ' / kg';
@@ -1060,9 +1059,9 @@ function renderRollsSummaryTable() {
         if (damagedWeight >= initialWeight && initialWeight > 0) {
             statusBadge = `<span class="badge bg-danger text-white px-2 py-1"><i class="bi bi-exclamation-diamond me-1"></i>Damaged</span>`;
         } else if (usedQty === 0 && damagedQty === 0 && damagedWeight === 0) {
-            statusBadge = `<span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><i class="bi bi-check-circle me-1"></i>Available (${availQty} qty)</span>`;
+            statusBadge = `<span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><i class="bi bi-check-circle me-1"></i>Available (${availQty} RQ)</span>`;
         } else if (availQty > 0) {
-            statusBadge = `<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 py-1"><i class="bi bi-hourglass-split me-1"></i>${availQty} qty Left</span>`;
+            statusBadge = `<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 py-1"><i class="bi bi-hourglass-split me-1"></i>${availQty} RQ Left</span>`;
         } else {
             statusBadge = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1"><i class="bi bi-x-circle me-1"></i>Fully Consumed</span>`;
         }
@@ -1084,17 +1083,17 @@ function renderRollsSummaryTable() {
                     <span class="fw-semibold text-secondary"><i class="bi bi-brush text-primary me-1"></i>${escapeHtml(design)}</span>
                 </td>
                 <td class="text-center fw-semibold text-dark">${designCount}</td>
-                <td class="text-end fw-bold text-dark">${initialQty} qty</td>
+                <td class="text-end fw-bold text-dark">${initialQty} RQ</td>
                 <td class="text-end fw-semibold text-dark">${initialWeight.toFixed(2)} kg</td>
                 <td class="text-end fw-semibold text-dark">₹ ${initialPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 <td class="text-end text-danger bg-danger-subtle bg-opacity-25">
-                    ${damagedQty > 0 || damagedWeight > 0 ? `<span class="text-danger fw-bold">-${damagedQty} qty</span> <small class="text-danger d-block">(${damagedWeight.toFixed(2)} kg)</small>` : '<span class="text-muted small">0 qty</span>'}
+                    ${damagedQty > 0 || damagedWeight > 0 ? `<span class="text-danger fw-bold">-${damagedQty} RQ</span> <small class="text-danger d-block">(${damagedWeight.toFixed(2)} kg)</small>` : '<span class="text-muted small">0 RQ</span>'}
                 </td>
                 <td class="text-end bg-light-subtle text-muted">
-                    ${usedQty > 0 ? `<span class="text-secondary fw-bold">-${usedQty} qty</span> <small class="text-muted d-block">(${usedWeight.toFixed(2)} kg)</small>` : '<span class="text-muted small">0 qty</span>'}
+                    ${usedQty > 0 ? `<span class="text-secondary fw-bold">-${usedQty} RQ</span> <small class="text-muted d-block">(${usedWeight.toFixed(2)} kg)</small>` : '<span class="text-muted small">0 RQ</span>'}
                 </td>
                 <td class="text-end bg-success-subtle fw-bold text-success">
-                    ${availQty} qty
+                    ${availQty} RQ
                     <small class="text-muted d-block fw-normal">${availWeight.toFixed(2)} kg • ₹${availPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</small>
                 </td>
                 <td class="text-center">${statusBadge}</td>

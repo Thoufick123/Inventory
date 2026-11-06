@@ -82,7 +82,7 @@
 
                         <!-- Email Address -->
                         <div class="col-md-6">
-                            <label class="form-label fw-semibold required">Email Address <span class="text-danger">*</span></label>
+                            <label class="form-label fw-semibold">Email Address <span class="text-muted">(Optional)</span></label>
                             <div class="input-group has-validation">
                                 <span class="input-group-text bg-light"><i class="bi bi-envelope"></i></span>
                                 <input type="email" 
@@ -90,7 +90,6 @@
                                        id="emailInput"
                                        class="form-control" 
                                        maxlength="255" 
-                                       required
                                        placeholder="e.g. sales@grm.in or supplier@gmail.com" 
                                        value="<?= e(old('email')) ?>">
                                 <div class="invalid-feedback" id="emailError">Please enter a valid email address (e.g. name@domain.in or name@gmail.com).</div>
@@ -284,7 +283,7 @@
                                         <th>Color / Shade</th>
                                         <th>Design / Pattern</th>
                                         <th class="text-center">Designs</th>
-                                        <th class="text-end">Roll Qty</th>
+                                        <th class="text-end">Total RQ</th>
                                         <th class="text-end">Weight</th>
                                         <th class="text-end">Price</th>
                                         <th class="text-end bg-success-subtle fw-bold text-success">Total Value</th>
@@ -487,8 +486,8 @@ function validateEmail(input) {
     const val = input.value.trim();
     const errEl = document.getElementById('emailError');
     if (val === '') {
-        setFieldInvalid(input, errEl, 'Email address is required.');
-        return false;
+        input.classList.remove('is-invalid', 'is-valid');
+        return true;
     }
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(val)) {
@@ -702,7 +701,7 @@ function addRollCard(data = {}) {
 
                 <!-- Roll Quantity -->
                 <div class="col-md-3 col-lg-1">
-                    <label class="form-label small fw-semibold required">Roll Qty <span class="text-danger">*</span></label>
+                    <label class="form-label small fw-semibold required">RQ (Roll Quantity) <span class="text-danger">*</span></label>
                     <input type="number" 
                            name="rolls[${index}][quantity]" 
                            class="form-control form-control-sm text-end roll-qty-input" 
@@ -712,7 +711,7 @@ function addRollCard(data = {}) {
                            placeholder="1" 
                            value="${escapeHtml(quantity)}"
                            oninput="recalculateMultiRollMetrics(); validateRollInput(this);">
-                    <div class="invalid-feedback">Min 1 qty required.</div>
+                    <div class="invalid-feedback">Minimum 1 RQ (Roll Quantity) required.</div>
                 </div>
 
                 <!-- Roll Weight (KG) -->
@@ -945,14 +944,14 @@ function renderRollsSummaryTable() {
                     <span class="fw-semibold text-secondary"><i class="bi bi-brush text-primary me-1"></i>${escapeHtml(design)}</span>
                 </td>
                 <td class="text-center fw-semibold text-dark">${designCount}</td>
-                <td class="text-end fw-bold text-dark">${initialQty} qty</td>
+                <td class="text-end fw-bold text-dark">${initialQty} RQ</td>
                 <td class="text-end fw-semibold text-dark">${initialWeight.toFixed(2)} kg</td>
                 <td class="text-end fw-semibold text-dark">₹ ${initialPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 <td class="text-end bg-success-subtle fw-bold text-success">
                     ₹ ${initialPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </td>
                 <td class="text-center">
-                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><i class="bi bi-check-circle me-1"></i>New Roll (${initialQty} qty)</span>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><i class="bi bi-check-circle me-1"></i>New Roll (${initialQty} RQ)</span>
                 </td>
             </tr>
         `;

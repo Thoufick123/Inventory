@@ -138,6 +138,10 @@
                                 $rollNumbers = implode(' ', array_filter(array_column($s['rolls'] ?? [], 'roll_number')));
                                 $designNames = implode(' ', array_filter(array_column($s['rolls'] ?? [], 'design_name')));
                                 $rollColors  = implode(' ', array_filter(array_column($s['rolls'] ?? [], 'color')));
+                                $totalRollQuantity = array_sum(array_map(
+                                    static fn($roll) => (int)($roll['quantity'] ?? 0),
+                                    $s['rolls'] ?? []
+                                ));
                             ?>
                             <tr class="supplier-row"
                                 data-name="<?= strtolower(e($s['name'])) ?>"
@@ -229,6 +233,9 @@
                                     <div>
                                         <span class="badge bg-primary-subtle text-primary border border-primary-subtle fw-bold">
                                             <i class="bi bi-stack me-1"></i><?= (int)($s['roll_count'] ?? 0) ?> Rolls
+                                        </span>
+                                        <span class="badge bg-secondary-subtle text-secondary border fw-bold">
+                                            Total RQ: <?= number_format($totalRollQuantity) ?>
                                         </span>
                                     </div>
                                     <div class="d-flex flex-wrap gap-1 mt-1">

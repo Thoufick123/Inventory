@@ -234,7 +234,7 @@ class ProductionController {
             'name'          => 'required|minLength:2|maxLength:200',
             'company'       => 'required|minLength:2|maxLength:300',
             'phone'         => 'required',
-            'email'         => 'required|maxLength:255',
+            'email'         => 'maxLength:255',
             'city'          => 'required|maxLength:100',
             'state'         => 'required|maxLength:100',
             'address'       => 'required|maxLength:500',
@@ -267,10 +267,11 @@ class ProductionController {
         }
 
         $email = trim($_POST['email'] ?? '');
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email)) {
+        if ($email !== '' && (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email))) {
             Session::flash('error', 'Email address must be a valid email address (e.g. name@domain.in, name@gmail.com).');
             Response::back();
         }
+        $email = $email !== '' ? $email : null;
 
         $city = mb_strtoupper(trim($_POST['city'] ?? ''));
         if (preg_match('/[0-9]/', $city)) {
@@ -614,7 +615,7 @@ class ProductionController {
             'name'          => 'required|minLength:2|maxLength:200',
             'company'       => 'required|minLength:2|maxLength:300',
             'phone'         => 'required',
-            'email'         => 'required|maxLength:255',
+            'email'         => 'maxLength:255',
             'city'          => 'required|maxLength:100',
             'state'         => 'required|maxLength:100',
             'address'       => 'required|maxLength:500',
@@ -647,10 +648,11 @@ class ProductionController {
         }
 
         $email = trim($_POST['email'] ?? '');
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email)) {
+        if ($email !== '' && (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email))) {
             Session::flash('error', 'Email address must be a valid email address (e.g. name@domain.in, name@gmail.com).');
             Response::back();
         }
+        $email = $email !== '' ? $email : null;
 
         $city = mb_strtoupper(trim($_POST['city'] ?? ''));
         if (preg_match('/[0-9]/', $city)) {

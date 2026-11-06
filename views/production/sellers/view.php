@@ -121,10 +121,10 @@
                                     <th>Color / Shade</th>
                                     <th>Design / Pattern</th>
                                     <th class="text-center">Designs</th>
-                                    <th class="text-end">Total Stock</th>
-                                    <th class="text-end text-danger bg-danger-subtle bg-opacity-25">Damages</th>
-                                    <th class="text-end bg-light-subtle text-muted">Used in Programs</th>
-                                    <th class="text-end bg-success-subtle fw-bold text-success">Available Balance</th>
+                                    <th class="text-end">Total RQ</th>
+                                    <th class="text-end text-danger bg-danger-subtle bg-opacity-25">Damaged RQ</th>
+                                    <th class="text-end bg-light-subtle text-muted">Used RQ</th>
+                                    <th class="text-end bg-success-subtle fw-bold text-success">Available RQ</th>
                                     <th class="text-center">Status</th>
                                     <th class="text-center" style="width: 70px;">Action</th>
                                 </tr>
@@ -220,14 +220,14 @@
 
                                         <!-- Initial Stock -->
                                         <td class="text-end">
-                                            <div class="fw-bold text-dark"><?= number_format($initQty) ?> qty</div>
+                                            <div class="fw-bold text-dark"><?= number_format($initQty) ?> RQ</div>
                                             <small class="text-muted d-block"><?= number_format($initWt, 2) ?> kg • ₹<?= number_format($initPrice, 2) ?></small>
                                         </td>
 
                                         <!-- Damages -->
                                         <td class="text-end bg-danger-subtle bg-opacity-25">
                                             <?php if ($dmgQty > 0 || $dmgWt > 0): ?>
-                                                <div class="fw-bold text-danger">-<?= number_format($dmgQty) ?> qty</div>
+                                                <div class="fw-bold text-danger">-<?= number_format($dmgQty) ?> RQ</div>
                                                 <small class="text-danger d-block"><?= number_format($dmgWt, 2) ?> kg • ₹<?= number_format($dmgPrice, 2) ?></small>
                                                 <div class="mt-1">
                                                     <a href="<?= url('production/damages?seller_id=' . $seller['id'] . '&search=' . urlencode($r['roll_number'])) ?>" class="badge bg-danger text-white text-decoration-none" style="font-size: 10px;" title="<?= e($r['damage_reason'] ?? 'Defect Issue Logged') ?>">
@@ -235,23 +235,23 @@
                                                     </a>
                                                 </div>
                                             <?php else: ?>
-                                                <span class="text-muted small">0 qty</span>
+                                                <span class="text-muted small">0 RQ</span>
                                             <?php endif; ?>
                                         </td>
 
                                         <!-- Used in Programs -->
                                         <td class="text-end bg-light-subtle">
                                             <?php if ($usedQty > 0): ?>
-                                                <div class="fw-bold text-secondary">-<?= number_format($usedQty) ?> qty</div>
+                                                <div class="fw-bold text-secondary">-<?= number_format($usedQty) ?> RQ</div>
                                                 <small class="text-muted d-block"><?= number_format($usedWt, 2) ?> kg • ₹<?= number_format($usedPrice, 2) ?></small>
                                             <?php else: ?>
-                                                <span class="text-muted small">0 qty</span>
+                                                <span class="text-muted small">0 RQ</span>
                                             <?php endif; ?>
                                         </td>
 
                                         <!-- Available Balance -->
                                         <td class="text-end bg-success-subtle">
-                                            <div class="fw-bold text-success"><?= number_format($availQty) ?> qty</div>
+                                            <div class="fw-bold text-success"><?= number_format($availQty) ?> RQ</div>
                                             <small class="text-muted d-block"><?= number_format($availWt, 2) ?> kg • ₹<?= number_format($availPrice, 2) ?></small>
                                         </td>
 
@@ -267,7 +267,7 @@
                                                 </span>
                                             <?php elseif ($availQty > 0): ?>
                                                 <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 py-1">
-                                                    <i class="bi bi-hourglass-split me-1"></i><?= $availQty ?> qty Left
+                                                    <i class="bi bi-hourglass-split me-1"></i><?= $availQty ?> RQ Left
                                                 </span>
                                             <?php else: ?>
                                                 <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
@@ -309,19 +309,19 @@
                                 <tr>
                                     <td colspan="5" class="text-end">Total Summary:</td>
                                     <td class="text-end text-dark">
-                                        <?= number_format($totInitQty) ?> qty
+                                        <?= number_format($totInitQty) ?> RQ
                                         <small class="text-muted d-block fw-normal"><?= number_format($totInitWt, 2) ?> kg • ₹<?= number_format($totInitPrice, 2) ?></small>
                                     </td>
                                     <td class="text-end text-danger bg-danger-subtle bg-opacity-25">
-                                        <?= $totDmgQty > 0 ? '-' . number_format($totDmgQty) . ' qty' : '0 qty' ?>
+                                        <?= $totDmgQty > 0 ? '-' . number_format($totDmgQty) . ' RQ' : '0 RQ' ?>
                                         <small class="text-danger d-block fw-normal"><?= $totDmgWt > 0 ? number_format($totDmgWt, 2) . ' kg' : '0.00 kg' ?></small>
                                     </td>
                                     <td class="text-end text-muted bg-light-subtle">
-                                        <?= $totUsedQty > 0 ? '-' . number_format($totUsedQty) . ' qty' : '0 qty' ?>
+                                        <?= $totUsedQty > 0 ? '-' . number_format($totUsedQty) . ' RQ' : '0 RQ' ?>
                                         <small class="text-muted d-block fw-normal"><?= number_format($totUsedWt, 2) ?> kg</small>
                                     </td>
                                     <td class="text-end text-success bg-success-subtle">
-                                        <?= number_format($totAvailQty) ?> qty
+                                        <?= number_format($totAvailQty) ?> RQ
                                         <small class="text-muted d-block fw-normal"><?= number_format($totAvailWt, 2) ?> kg • ₹<?= number_format($totAvailPrice, 2) ?></small>
                                     </td>
                                     <td class="text-center" colspan="2">
