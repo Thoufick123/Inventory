@@ -269,9 +269,6 @@
                                 <i class="bi bi-table me-1 text-primary"></i>Fabric Rolls Inventory & Allocation Details Table
                             </span>
                             <div class="d-flex align-items-center gap-2">
-                                <button type="button" class="btn btn-sm btn-dark" onclick="openEditLabelsPreviewModal()">
-                                    <i class="bi bi-qr-code text-warning me-1"></i> Preview Labels
-                                </button>
                                 <span class="badge bg-secondary-subtle text-secondary border small" id="tableRollCountBadge">0 Rolls</span>
                             </div>
                         </div>

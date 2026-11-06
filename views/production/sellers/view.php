@@ -126,7 +126,6 @@
                                     <th class="text-end bg-light-subtle text-muted">Used RQ</th>
                                     <th class="text-end bg-success-subtle fw-bold text-success">Available RQ</th>
                                     <th class="text-center">Status</th>
-                                    <th class="text-center" style="width: 70px;">Action</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -276,32 +275,6 @@
                                             <?php endif; ?>
                                         </td>
 
-                                        <!-- Action (Print Label / Report Damage / Delete Roll) -->
-                                        <td class="text-center">
-                                            <div class="d-inline-flex align-items-center justify-content-center gap-1">
-                                                <button type="button" class="btn btn-sm btn-outline-dark" title="Preview or print labels for roll <?= e($r['roll_number']) ?>" aria-label="Preview or print labels for roll <?= e($r['roll_number']) ?>" onclick="openSingleRollLabelModal(<?= (int)$r['id'] ?>, '<?= e(addslashes($r['roll_number'])) ?>')">
-                                                    <i class="bi bi-qr-code"></i>
-                                                </button>
-                                                <button type="button" class="btn btn-sm btn-outline-success" title="Add continuation label for roll <?= e($r['roll_number']) ?>" aria-label="Add continuation label for roll <?= e($r['roll_number']) ?>" onclick="promptAddExtraRollLabel(<?= (int)$r['id'] ?>, '<?= e(addslashes($r['roll_number'])) ?>', '<?= e(addslashes($r['end_code'] ?? '')) ?>', <?= (int)$r['quantity'] ?>)">
-                                                    <i class="bi bi-plus-lg"></i>
-                                                </button>
-                                                <button type="button" class="btn btn-sm btn-outline-warning" title="Report damage or return roll <?= e($r['roll_number']) ?> to supplier" aria-label="Report damage or return roll <?= e($r['roll_number']) ?> to supplier" onclick='openSupplierRollDamageModal(<?= json_encode($r) ?>)'>
-                                                    <i class="bi bi-exclamation-triangle"></i>
-                                                </button>
-                                                <?php if ($usedQty === 0 && empty($r['damaged_weight'])): ?>
-                                                    <form method="POST" action="<?= url('production/sellers/delete-roll/' . $r['id']) ?>" class="d-inline" onsubmit="return confirm('Are you sure you want to delete Roll \'<?= e(addslashes($r['roll_number'])) ?>\'?');">
-                                                        <?= CSRF::field() ?>
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete roll <?= e($r['roll_number']) ?>" aria-label="Delete roll <?= e($r['roll_number']) ?>">
-                                                            <i class="bi bi-trash"></i>
-                                                        </button>
-                                                    </form>
-                                                <?php else: ?>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" title="Cannot delete: roll is assigned in production or has logged damages" aria-label="Roll cannot be deleted" disabled>
-                                                        <i class="bi bi-lock-fill"></i>
-                                                    </button>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -324,7 +297,7 @@
                                         <?= number_format($totAvailQty) ?> RQ
                                         <small class="text-muted d-block fw-normal"><?= number_format($totAvailWt, 2) ?> kg • ₹<?= number_format($totAvailPrice, 2) ?></small>
                                     </td>
-                                    <td class="text-center" colspan="2">
+                                    <td class="text-center">
                                         <span class="badge bg-primary-subtle text-primary border"><?= count($rolls) ?> Rolls Total</span>
                                     </td>
                                 </tr>
