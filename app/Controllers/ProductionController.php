@@ -36,19 +36,154 @@ class ProductionController {
     // SELLERS (Material Suppliers)
     // =========================================================================
 
+    private function storeSupplierProfile(): void {
+        $validator = Validator::make($_POST, [
+            'name' => 'required|minLength:2|maxLength:200',
+            'company' => 'required|minLength:2|maxLength:300',
+            'phone' => 'required',
+            'email' => 'maxLength:255',
+            'city' => 'required|maxLength:100',
+            'state' => 'required|maxLength:100',
+            'address' => 'required|maxLength:500',
+            'gst_number' => 'maxLength:20',
+            'payment_terms' => 'maxLength:200',
+        ]);
+        if ($validator->fails()) {
+            Session::flash('error', $validator->firstError());
+            Response::back();
+            return;
+        }
+
+        $name = mb_strtoupper(trim((string)$_POST['name']));
+        $company = mb_strtoupper(trim((string)$_POST['company']));
+        $phone = trim((string)$_POST['phone']);
+        $email = trim((string)($_POST['email'] ?? ''));
+        $city = mb_strtoupper(trim((string)$_POST['city']));
+        $state = mb_strtoupper(trim((string)$_POST['state']));
+        $address = mb_strtoupper(trim((string)$_POST['address']));
+        $gstNumber = mb_strtoupper(trim((string)($_POST['gst_number'] ?? '')));
+        $paymentTerms = mb_strtoupper(trim((string)($_POST['payment_terms'] ?? '')));
+
+        if (preg_match('/[0-9]/', $name) || preg_match('/[0-9]/', $company)
+            || preg_match('/[0-9]/', $city) || preg_match('/[0-9]/', $state)) {
+            Session::flash('error', 'Supplier, company, city, and state fields cannot contain numbers.');
+            Response::back();
+            return;
+        }
+        if (!preg_match('/^[0-9]{10}$/', $phone)) {
+            Session::flash('error', 'Phone number must be exactly 10 digits.');
+            Response::back();
+            return;
+        }
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            Session::flash('error', 'Please enter a valid email address.');
+            Response::back();
+            return;
+        }
+        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
+            Session::flash('error', 'GST number must be a valid 15-character alphanumeric code.');
+            Response::back();
+            return;
+        }
+
+        Database::execute(
+            "INSERT INTO sellers (name, company, phone, email, gst_number, city, state, address, payment_terms, seller_type, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'MATERIAL_SUPPLIER', 1)",
+            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
+                $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null]
+        );
+        $sellerId = (int)Database::lastInsertId();
+        AuditService::log('production', 'CREATE', 'sellers', $sellerId, null, [
+            'Supplier Name' => $name, 'Company / Mill' => $company, 'Phone' => $phone,
+            'Email' => $email, 'City' => $city, 'State' => $state,
+        ]);
+        Session::flash('success', 'Supplier details saved. Record fabric and other purchases in Production Purchases.');
+        Response::redirect(url('production/sellers'));
+    }
+
+    private function updateSupplierProfile(int $sellerId): void {
+        $existing = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
+            [$sellerId]
+        );
+        if (!$existing) {
+            Session::flash('error', 'Supplier not found.');
+            Response::redirect(url('production/sellers'));
+            return;
+        }
+
+        $validator = Validator::make($_POST, [
+            'name' => 'required|minLength:2|maxLength:200',
+            'company' => 'required|minLength:2|maxLength:300',
+            'phone' => 'required',
+            'email' => 'maxLength:255',
+            'city' => 'required|maxLength:100',
+            'state' => 'required|maxLength:100',
+            'address' => 'required|maxLength:500',
+            'gst_number' => 'maxLength:20',
+            'payment_terms' => 'maxLength:200',
+        ]);
+        if ($validator->fails()) {
+            Session::flash('error', $validator->firstError());
+            Response::back();
+            return;
+        }
+
+        $name = mb_strtoupper(trim((string)$_POST['name']));
+        $company = mb_strtoupper(trim((string)$_POST['company']));
+        $phone = trim((string)$_POST['phone']);
+        $email = trim((string)($_POST['email'] ?? ''));
+        $city = mb_strtoupper(trim((string)$_POST['city']));
+        $state = mb_strtoupper(trim((string)$_POST['state']));
+        $address = mb_strtoupper(trim((string)$_POST['address']));
+        $gstNumber = mb_strtoupper(trim((string)($_POST['gst_number'] ?? '')));
+        $paymentTerms = mb_strtoupper(trim((string)($_POST['payment_terms'] ?? '')));
+
+        if (preg_match('/[0-9]/', $name) || preg_match('/[0-9]/', $company)
+            || preg_match('/[0-9]/', $city) || preg_match('/[0-9]/', $state)) {
+            Session::flash('error', 'Supplier, company, city, and state fields cannot contain numbers.');
+            Response::back();
+            return;
+        }
+        if (!preg_match('/^[0-9]{10}$/', $phone)) {
+            Session::flash('error', 'Phone number must be exactly 10 digits.');
+            Response::back();
+            return;
+        }
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            Session::flash('error', 'Please enter a valid email address.');
+            Response::back();
+            return;
+        }
+        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
+            Session::flash('error', 'GST number must be a valid 15-character alphanumeric code.');
+            Response::back();
+            return;
+        }
+
+        Database::execute(
+            "UPDATE sellers SET name = ?, company = ?, phone = ?, email = ?, gst_number = ?, city = ?, state = ?,
+                    address = ?, payment_terms = ?, is_active = ?, updated_at = NOW()
+             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
+            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
+                $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null,
+                isset($_POST['is_active']) ? 1 : 0, $sellerId]
+        );
+        AuditService::log('production', 'UPDATE', 'sellers', $sellerId, $existing, [
+            'name' => $name, 'company' => $company, 'phone' => $phone, 'email' => $email,
+            'gst_number' => $gstNumber, 'city' => $city, 'state' => $state, 'address' => $address,
+            'payment_terms' => $paymentTerms, 'is_active' => isset($_POST['is_active']) ? 1 : 0,
+        ]);
+        Session::flash('success', 'Supplier details updated.');
+        Response::redirect(url('production/sellers'));
+    }
+
     public function sellerList(): void {
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['status'] ?? '';
         $city = trim($_GET['city'] ?? '');
 
-        $sql = "SELECT s.*,
-                    (SELECT COUNT(*) FROM seller_rolls sr WHERE sr.seller_id = s.id) AS fabric_roll_count,
-                    (SELECT COALESCE(SUM(sr.quantity), 0) FROM seller_rolls sr WHERE sr.seller_id = s.id) AS total_roll_quantity,
-                    (SELECT GROUP_CONCAT(
-                        CONCAT(COALESCE(sr.start_code, '—'), '–', COALESCE(sr.end_code, '—'))
-                        ORDER BY sr.id SEPARATOR ', '
-                     ) FROM seller_rolls sr WHERE sr.seller_id = s.id) AS sticker_ranges
-                FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER'";
+        $sql = "SELECT s.* FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER'";
         $params = [];
 
         if ($search !== '') {
@@ -90,7 +225,7 @@ class ProductionController {
     }
 
     public function createSeller(): void {
-        Response::view('production.sellers.create', [
+        Response::view('production.sellers.profile_create', [
             'pageTitle'    => 'Add Material Supplier',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
@@ -108,56 +243,11 @@ class ProductionController {
             Response::error(404, 'Material Supplier not found.');
         }
 
-        $rolls = Database::fetchAll(
-            "SELECT sr.*,
-                    COALESCE(u.used_quantity, 0) as used_quantity,
-                    COALESCE(u.used_weight, 0) as used_weight,
-                    COALESCE(u.used_price, 0) as used_price,
-                    COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
-                    COALESCE(dmg.damaged_weight, 0) as damaged_weight,
-                    COALESCE(dmg.damaged_price, 0) as damaged_price,
-                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
-                    GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight,
-                    GREATEST(0.0, sr.price - COALESCE(u.used_price, 0) - COALESCE(dmg.damaged_price, 0)) as available_price,
-                    dmg.damage_reason,
-                    dmg.damage_status,
-                    dmg.damage_id
-             FROM seller_rolls sr
-             LEFT JOIN (
-                 SELECT ppr.seller_roll_id, 
-                        SUM(ppr.roll_qty) as used_quantity,
-                        SUM(ppr.roll_weight) as used_weight,
-                        SUM(ppr.roll_price) as used_price
-                 FROM production_program_rolls ppr
-                 JOIN production_programs pp ON ppr.production_program_id = pp.id
-                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
-                 GROUP BY ppr.seller_roll_id
-             ) u ON sr.id = u.seller_roll_id
-             LEFT JOIN (
-                 SELECT rd.seller_roll_id,
-                        SUM(rd.damaged_quantity) as damaged_quantity,
-                        SUM(rd.damaged_weight) as damaged_weight,
-                        SUM(rd.loss_amount) as damaged_price,
-                        MAX(rd.damage_reason) as damage_reason,
-                        MAX(rd.status) as damage_status,
-                        MAX(rd.id) as damage_id
-                 FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                 GROUP BY rd.seller_roll_id
-             ) dmg ON sr.id = dmg.seller_roll_id
-             WHERE sr.seller_id = ?
-             ORDER BY sr.id ASC",
-            [(int)$id]
-        );
-        $damageReasons = $this->getDamageReasonOptions();
-
-        Response::view('production.sellers.view', [
-            'pageTitle'    => 'Supplier Details — ' . ($seller['name'] ?? ''),
+        Response::view('production.sellers.profile_view', [
+            'pageTitle'    => 'Supplier Details — ' . $seller['name'],
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
             'seller'       => $seller,
-            'rolls'        => $rolls,
-            'damageReasons'=> $damageReasons,
             'breadcrumb'   => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Suppliers', 'url' => url('production/sellers')],
@@ -170,312 +260,9 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
-        }
-        $validator = Validator::make($_POST, [
-            'name'          => 'required|minLength:2|maxLength:200',
-            'company'       => 'required|minLength:2|maxLength:300',
-            'phone'         => 'required',
-            'email'         => 'maxLength:255',
-            'city'          => 'required|maxLength:100',
-            'state'         => 'required|maxLength:100',
-            'address'       => 'required|maxLength:500',
-            'material_type' => 'required|maxLength:150',
-            'gst_number'    => 'maxLength:20',
-            'payment_terms' => 'maxLength:200',
-        ]);
-
-        if ($validator->fails()) {
-            Session::flash('error', $validator->firstError());
-            Response::back();
-        }
-
-        $name = mb_strtoupper(trim($_POST['name'] ?? ''));
-        if (preg_match('/[0-9]/', $name)) {
-            Session::flash('error', 'Supplier Name cannot contain numbers. Only alphabetic characters allowed.');
-            Response::back();
-        }
-
-        $company = mb_strtoupper(trim($_POST['company'] ?? ''));
-        if (preg_match('/[0-9]/', $company)) {
-            Session::flash('error', 'Company / Mill Name cannot contain numbers.');
-            Response::back();
-        }
-
-        $phone = trim($_POST['phone'] ?? '');
-        if (!preg_match('/^[0-9]{10}$/', $phone)) {
-            Session::flash('error', 'Phone number must be exactly 10 digits (e.g. 9876543210).');
-            Response::back();
-        }
-
-        $email = trim($_POST['email'] ?? '');
-        if ($email !== '' && (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email))) {
-            Session::flash('error', 'Email address must be a valid email address (e.g. name@domain.in, name@gmail.com).');
-            Response::back();
-        }
-        $email = $email !== '' ? $email : null;
-
-        $city = mb_strtoupper(trim($_POST['city'] ?? ''));
-        if (preg_match('/[0-9]/', $city)) {
-            Session::flash('error', 'City / District cannot contain numbers.');
-            Response::back();
-        }
-
-        $state = mb_strtoupper(trim($_POST['state'] ?? ''));
-        if (preg_match('/[0-9]/', $state)) {
-            Session::flash('error', 'State cannot contain numbers.');
-            Response::back();
-        }
-
-        $address = mb_strtoupper(trim($_POST['address'] ?? ''));
-        $materialType = mb_strtoupper(trim($_POST['material_type'] ?? ''));
-
-        // Validate GST if provided
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
-            Session::flash('error', 'GST Number must be a valid 15-character alphanumeric code.');
-            Response::back();
-        }
-
-        // Validate rolls are present and all fields filled
-        if (empty($_POST['rolls']) || !is_array($_POST['rolls'])) {
-            Session::flash('error', 'Please add at least 1 fabric roll.');
-            Response::back();
-        }
-
-        foreach ($_POST['rolls'] as $rIdx => $rCheck) {
-            $rNum = trim($rCheck['roll_number'] ?? '');
-            $rCol = trim($rCheck['color'] ?? '');
-            $rDes = trim($rCheck['design_name'] ?? '');
-            $rCnt = (int)($rCheck['design_count'] ?? 0);
-            $rQty = (int)($rCheck['quantity'] ?? 0);
-            $rWgt = (float)($rCheck['weight'] ?? 0);
-            $rPrc = (float)($rCheck['price'] ?? 0);
-
-            if ($rNum === '' || $rCol === '' || $rDes === '' || $rCnt < 1 || $rQty < 1 || $rWgt <= 0 || $rPrc <= 0) {
-                Session::flash('error', "All fields in Roll #" . ($rIdx + 1) . " (Code, Color, Design, Designs Count, Qty, Weight, Price) are required.");
-                Response::back();
-            }
-        }
-
-        // Enforce required Bill / Invoice / Document upload
-        if (empty($_FILES['document']['name']) || $_FILES['document']['error'] !== UPLOAD_ERR_OK) {
-            Session::flash('error', 'Tax Invoice / Bill document is required. Please choose and upload the bill file (JPG, PNG, WEBP, PDF).');
-            Response::back();
             return;
         }
-
-        $documentUrl = null;
-        if (!empty($_FILES['document']['name']) && $_FILES['document']['error'] === UPLOAD_ERR_OK) {
-            $allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
-            $fileExt = strtolower(pathinfo($_FILES['document']['name'], PATHINFO_EXTENSION));
-            $fileSize = $_FILES['document']['size'];
-
-            if (!in_array($fileExt, $allowedExtensions, true)) {
-                Session::flash('error', 'Invalid document format. Allowed formats: JPG, JPEG, PNG, WEBP, PDF.');
-                Response::back();
-                return;
-            }
-
-            if ($fileSize > 5 * 1024 * 1024) {
-                Session::flash('error', 'Document file size must not exceed 5MB.');
-                Response::back();
-                return;
-            }
-
-            $documentUrl = CloudinaryService::upload($_FILES['document'], 'grm_inventory/sellers/documents', 'auto');
-        }
-
-        // Handle Fabric Roll Photo upload
-        $rollPhotoUrl = null;
-        if (!empty($_FILES['roll_photo']['name']) && $_FILES['roll_photo']['error'] === UPLOAD_ERR_OK) {
-            $allowedImgExt = ['jpg', 'jpeg', 'png', 'webp'];
-            $fileExt = strtolower(pathinfo($_FILES['roll_photo']['name'], PATHINFO_EXTENSION));
-            $fileSize = $_FILES['roll_photo']['size'];
-
-            if (!in_array($fileExt, $allowedImgExt, true)) {
-                Session::flash('error', 'Invalid roll photo format. Allowed image formats: JPG, JPEG, PNG, WEBP.');
-                Response::back();
-            }
-
-            if ($fileSize > 5 * 1024 * 1024) {
-                Session::flash('error', 'Roll photo file size must not exceed 5MB.');
-                Response::back();
-            }
-
-            $rollPhotoUrl = CloudinaryService::upload($_FILES['roll_photo'], 'grm_inventory/sellers/rolls', 'image');
-        }
-
-        $name = mb_strtoupper(trim($_POST['name'] ?? ''));
-        $company = mb_strtoupper(trim($_POST['company'] ?? ''));
-        $city = mb_strtoupper(trim($_POST['city'] ?? ''));
-        $state = mb_strtoupper(trim($_POST['state'] ?? ''));
-        $address = mb_strtoupper(trim($_POST['address'] ?? ''));
-        $paymentTerms = mb_strtoupper(trim($_POST['payment_terms'] ?? ''));
-        $materialType = mb_strtoupper(trim($_POST['material_type'] ?? ''));
-        $colors = mb_strtoupper(trim($_POST['colors'] ?? ''));
-        $rollCount = max(0, (int)($_POST['roll_count'] ?? 0));
-        $colorCount = max(0, (int)($_POST['color_count'] ?? 0));
-        $designCount = max(0, (int)($_POST['design_count'] ?? 0));
-        $colorDesignCount = max(0, (int)($_POST['color_design_count'] ?? ($colorCount + $designCount)));
-        $rollWeight = max(0.0, (float)($_POST['roll_weight'] ?? 0));
-        $rollPrice = max(0.0, (float)($_POST['roll_price'] ?? 0));
-
-        Database::execute(
-            "INSERT INTO sellers (name, company, gst_number, phone, email, address, city, state, payment_terms, document_url, material_type, colors, roll_photo, roll_count, color_count, design_count, color_design_count, roll_weight, roll_price, seller_type, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'MATERIAL_SUPPLIER', 1)",
-            [
-                $name,
-                $company,
-                $gstNumber,
-                $phone,
-                $email,
-                $address,
-                $city,
-                $state,
-                $paymentTerms,
-                $documentUrl,
-                $materialType,
-                $colors,
-                $rollPhotoUrl,
-                $rollCount,
-                $colorCount,
-                $designCount,
-                $colorDesignCount,
-                $rollWeight,
-                $rollPrice,
-            ]
-        );
-
-        $sellerId = (int)Database::lastInsertId();
-
-        // Process dynamic multiple rolls if submitted
-        if (!empty($_POST['rolls']) && is_array($_POST['rolls'])) {
-            $computedRollCount = 0;
-            $computedTotalWeight = 0.0;
-            $computedTotalPrice = 0.0;
-            $colorsList = [];
-            $designsList = [];
-            $firstRollPhoto = $rollPhotoUrl;
-
-            $seqInfo = ProductionService::getNextFabricRollSequence(1);
-            $runningSeq = (int)$seqInfo['start_seq'];
-            $prefix = $seqInfo['prefix'];
-
-            foreach ($_POST['rolls'] as $index => $r) {
-                $rollNum = mb_strtoupper(trim($r['roll_number'] ?? ('ROLL #' . ($computedRollCount + 1))));
-                $rollColor = mb_strtoupper(trim($r['color'] ?? ''));
-                $rollDesign = mb_strtoupper(trim($r['design_name'] ?? ''));
-                $rDesignCount = max(1, (int)($r['design_count'] ?? 1));
-                $rQty = max(1, (int)($r['quantity'] ?? ($r['qty'] ?? 1)));
-                $rWeight = max(0.0, (float)($r['weight'] ?? 0));
-                $rPrice = max(0.0, (float)($r['price'] ?? 0));
-                $individualPhoto = null;
-
-                // Handle individual roll photo upload
-                if (!empty($_FILES["roll_photo_{$index}"]['name']) && $_FILES["roll_photo_{$index}"]['error'] === UPLOAD_ERR_OK) {
-                    $f = $_FILES["roll_photo_{$index}"];
-                    $fExt = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
-                    if (in_array($fExt, ['jpg', 'jpeg', 'png', 'webp'], true) && $f['size'] <= 5 * 1024 * 1024) {
-                        $uploaded = CloudinaryService::upload($f, 'grm_inventory/sellers/rolls', 'image');
-                        if ($uploaded) {
-                            $individualPhoto = $uploaded;
-                        }
-                    }
-                }
-
-                if ($firstRollPhoto === null && $individualPhoto !== null) {
-                    $firstRollPhoto = $individualPhoto;
-                }
-
-                $rollStartSeq = $runningSeq;
-                $rollEndSeq = $runningSeq + $rQty - 1;
-                $rollStartCode = sprintf('%s%02d', $prefix, $rollStartSeq);
-                $rollEndCode = sprintf('%s%02d', $prefix, $rollEndSeq);
-                $rollQrCode = ($rQty > 1) ? ($rollStartCode . '-' . $rollEndCode) : $rollStartCode;
-                $runningSeq = $rollEndSeq + 1;
-
-                Database::execute(
-                    "INSERT INTO seller_rolls (seller_id, roll_number, color, design_name, design_count, quantity, weight, price, photo_url, start_seq, end_seq, start_code, end_code, qr_code)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [
-                        $sellerId,
-                        $rollNum,
-                        $rollColor,
-                        $rollDesign,
-                        $rDesignCount,
-                        $rQty,
-                        $rWeight,
-                        $rPrice,
-                        $individualPhoto,
-                        $rollStartSeq,
-                        $rollEndSeq,
-                        $rollStartCode,
-                        $rollEndCode,
-                        $rollQrCode,
-                    ]
-                );
-
-                $computedRollCount++;
-                $computedTotalWeight += $rWeight;
-                $computedTotalPrice += $rPrice;
-                if ($rollColor !== '') $colorsList[] = $rollColor;
-                if ($rollDesign !== '') $designsList[] = $rollDesign;
-            }
-
-            $uniqueColors = array_values(array_unique(array_filter($colorsList)));
-            $uniqueDesigns = array_values(array_unique(array_filter($designsList)));
-
-            Database::execute(
-                "UPDATE sellers SET 
-                    roll_count = ?, 
-                    color_count = ?, 
-                    design_count = ?, 
-                    color_design_count = ?, 
-                    roll_weight = ?, 
-                    roll_price = ?, 
-                    colors = ?, 
-                    roll_photo = COALESCE(?, roll_photo) 
-                 WHERE id = ?",
-                [
-                    $computedRollCount,
-                    count($uniqueColors),
-                    count($uniqueDesigns),
-                    count($uniqueColors) + count($uniqueDesigns),
-                    $computedTotalWeight,
-                    $computedTotalPrice,
-                    !empty($uniqueColors) ? implode(', ', $uniqueColors) : $colors,
-                    $firstRollPhoto,
-                    $sellerId
-                ]
-            );
-        }
-
-        AuditService::log(
-            'production',
-            'CREATE',
-            'sellers',
-            $sellerId,
-            null,
-            [
-                'Supplier Name'  => $name,
-                'Company / Mill' => $company,
-                'Phone'          => $phone,
-                'Email'          => $email,
-                'Material Type'  => $materialType,
-                'City'           => $city,
-                'State'          => $state,
-                'Address'        => $address,
-                'GST Number'     => !empty($gstNumber) ? $gstNumber : 'N/A',
-                'Payment Terms'  => !empty($paymentTerms) ? $paymentTerms : 'N/A',
-                'Total Rolls'    => !empty($computedRollCount) ? $computedRollCount : $rollCount,
-                'Total Weight'   => number_format(!empty($computedTotalWeight) ? $computedTotalWeight : $rollWeight, 2) . ' kg',
-                'Total Price'    => '₹' . number_format(!empty($computedTotalPrice) ? $computedTotalPrice : $rollPrice, 2),
-                'Colors'         => !empty($uniqueColors) ? implode(', ', $uniqueColors) : ($colors ?: 'N/A'),
-            ]
-        );
-
-        Session::flash('success', 'Material supplier and fabric rolls saved successfully.');
-        Response::redirect(url('production/sellers'));
+        $this->storeSupplierProfile();
     }
 
     public function editSeller(string $id): void {
@@ -484,54 +271,11 @@ class ProductionController {
             Response::error(404, 'Supplier not found.');
         }
 
-        $rolls = Database::fetchAll(
-            "SELECT sr.*,
-                    COALESCE(u.used_quantity, 0) as used_quantity,
-                    COALESCE(u.used_weight, 0) as used_weight,
-                    COALESCE(u.used_price, 0) as used_price,
-                    COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
-                    COALESCE(dmg.damaged_weight, 0) as damaged_weight,
-                    COALESCE(dmg.damaged_price, 0) as damaged_price,
-                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
-                    GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight,
-                    GREATEST(0.0, sr.price - COALESCE(u.used_price, 0) - COALESCE(dmg.damaged_price, 0)) as available_price,
-                    dmg.damage_reason,
-                    dmg.damage_status,
-                    dmg.damage_id
-             FROM seller_rolls sr
-             LEFT JOIN (
-                 SELECT ppr.seller_roll_id, 
-                        SUM(ppr.roll_qty) as used_quantity,
-                        SUM(ppr.roll_weight) as used_weight,
-                        SUM(ppr.roll_price) as used_price
-                 FROM production_program_rolls ppr
-                 JOIN production_programs pp ON ppr.production_program_id = pp.id
-                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
-                 GROUP BY ppr.seller_roll_id
-             ) u ON sr.id = u.seller_roll_id
-             LEFT JOIN (
-                 SELECT rd.seller_roll_id,
-                        SUM(rd.damaged_quantity) as damaged_quantity,
-                        SUM(rd.damaged_weight) as damaged_weight,
-                        SUM(rd.loss_amount) as damaged_price,
-                        MAX(rd.damage_reason) as damage_reason,
-                        MAX(rd.status) as damage_status,
-                        MAX(rd.id) as damage_id
-                 FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                 GROUP BY rd.seller_roll_id
-             ) dmg ON sr.id = dmg.seller_roll_id
-             WHERE sr.seller_id = ?
-             ORDER BY sr.id ASC",
-            [(int)$id]
-        );
-
-        Response::view('production.sellers.edit', [
+        Response::view('production.sellers.profile_edit', [
             'pageTitle'    => 'Edit Material Supplier',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
             'seller'       => $seller,
-            'rolls'        => $rolls,
             'breadcrumb'   => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Suppliers', 'url' => url('production/sellers')],
@@ -544,385 +288,9 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
-        }
-        $existing = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$id]);
-        if (!$existing) {
-            Session::flash('error', 'Supplier not found.');
-            Response::redirect(url('production/sellers'));
-        }
-
-        $validator = Validator::make($_POST, [
-            'name'          => 'required|minLength:2|maxLength:200',
-            'company'       => 'required|minLength:2|maxLength:300',
-            'phone'         => 'required',
-            'email'         => 'maxLength:255',
-            'city'          => 'required|maxLength:100',
-            'state'         => 'required|maxLength:100',
-            'address'       => 'required|maxLength:500',
-            'material_type' => 'required|maxLength:150',
-            'gst_number'    => 'maxLength:20',
-            'payment_terms' => 'maxLength:200',
-        ]);
-
-        if ($validator->fails()) {
-            Session::flash('error', $validator->firstError());
-            Response::back();
-        }
-
-        $name = mb_strtoupper(trim($_POST['name'] ?? ''));
-        if (preg_match('/[0-9]/', $name)) {
-            Session::flash('error', 'Supplier Name cannot contain numbers. Only alphabetic characters allowed.');
-            Response::back();
-        }
-
-        $company = mb_strtoupper(trim($_POST['company'] ?? ''));
-        if (preg_match('/[0-9]/', $company)) {
-            Session::flash('error', 'Company / Mill Name cannot contain numbers.');
-            Response::back();
-        }
-
-        $phone = trim($_POST['phone'] ?? '');
-        if (!preg_match('/^[0-9]{10}$/', $phone)) {
-            Session::flash('error', 'Phone number must be exactly 10 digits (e.g. 9876543210).');
-            Response::back();
-        }
-
-        $email = trim($_POST['email'] ?? '');
-        if ($email !== '' && (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email))) {
-            Session::flash('error', 'Email address must be a valid email address (e.g. name@domain.in, name@gmail.com).');
-            Response::back();
-        }
-        $email = $email !== '' ? $email : null;
-
-        $city = mb_strtoupper(trim($_POST['city'] ?? ''));
-        if (preg_match('/[0-9]/', $city)) {
-            Session::flash('error', 'City / District cannot contain numbers.');
-            Response::back();
-        }
-
-        $state = mb_strtoupper(trim($_POST['state'] ?? ''));
-        if (preg_match('/[0-9]/', $state)) {
-            Session::flash('error', 'State cannot contain numbers.');
-            Response::back();
-        }
-
-        $address = mb_strtoupper(trim($_POST['address'] ?? ''));
-        $materialType = mb_strtoupper(trim($_POST['material_type'] ?? ''));
-        $gstNumber = !empty($_POST['gst_number']) ? mb_strtoupper(trim($_POST['gst_number'])) : null;
-        if ($gstNumber !== null && $gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
-            Session::flash('error', 'GST Number must be a valid 15-character alphanumeric code.');
-            Response::back();
-        }
-
-        $paymentTerms = !empty($_POST['payment_terms']) ? mb_strtoupper(trim($_POST['payment_terms'])) : null;
-        $colors = !empty($_POST['colors']) ? mb_strtoupper(trim($_POST['colors'])) : null;
-        $rollCount = max(0, (int)($_POST['roll_count'] ?? 0));
-        $rollWeight = max(0.0, (float)($_POST['roll_weight'] ?? 0));
-        $rollPrice = max(0.0, (float)($_POST['roll_price'] ?? 0));
-        $colorCount = max(0, (int)($_POST['color_count'] ?? 0));
-        $designCount = max(0, (int)($_POST['design_count'] ?? 0));
-        $colorDesignCount = max(0, (int)($_POST['color_design_count'] ?? ($colorCount + $designCount)));
-
-        // Validate rolls are present and all fields filled
-        if (empty($_POST['rolls']) || !is_array($_POST['rolls'])) {
-            Session::flash('error', 'Please add at least 1 fabric roll.');
-            Response::back();
-        }
-
-        foreach ($_POST['rolls'] as $rIdx => $rCheck) {
-            $rNum = trim($rCheck['roll_number'] ?? '');
-            $rCol = trim($rCheck['color'] ?? '');
-            $rDes = trim($rCheck['design_name'] ?? '');
-            $rCnt = (int)($rCheck['design_count'] ?? 0);
-            $rQty = (int)($rCheck['quantity'] ?? 0);
-            $rWgt = (float)($rCheck['weight'] ?? 0);
-            $rPrc = (float)($rCheck['price'] ?? 0);
-
-            if ($rNum === '' || $rCol === '' || $rDes === '' || $rCnt < 1 || $rQty < 1 || $rWgt <= 0 || $rPrc <= 0) {
-                Session::flash('error', "All fields in Roll #" . ($rIdx + 1) . " (Code, Color, Design, Designs Count, Qty, Weight, Price) are required.");
-                Response::back();
-            }
-        }
-
-        // Handle document attachment
-        $documentUrl = $existing['document_url'] ?? null;
-        if (empty($documentUrl) && (empty($_FILES['document']['name']) || $_FILES['document']['error'] !== UPLOAD_ERR_OK)) {
-            Session::flash('error', 'Tax Invoice / Bill document is required. Please upload the bill file (JPG, PNG, WEBP, PDF).');
-            Response::back();
             return;
         }
-
-        if (!empty($_FILES['document']['name']) && $_FILES['document']['error'] === UPLOAD_ERR_OK) {
-            $file = $_FILES['document'];
-            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-            $allowed = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
-
-            if (!in_array($ext, $allowed, true)) {
-                Session::flash('error', 'Invalid document format. Allowed: JPG, PNG, WEBP, PDF.');
-                Response::back();
-                return;
-            }
-
-            if ($file['size'] > 5 * 1024 * 1024) {
-                Session::flash('error', 'Document file size must not exceed 5MB.');
-                Response::back();
-                return;
-            }
-
-            $uploaded = CloudinaryService::upload($file, 'grm_inventory/sellers/documents', 'auto');
-            if ($uploaded) {
-                $documentUrl = $uploaded;
-            }
-        }
-
-        // Handle primary sample photo
-        $rollPhotoUrl = $existing['roll_photo'] ?? null;
-        if (!empty($_FILES['roll_photo']['name']) && $_FILES['roll_photo']['error'] === UPLOAD_ERR_OK) {
-            $photoFile = $_FILES['roll_photo'];
-            $pExt = strtolower(pathinfo($photoFile['name'], PATHINFO_EXTENSION));
-            $pAllowed = ['jpg', 'jpeg', 'png', 'webp'];
-
-            if (in_array($pExt, $pAllowed, true) && $photoFile['size'] <= 5 * 1024 * 1024) {
-                $pUploaded = CloudinaryService::upload($photoFile, 'grm_inventory/sellers/photos', 'image');
-                if ($pUploaded) {
-                    $rollPhotoUrl = $pUploaded;
-                }
-            }
-        }
-
-        Database::execute(
-            "UPDATE sellers SET
-                name = ?,
-                company = ?,
-                phone = ?,
-                email = ?,
-                gst_number = ?,
-                address = ?,
-                city = ?,
-                state = ?,
-                payment_terms = ?,
-                document_url = ?,
-                material_type = ?,
-                colors = ?,
-                roll_photo = ?,
-                roll_count = ?,
-                color_count = ?,
-                design_count = ?,
-                color_design_count = ?,
-                roll_weight = ?,
-                roll_price = ?,
-                is_active = ?,
-                updated_at = NOW()
-             WHERE id = ?",
-            [
-                $name,
-                $company,
-                $phone,
-                $email,
-                $gstNumber,
-                $address,
-                $city,
-                $state,
-                $paymentTerms,
-                $documentUrl,
-                $materialType,
-                $colors,
-                $rollPhotoUrl,
-                $rollCount,
-                $colorCount,
-                $designCount,
-                $colorDesignCount,
-                $rollWeight,
-                $rollPrice,
-                isset($_POST['is_active']) ? 1 : 0,
-                (int)$id,
-            ]
-        );
-
-        // Manage multiple rolls re-sync while preserving existing roll IDs
-        $keptRollIds = [];
-        if (!empty($_POST['rolls']) && is_array($_POST['rolls'])) {
-            $computedRollCount = 0;
-            $computedTotalWeight = 0.0;
-            $computedTotalPrice = 0.0;
-            $colorsList = [];
-            $designsList = [];
-            $firstRollPhoto = $rollPhotoUrl;
-
-            $seqInfo = ProductionService::getNextFabricRollSequence(1);
-            $runningSeq = (int)$seqInfo['start_seq'];
-            $prefix = $seqInfo['prefix'];
-
-            foreach ($_POST['rolls'] as $index => $r) {
-                $rollId = !empty($r['id']) ? (int)$r['id'] : 0;
-                $rollNum = mb_strtoupper(trim($r['roll_number'] ?? ('ROLL #' . ($computedRollCount + 1))));
-                $rollColor = mb_strtoupper(trim($r['color'] ?? ''));
-                $rollDesign = mb_strtoupper(trim($r['design_name'] ?? ''));
-                $rDesignCount = max(1, (int)($r['design_count'] ?? 1));
-                $rQty = max(1, (int)($r['quantity'] ?? ($r['qty'] ?? 1)));
-                $rWeight = max(0.0, (float)($r['weight'] ?? 0));
-                $rPrice = max(0.0, (float)($r['price'] ?? 0));
-                $individualPhoto = !empty($r['existing_photo']) ? $r['existing_photo'] : null;
-
-                // Check new photo upload
-                if (!empty($_FILES["roll_photo_{$index}"]['name']) && $_FILES["roll_photo_{$index}"]['error'] === UPLOAD_ERR_OK) {
-                    $f = $_FILES["roll_photo_{$index}"];
-                    $fExt = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
-                    if (in_array($fExt, ['jpg', 'jpeg', 'png', 'webp'], true) && $f['size'] <= 5 * 1024 * 1024) {
-                        $uploaded = CloudinaryService::upload($f, 'grm_inventory/sellers/rolls', 'image');
-                        if ($uploaded) {
-                            $individualPhoto = $uploaded;
-                        }
-                    }
-                }
-
-                if ($firstRollPhoto === null && $individualPhoto !== null) {
-                    $firstRollPhoto = $individualPhoto;
-                }
-
-                if ($rollId > 0) {
-                    $existingRoll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ? AND seller_id = ?", [$rollId, (int)$id]);
-                    if ($existingRoll) {
-                        $rollStartSeq = !empty($existingRoll['start_seq']) ? (int)$existingRoll['start_seq'] : null;
-                        $rollEndSeq = !empty($existingRoll['end_seq']) ? (int)$existingRoll['end_seq'] : null;
-                        $rollStartCode = $existingRoll['start_code'] ?? null;
-                        $rollEndCode = $existingRoll['end_code'] ?? null;
-                        $rollQrCode = $existingRoll['qr_code'] ?? null;
-
-                        if (empty($rollStartCode) || (int)$existingRoll['quantity'] !== $rQty) {
-                            $rollStartSeq = $runningSeq;
-                            $rollEndSeq = $runningSeq + $rQty - 1;
-                            $rollStartCode = sprintf('%s%02d', $prefix, $rollStartSeq);
-                            $rollEndCode = sprintf('%s%02d', $prefix, $rollEndSeq);
-                            $rollQrCode = ($rQty > 1) ? ($rollStartCode . '-' . $rollEndCode) : $rollStartCode;
-                            $runningSeq = $rollEndSeq + 1;
-                        }
-
-                        Database::execute(
-                            "UPDATE seller_rolls 
-                             SET roll_number = ?, color = ?, design_name = ?, design_count = ?, quantity = ?, weight = ?, price = ?, photo_url = ?,
-                                 start_seq = ?, end_seq = ?, start_code = ?, end_code = ?, qr_code = ?
-                             WHERE id = ?",
-                            [$rollNum, $rollColor, $rollDesign, $rDesignCount, $rQty, $rWeight, $rPrice, $individualPhoto, $rollStartSeq, $rollEndSeq, $rollStartCode, $rollEndCode, $rollQrCode, $rollId]
-                        );
-                        $keptRollIds[] = $rollId;
-                    } else {
-                        $rollStartSeq = $runningSeq;
-                        $rollEndSeq = $runningSeq + $rQty - 1;
-                        $rollStartCode = sprintf('%s%02d', $prefix, $rollStartSeq);
-                        $rollEndCode = sprintf('%s%02d', $prefix, $rollEndSeq);
-                        $rollQrCode = ($rQty > 1) ? ($rollStartCode . '-' . $rollEndCode) : $rollStartCode;
-                        $runningSeq = $rollEndSeq + 1;
-
-                        Database::execute(
-                            "INSERT INTO seller_rolls (seller_id, roll_number, color, design_name, design_count, quantity, weight, price, photo_url, start_seq, end_seq, start_code, end_code, qr_code)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            [(int)$id, $rollNum, $rollColor, $rollDesign, $rDesignCount, $rQty, $rWeight, $rPrice, $individualPhoto, $rollStartSeq, $rollEndSeq, $rollStartCode, $rollEndCode, $rollQrCode]
-                        );
-                        $keptRollIds[] = (int)Database::lastInsertId();
-                    }
-                } else {
-                    $rollStartSeq = $runningSeq;
-                    $rollEndSeq = $runningSeq + $rQty - 1;
-                    $rollStartCode = sprintf('%s%02d', $prefix, $rollStartSeq);
-                    $rollEndCode = sprintf('%s%02d', $prefix, $rollEndSeq);
-                    $rollQrCode = ($rQty > 1) ? ($rollStartCode . '-' . $rollEndCode) : $rollStartCode;
-                    $runningSeq = $rollEndSeq + 1;
-
-                    Database::execute(
-                        "INSERT INTO seller_rolls (seller_id, roll_number, color, design_name, design_count, quantity, weight, price, photo_url, start_seq, end_seq, start_code, end_code, qr_code)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        [(int)$id, $rollNum, $rollColor, $rollDesign, $rDesignCount, $rQty, $rWeight, $rPrice, $individualPhoto, $rollStartSeq, $rollEndSeq, $rollStartCode, $rollEndCode, $rollQrCode]
-                    );
-                    $keptRollIds[] = (int)Database::lastInsertId();
-                }
-
-                $computedRollCount++;
-                $computedTotalWeight += $rWeight;
-                $computedTotalPrice += $rPrice;
-                if ($rollColor !== '') $colorsList[] = $rollColor;
-                if ($rollDesign !== '') $designsList[] = $rollDesign;
-            }
-
-            if (!empty($keptRollIds)) {
-                $inClause = implode(',', array_fill(0, count($keptRollIds), '?'));
-                Database::execute("DELETE FROM seller_rolls WHERE seller_id = ? AND id NOT IN ($inClause)", array_merge([(int)$id], $keptRollIds));
-            } else {
-                Database::execute("DELETE FROM seller_rolls WHERE seller_id = ?", [(int)$id]);
-            }
-
-            $uniqueColors = array_values(array_unique(array_filter($colorsList)));
-            $uniqueDesigns = array_values(array_unique(array_filter($designsList)));
-
-            // Update aggregated metrics
-            Database::execute(
-                "UPDATE sellers SET 
-                    roll_count = ?, 
-                    color_count = ?, 
-                    design_count = ?, 
-                    color_design_count = ?, 
-                    roll_weight = ?, 
-                    roll_price = ?, 
-                    colors = ?,
-                    roll_photo = COALESCE(roll_photo, ?)
-                 WHERE id = ?",
-                [
-                    $computedRollCount,
-                    count($uniqueColors),
-                    count($uniqueDesigns),
-                    count($uniqueColors) + count($uniqueDesigns),
-                    $computedTotalWeight,
-                    $computedTotalPrice,
-                    !empty($uniqueColors) ? implode(', ', $uniqueColors) : $colors,
-                    $firstRollPhoto,
-                    (int)$id
-                ]
-            );
-        }
-
-        $oldSnapshot = [
-            'Supplier Name'  => $existing['name'] ?? '',
-            'Company / Mill' => $existing['company'] ?? '',
-            'Phone'          => $existing['phone'] ?? '',
-            'Email'          => $existing['email'] ?? '',
-            'Material Type'  => $existing['material_type'] ?? '',
-            'City'           => $existing['city'] ?? '',
-            'State'          => $existing['state'] ?? '',
-            'GST Number'     => !empty($existing['gst_number']) ? $existing['gst_number'] : 'N/A',
-            'Payment Terms'  => !empty($existing['payment_terms']) ? $existing['payment_terms'] : 'N/A',
-            'Total Rolls'    => (int)($existing['roll_count'] ?? 0),
-            'Total Weight'   => number_format((float)($existing['roll_weight'] ?? 0), 2) . ' kg',
-            'Total Price'    => '₹' . number_format((float)($existing['roll_price'] ?? 0), 2),
-            'Status'         => !empty($existing['is_active']) ? 'Active' : 'Inactive',
-        ];
-
-        $newSnapshot = [
-            'Supplier Name'  => $name,
-            'Company / Mill' => $company,
-            'Phone'          => $phone,
-            'Email'          => $email,
-            'Material Type'  => $materialType,
-            'City'           => $city,
-            'State'          => $state,
-            'GST Number'     => !empty($gstNumber) ? $gstNumber : 'N/A',
-            'Payment Terms'  => !empty($paymentTerms) ? $paymentTerms : 'N/A',
-            'Total Rolls'    => !empty($computedRollCount) ? $computedRollCount : $rollCount,
-            'Total Weight'   => number_format(!empty($computedTotalWeight) ? $computedTotalWeight : $rollWeight, 2) . ' kg',
-            'Total Price'    => '₹' . number_format(!empty($computedTotalPrice) ? $computedTotalPrice : $rollPrice, 2),
-            'Status'         => isset($_POST['is_active']) ? 'Active' : 'Inactive',
-        ];
-
-        AuditService::log(
-            'production',
-            'UPDATE',
-            'sellers',
-            (int)$id,
-            $oldSnapshot,
-            $newSnapshot
-        );
-
-        Session::flash('success', 'Supplier and fabric rolls updated successfully.');
-        Response::redirect(url('production/sellers'));
+        $this->updateSupplierProfile((int)$id);
     }
 
     public function deleteSeller(string $id): void {
@@ -1027,6 +395,30 @@ class ProductionController {
              GROUP BY item_name, unit
              ORDER BY item_name, unit"
         );
+        $fabricRollInventory = Database::fetchAll(
+            "SELECT sr.*, s.name AS seller_name, s.company,
+                    COALESCE(sr.material_type, s.material_type, 'FABRIC') AS fabric_description,
+                    COALESCE(u.used_quantity, 0) AS used_quantity,
+                    COALESCE(dmg.damaged_quantity, 0) AS damaged_quantity,
+                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) AS available_quantity
+             FROM seller_rolls sr
+             JOIN sellers s ON s.id = sr.seller_id
+             LEFT JOIN (
+                 SELECT ppr.seller_roll_id, SUM(ppr.roll_qty) AS used_quantity
+                 FROM production_program_rolls ppr
+                 JOIN production_programs pp ON pp.id = ppr.production_program_id
+                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
+                 GROUP BY ppr.seller_roll_id
+             ) u ON u.seller_roll_id = sr.id
+             LEFT JOIN (
+                 SELECT rd.seller_roll_id, SUM(rd.damaged_quantity) AS damaged_quantity
+                 FROM roll_damages rd
+                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
+                 GROUP BY rd.seller_roll_id
+             ) dmg ON dmg.seller_roll_id = sr.id
+             WHERE s.seller_type = 'MATERIAL_SUPPLIER'
+             ORDER BY sr.id DESC"
+        );
 
         Response::view('production.purchases.index', [
             'pageTitle' => 'Production Purchases',
@@ -1035,6 +427,7 @@ class ProductionController {
             'purchases' => $purchases,
             'totalPurchaseValue' => $totalPurchaseValue,
             'supplyStock' => $supplyStock,
+            'fabricRollInventory' => $fabricRollInventory,
             'breadcrumb' => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Purchases'],
@@ -1095,6 +488,7 @@ class ProductionController {
         }
         $items = [];
         $allowedUnits = ['PCS', 'KG', 'METRE', 'LITRE', 'BOX', 'PACK', 'PAIR', 'SET', 'BUNDLE'];
+        $fabricDescription = mb_strtoupper(trim((string)($_POST['fabric_description'] ?? '')));
         foreach ($submittedItems as $index => $submitted) {
             if (!is_array($submitted)) {
                 continue;
@@ -1109,13 +503,12 @@ class ProductionController {
             }
 
             if ($type === 'FABRIC_ROLL') {
-                $itemName = mb_strtoupper(trim((string)($submitted['fabric_description'] ?? '')));
                 $rollNumber = mb_strtoupper(trim((string)($submitted['roll_number'] ?? '')));
                 $color = mb_strtoupper(trim((string)($submitted['color'] ?? '')));
                 $design = mb_strtoupper(trim((string)($submitted['design_name'] ?? '')));
                 $designCount = (int)($submitted['design_count'] ?? 0);
                 $weight = (float)($submitted['weight_kg'] ?? 0);
-                if ($itemName === '' || mb_strlen($itemName) > 150
+                if ($fabricDescription === '' || mb_strlen($fabricDescription) > 150
                     || $rollNumber === '' || mb_strlen($rollNumber) > 50
                     || $color === '' || mb_strlen($color) > 100
                     || $design === '' || mb_strlen($design) > 150
@@ -1127,10 +520,11 @@ class ProductionController {
                 }
                 $quantity = (int)$quantity;
                 $items[] = [
-                    'type' => $type, 'item_name' => $itemName, 'quantity' => $quantity,
+                    'type' => $type, 'item_name' => $fabricDescription, 'quantity' => $quantity,
                     'unit' => 'PCS', 'weight' => $weight, 'unit_price' => $unitPrice,
                     'line_total' => $unitPrice, 'roll_number' => $rollNumber, 'color' => $color,
                     'design_name' => $design, 'design_count' => $designCount,
+                    'form_index' => (string)$index, 'photo_url' => null,
                 ];
                 continue;
             }
@@ -1150,7 +544,7 @@ class ProductionController {
                 'type' => $type, 'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
                 'unit' => $unit, 'weight' => null, 'unit_price' => $unitPrice,
                 'line_total' => round($quantity * $unitPrice, 2), 'roll_number' => null,
-                'color' => null, 'design_name' => null, 'design_count' => null,
+                'color' => null, 'design_name' => null, 'design_count' => null, 'photo_url' => null,
             ];
         }
 
@@ -1159,6 +553,31 @@ class ProductionController {
             Response::back();
             return;
         }
+
+        foreach ($items as &$item) {
+            if ($item['type'] !== 'FABRIC_ROLL') {
+                continue;
+            }
+            $photoField = 'roll_photo_' . $item['form_index'];
+            $photo = $_FILES[$photoField] ?? null;
+            if (!$photo || $photo['error'] === UPLOAD_ERR_NO_FILE) {
+                continue;
+            }
+            $extension = strtolower(pathinfo($photo['name'], PATHINFO_EXTENSION));
+            if ($photo['error'] !== UPLOAD_ERR_OK || !in_array($extension, ['jpg', 'jpeg', 'png', 'webp'], true)
+                || $photo['size'] > 5 * 1024 * 1024) {
+                Session::flash('error', 'Roll photos must be JPG, PNG, or WEBP files up to 5 MB.');
+                Response::back();
+                return;
+            }
+            $item['photo_url'] = CloudinaryService::upload($photo, 'grm_inventory/sellers/rolls', 'image');
+            if (!$item['photo_url']) {
+                Session::flash('error', 'A roll photo could not be uploaded. Please try again.');
+                Response::back();
+                return;
+            }
+        }
+        unset($item);
 
         $documentUrl = null;
         if (!empty($_FILES['document']['name'])) {
@@ -1209,10 +628,10 @@ class ProductionController {
                     Database::execute(
                         "INSERT INTO seller_rolls
                             (seller_id, roll_number, color, design_name, design_count, quantity, weight, price,
-                             material_type, start_seq, end_seq, start_code, end_code, qr_code)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             material_type, photo_url, start_seq, end_seq, start_code, end_code, qr_code)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         [$sellerId, $item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
-                            $item['quantity'], $item['weight'], $item['unit_price'], $item['item_name'],
+                            $item['quantity'], $item['weight'], $item['unit_price'], $item['item_name'], $item['photo_url'],
                             $sequence['start_seq'], $sequence['end_seq'], $sequence['start_code'], $sequence['end_code'], $rollQrCode]
                     );
                     $sellerRollId = (int)Database::lastInsertId();
@@ -1229,23 +648,6 @@ class ProductionController {
                 );
             }
 
-            $rollTotals = Database::fetchOne(
-                "SELECT COUNT(*) AS roll_count, COALESCE(SUM(quantity), 0) AS roll_qty,
-                        COALESCE(SUM(weight), 0) AS roll_weight, COALESCE(SUM(price), 0) AS roll_price,
-                        COUNT(DISTINCT NULLIF(color, '')) AS color_count,
-                        COUNT(DISTINCT NULLIF(design_name, '')) AS design_count,
-                        GROUP_CONCAT(DISTINCT NULLIF(color, '') SEPARATOR ', ') AS colors
-                 FROM seller_rolls WHERE seller_id = ?",
-                [$sellerId]
-            );
-            Database::execute(
-                "UPDATE sellers SET roll_count = ?, color_count = ?, design_count = ?,
-                    color_design_count = ?, roll_weight = ?, roll_price = ?, colors = ?, updated_at = NOW()
-                 WHERE id = ?",
-                [(int)$rollTotals['roll_count'], (int)$rollTotals['color_count'], (int)$rollTotals['design_count'],
-                    (int)$rollTotals['color_count'] + (int)$rollTotals['design_count'], $rollTotals['roll_weight'],
-                    $rollTotals['roll_price'], $rollTotals['colors'], $sellerId]
-            );
             Database::commit();
 
             AuditService::log('production', 'CREATE', 'production_purchases', $purchaseId, null, [
@@ -1270,6 +672,19 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+
+        $purchaseItem = Database::fetchOne(
+            "SELECT ppi.id, pp.purchase_number
+             FROM production_purchase_items ppi
+             JOIN production_purchases pp ON pp.id = ppi.purchase_id
+             WHERE ppi.seller_roll_id = ? LIMIT 1",
+            [(int)$id]
+        );
+        if ($purchaseItem) {
+            Session::flash('error', 'This fabric roll is part of purchase ' . $purchaseItem['purchase_number'] . '. It cannot be deleted from stock; retain its purchase history.');
+            Response::redirect(url('production/purchases'));
             return;
         }
 

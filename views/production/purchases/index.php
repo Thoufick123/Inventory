@@ -72,6 +72,41 @@
     </div>
 </div>
 
+<div class="card border shadow-sm mb-4">
+    <div class="card-header bg-white"><h5 class="mb-0 fw-bold"><i class="bi bi-layers-half me-2 text-primary"></i>Fabric Rolls Inventory &amp; Details</h5></div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th>#</th><th>Supplier</th><th>Photo</th><th>Fabric / Roll</th><th>Color / Design</th><th class="text-center">Designs</th><th class="text-end">Total RQ</th><th class="text-end">Weight</th><th class="text-end">Price</th><th>Sticker Codes</th><th class="text-center">Status</th></tr></thead>
+            <tbody>
+            <?php if (empty($fabricRollInventory)): ?>
+                <tr><td colspan="11" class="text-center text-muted py-4">No fabric rolls recorded yet.</td></tr>
+            <?php else: foreach ($fabricRollInventory as $index => $roll): ?>
+                <tr>
+                    <td><?= $index + 1 ?></td>
+                    <td><?= e($roll['company'] ?: $roll['seller_name']) ?><small class="d-block text-muted"><?= e($roll['seller_name']) ?></small></td>
+                    <td><?php if (!empty($roll['photo_url'])): ?><a href="<?= uploadUrl($roll['photo_url']) ?>" target="_blank" rel="noopener"><img src="<?= uploadUrl($roll['photo_url']) ?>" alt="Roll photo" class="rounded border" style="width:40px;height:40px;object-fit:cover"></a><?php else: ?><span class="text-muted"><i class="bi bi-camera"></i></span><?php endif; ?></td>
+                    <td><strong><?= e($roll['roll_number'] ?: '—') ?></strong><small class="d-block text-muted"><?= e($roll['fabric_description']) ?></small></td>
+                    <td><?= e($roll['color'] ?: '—') ?><small class="d-block text-muted"><?= e($roll['design_name'] ?: '—') ?></small></td>
+                    <td class="text-center"><?= number_format((int)$roll['design_count']) ?></td>
+                    <td class="text-end fw-semibold"><?= number_format((int)$roll['quantity']) ?> RQ</td>
+                    <td class="text-end"><?= number_format((float)$roll['weight'], 2) ?> kg</td>
+                    <td class="text-end">₹<?= number_format((float)$roll['price'], 2) ?></td>
+                    <td class="font-monospace small"><?= e($roll['start_code'] ?: '—') ?><?= !empty($roll['end_code']) && $roll['end_code'] !== $roll['start_code'] ? '–' . e($roll['end_code']) : '' ?></td>
+                    <td class="text-center">
+                        <?php if ((int)$roll['available_quantity'] > 0): ?>
+                            <span class="badge bg-success-subtle text-success"><?= number_format((int)$roll['available_quantity']) ?> Available</span>
+                        <?php else: ?>
+                            <span class="badge bg-secondary-subtle text-secondary">Fully Used / Damaged</span>
+                        <?php endif; ?>
+                        <a class="d-block small" href="<?= url('production/sellers/roll-labels/' . $roll['id']) ?>" target="_blank" rel="noopener">Labels</a>
+                    </td>
+                </tr>
+            <?php endforeach; endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <div class="card border shadow-sm">
     <div class="card-header bg-white"><h5 class="mb-0 fw-bold"><i class="bi bi-box-seam me-2 text-success"></i>General Supplies Purchased</h5><small class="text-muted">Totals received from recorded purchases; usage deductions are not included.</small></div>
     <div class="table-responsive">
