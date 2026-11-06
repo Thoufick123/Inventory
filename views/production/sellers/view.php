@@ -415,6 +415,11 @@
                 </h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
+            <datalist id="damageReasonOptions">
+                <?php foreach ($damageReasons as $damageReasonOption): ?>
+                    <option value="<?= e($damageReasonOption['damage_reason']) ?>"></option>
+                <?php endforeach; ?>
+            </datalist>
             <form method="POST" action="<?= url('production/damages/store') ?>" enctype="multipart/form-data" id="supplierRollDamageForm">
                 <?= CSRF::field() ?>
                 <input type="hidden" name="seller_id" value="<?= (int)$seller['id'] ?>">
@@ -440,23 +445,11 @@
                     </div>
 
                     <div class="row g-3">
-                        <!-- Defect Reason (Either Reason or Notes is required) -->
+                        <!-- Defect Reason -->
                         <div class="col-md-6">
-                            <label class="form-label fw-bold" id="inViewReasonLabel">
-                                Damage / Defect Reason <span class="text-danger" id="inViewReasonReqStar">*</span>
-                            </label>
-                            <select name="damage_reason" id="inViewReasonSelect" class="form-select form-select-lg" onchange="syncInViewReasonAndNotes()">
-                                <option value="">-- Choose Defect Reason --</option>
-                                <option value="Fabric Stain / Oil Dirt">Fabric Stain / Oil Dirt (Permanent oil marks, dye stains)</option>
-                                <option value="Weaving / Knitting Defect">Weaving / Knitting Defect (Loom fault, miss-pick, loose yarn)</option>
-                                <option value="Color Bleed / Shade Variation">Color Bleed / Shade Variation (Irreversible shade variation)</option>
-                                <option value="Torn / Hole / Cut Fabric">Torn / Hole / Cut Fabric (Physical cut or puncture)</option>
-                                <option value="Moisture / Water Damage">Moisture / Water Damage (Wet roll, fungus, water discoloration)</option>
-                                <option value="Needle / Machinery Tear">Needle / Machinery Tear (Torn selvedge or pin holes)</option>
-                                <option value="Shortage / Misprint Defect">Shortage / Misprint Defect (Short meterage or print smudge)</option>
-                                <option value="Other Fabric Damage">Other Fabric Damage (Specify in notes below)</option>
-                            </select>
-                            <small class="text-muted d-block mt-1" id="inViewReasonHelp">Select defect type or describe custom reason in notes below</small>
+                            <label class="form-label fw-bold" for="inViewReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
+                            <input type="text" name="damage_reason" id="inViewReasonInput" class="form-control form-control-lg" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                            <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
                         </div>
 
                         <!-- Damaged Quantity (Cannot exceed available stock) -->
@@ -506,10 +499,9 @@
                         <!-- Defect Notes (Either Reason or Notes is required) -->
                         <div class="col-12">
                             <label class="form-label fw-semibold" id="inViewNotesLabel">
-                                Defect Notes &amp; Observations <span class="text-danger" id="inViewNotesReqStar" style="display:none;">*</span>
-                                <small class="text-muted fw-normal" id="inViewNotesStatusText">(Optional if dropdown reason is selected)</small>
+                                Defect Notes &amp; Observations <small class="text-muted fw-normal">(Optional)</small>
                             </label>
-                            <textarea name="defect_notes" id="inViewDefectNotes" class="form-control" rows="2" placeholder="Describe defect details or reason (e.g. 10 meters affected by weaving knots...)" oninput="syncInViewReasonAndNotes()"></textarea>
+                            <textarea name="defect_notes" id="inViewDefectNotes" class="form-control" rows="2" placeholder="Add additional observations if needed"></textarea>
                         </div>
                     </div>
                 </div>
@@ -548,40 +540,6 @@ function getInViewRollMetrics(r) {
         ratePerKg,
         pricePerPc
     };
-}
-
-function syncInViewReasonAndNotes() {
-    const reasonSelect = document.getElementById('inViewReasonSelect');
-    const notesInput = document.getElementById('inViewDefectNotes');
-    const reasonStar = document.getElementById('inViewReasonReqStar');
-    const notesStar = document.getElementById('inViewNotesReqStar');
-    const notesStatus = document.getElementById('inViewNotesStatusText');
-
-    if (!reasonSelect || !notesInput) return;
-
-    const reasonVal = reasonSelect.value.trim();
-    const notesVal = notesInput.value.trim();
-
-    if (reasonVal !== '' && reasonVal !== 'Other Fabric Damage') {
-        if (notesStar) notesStar.style.display = 'none';
-        if (notesStatus) notesStatus.textContent = '(Optional — defect reason selected)';
-        if (reasonStar) reasonStar.style.display = '';
-        notesInput.removeAttribute('required');
-    } else if (reasonVal === 'Other Fabric Damage') {
-        if (notesStar) notesStar.style.display = '';
-        if (notesStatus) notesStatus.textContent = '(Required — please specify custom defect in notes)';
-        if (reasonStar) reasonStar.style.display = '';
-        notesInput.setAttribute('required', 'required');
-    } else if (notesVal !== '') {
-        if (notesStar) notesStar.style.display = '';
-        if (notesStatus) notesStatus.textContent = '(Custom defect reason entered in notes)';
-        if (reasonStar) reasonStar.style.display = 'none';
-        notesInput.removeAttribute('required');
-    } else {
-        if (notesStar) notesStar.style.display = 'none';
-        if (notesStatus) notesStatus.textContent = '(Required if no dropdown reason selected)';
-        if (reasonStar) reasonStar.style.display = '';
-    }
 }
 
 function updateInViewCalculations(m, qty, weight) {
@@ -675,8 +633,6 @@ function openSupplierRollDamageModal(r) {
     }
 
     updateInViewCalculations(m, defaultQty, defaultWeight);
-    syncInViewReasonAndNotes();
-
     const modal = new bootstrap.Modal(document.getElementById('supplierRollDamageModal'));
     modal.show();
 }
@@ -686,8 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const viewForm = document.getElementById('supplierRollDamageForm');
     if (viewForm) {
         viewForm.addEventListener('submit', function(e) {
-            const reason = document.getElementById('inViewReasonSelect').value.trim();
-            const notes = document.getElementById('inViewDefectNotes').value.trim();
+            const reason = document.getElementById('inViewReasonInput').value.trim();
             const qty = parseInt(document.getElementById('inViewDamagedQty').value) || 0;
             const photoInput = document.getElementById('inViewPhotoInput');
 
@@ -706,8 +661,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            if (!reason && !notes) {
-                alert('Please select a Damage / Defect Reason OR provide details in Defect Notes & Observations.');
+            if (!reason) {
+                alert('Please enter a Damage / Defect Reason.');
                 e.preventDefault();
                 return false;
             }

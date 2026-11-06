@@ -209,6 +209,12 @@ class ProductionController {
              ORDER BY sr.id ASC",
             [(int)$id]
         );
+        $damageReasons = Database::fetchAll(
+            "SELECT DISTINCT TRIM(damage_reason) AS damage_reason
+             FROM roll_damages
+             WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
+             ORDER BY damage_reason ASC"
+        );
 
         Response::view('production.sellers.view', [
             'pageTitle'    => 'Supplier Details — ' . ($seller['name'] ?? ''),
@@ -216,6 +222,7 @@ class ProductionController {
             'activeMenu'   => 'prod-sellers',
             'seller'       => $seller,
             'rolls'        => $rolls,
+            'damageReasons'=> $damageReasons,
             'breadcrumb'   => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Suppliers', 'url' => url('production/sellers')],
@@ -1939,6 +1946,12 @@ class ProductionController {
         $reason = trim($_GET['reason'] ?? '');
         $status = trim($_GET['status'] ?? '');
         $resolutionType = trim($_GET['resolution_type'] ?? '');
+        $damageReasons = Database::fetchAll(
+            "SELECT DISTINCT TRIM(damage_reason) AS damage_reason
+             FROM roll_damages
+             WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
+             ORDER BY damage_reason ASC"
+        );
 
         $sql = "SELECT rd.*, 
                        s.name as seller_name, 
@@ -2035,6 +2048,7 @@ class ProductionController {
             'reason'         => $reason,
             'status'         => $status,
             'resolutionType' => $resolutionType,
+            'damageReasons'  => $damageReasons,
             'breadcrumb'     => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Damages'],
@@ -2072,22 +2086,15 @@ class ProductionController {
             return;
         }
 
-        // Mutual Reason / Defect Notes validation:
-        // Either select a reason OR provide notes with reason description
-        if (empty($damageReason) && empty($defectNotes)) {
-            Session::flash('error', 'Please select a Damage / Defect Reason or provide Defect Notes & Observations.');
+        if ($damageReason === '') {
+            Session::flash('error', 'Please enter a Damage / Defect Reason.');
             Response::back();
             return;
         }
-
-        if ($damageReason === 'Other Fabric Damage' && empty($defectNotes)) {
-            Session::flash('error', 'Please specify defect details in Defect Notes when "Other Fabric Damage" is selected.');
+        if (mb_strlen($damageReason) > 255) {
+            Session::flash('error', 'Damage / Defect Reason must not exceed 255 characters.');
             Response::back();
             return;
-        }
-
-        if (empty($damageReason) && !empty($defectNotes)) {
-            $damageReason = 'Other Fabric Damage';
         }
 
         $damageItems = [];
@@ -2208,6 +2215,7 @@ class ProductionController {
 
         try {
             Database::beginTransaction();
+            $createdAt = date('Y-m-d H:i:s');
             $countToday = Database::fetchOne("SELECT COUNT(*) as cnt FROM roll_damages");
             $nextSeq = (int)($countToday['cnt'] ?? 0) + 1;
             foreach ($damageItems as $index => $item) {
@@ -2215,7 +2223,7 @@ class ProductionController {
                 Database::execute(
                     "INSERT INTO roll_damages
                         (damage_number, seller_id, seller_roll_id, qr_code, damaged_quantity, damaged_weight, loss_amount, damage_reason, defect_notes, photo_url, status, resolution_type, reported_by, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, NOW(), NOW())",
+                     VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, ?, ?)",
                     [
                         $damageNumber,
                         $item['seller_id'],
@@ -2226,7 +2234,9 @@ class ProductionController {
                         $damageReason,
                         $defectNotes ?: null,
                         $photoUrl,
-                        $userId
+                        $userId,
+                        $createdAt,
+                        $createdAt
                     ]
                 );
                 $damageId = (int)Database::lastInsertId();
@@ -2289,21 +2299,15 @@ class ProductionController {
             return;
         }
 
-        // Mutual Reason / Defect Notes validation:
-        if (empty($damageReason) && empty($defectNotes)) {
-            Session::flash('error', 'Please select a Damage / Defect Reason or provide Defect Notes & Observations.');
+        if ($damageReason === '') {
+            Session::flash('error', 'Please enter a Damage / Defect Reason.');
             Response::back();
             return;
         }
-
-        if ($damageReason === 'Other Fabric Damage' && empty($defectNotes)) {
-            Session::flash('error', 'Please specify defect details in Defect Notes when "Other Fabric Damage" is selected.');
+        if (mb_strlen($damageReason) > 255) {
+            Session::flash('error', 'Damage / Defect Reason must not exceed 255 characters.');
             Response::back();
             return;
-        }
-
-        if (empty($damageReason) && !empty($defectNotes)) {
-            $damageReason = 'Other Fabric Damage';
         }
 
         $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ? AND seller_id = ?", [$sellerRollId, $sellerId]);

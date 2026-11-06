@@ -97,14 +97,10 @@
             <div class="col-md-2">
                 <select name="reason" class="form-select form-select-sm" onchange="this.form.submit()">
                     <option value="">-- All Defect Reasons --</option>
-                    <option value="Fabric Stain / Oil Dirt" <?= $reason === 'Fabric Stain / Oil Dirt' ? 'selected' : '' ?>>Fabric Stain / Oil Dirt</option>
-                    <option value="Weaving / Knitting Defect" <?= $reason === 'Weaving / Knitting Defect' ? 'selected' : '' ?>>Weaving / Knitting Defect</option>
-                    <option value="Color Bleed / Shade Variation" <?= $reason === 'Color Bleed / Shade Variation' ? 'selected' : '' ?>>Color Bleed / Shade Variation</option>
-                    <option value="Torn / Hole / Cut Fabric" <?= $reason === 'Torn / Hole / Cut Fabric' ? 'selected' : '' ?>>Torn / Hole / Cut Fabric</option>
-                    <option value="Moisture / Water Damage" <?= $reason === 'Moisture / Water Damage' ? 'selected' : '' ?>>Moisture / Water Damage</option>
-                    <option value="Needle / Machinery Tear" <?= $reason === 'Needle / Machinery Tear' ? 'selected' : '' ?>>Needle / Machinery Tear</option>
-                    <option value="Shortage / Misprint Defect" <?= $reason === 'Shortage / Misprint Defect' ? 'selected' : '' ?>>Shortage / Misprint Defect</option>
-                    <option value="Other Fabric Damage" <?= $reason === 'Other Fabric Damage' ? 'selected' : '' ?>>Other Fabric Damage</option>
+                    <?php foreach ($damageReasons as $damageReasonOption): ?>
+                        <?php $reasonValue = $damageReasonOption['damage_reason']; ?>
+                        <option value="<?= e($reasonValue) ?>" <?= $reason === $reasonValue ? 'selected' : '' ?>><?= e($reasonValue) ?></option>
+                    <?php endforeach; ?>
                 </select>
             </div>
             <div class="col-md-2">
@@ -330,6 +326,12 @@
     </div>
 </div>
 
+<datalist id="damageReasonOptions">
+    <?php foreach ($damageReasons as $damageReasonOption): ?>
+        <option value="<?= e($damageReasonOption['damage_reason']) ?>"></option>
+    <?php endforeach; ?>
+</datalist>
+
 <!-- 1. Report Damage Modal -->
 <div class="modal fade" id="reportDamageModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -360,23 +362,11 @@
                             <div id="damageQrInputs"></div>
                         </div>
 
-                        <!-- Damage Reason (Either Reason or Notes is required) -->
+                        <!-- Damage Reason -->
                         <div class="col-md-6">
-                            <label class="form-label fw-bold" id="reportReasonLabel">
-                                Damage / Defect Reason <span class="text-danger" id="reportReasonReqStar">*</span>
-                            </label>
-                            <select name="damage_reason" id="reportReasonSelect" class="form-select" onchange="syncReportReasonAndNotes()">
-                                <option value="">-- Choose Defect Reason --</option>
-                                <option value="Fabric Stain / Oil Dirt">Fabric Stain / Oil Dirt (Permanent oil marks, dye stains)</option>
-                                <option value="Weaving / Knitting Defect">Weaving / Knitting Defect (Loom fault, miss-pick, loose yarn)</option>
-                                <option value="Color Bleed / Shade Variation">Color Bleed / Shade Variation (Irreversible shade variation)</option>
-                                <option value="Torn / Hole / Cut Fabric">Torn / Hole / Cut Fabric (Physical cut or puncture)</option>
-                                <option value="Moisture / Water Damage">Moisture / Water Damage (Wet roll, fungus, water discoloration)</option>
-                                <option value="Needle / Machinery Tear">Needle / Machinery Tear (Torn selvedge or pin holes)</option>
-                                <option value="Shortage / Misprint Defect">Shortage / Misprint Defect (Short meterage or print smudge)</option>
-                                <option value="Other Fabric Damage">Other Fabric Damage (Specify in notes below)</option>
-                            </select>
-                            <small class="text-muted d-block mt-1" id="reportReasonHelp">Select defect type or describe custom reason in notes below</small>
+                            <label class="form-label fw-bold" for="reportReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
+                            <input type="text" name="damage_reason" id="reportReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                            <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
                         </div>
 
                         <!-- Damaged Weight (Disabled with clear visibility - Auto-calculated) -->
@@ -416,10 +406,9 @@
                         <!-- Specific Notes (Either Reason or Notes is required) -->
                         <div class="col-12">
                             <label class="form-label fw-semibold" id="reportNotesLabel">
-                                Defect Notes &amp; Observations <span class="text-danger" id="reportNotesReqStar" style="display:none;">*</span>
-                                <small class="text-muted fw-normal" id="reportNotesStatusText">(Optional if dropdown reason is selected)</small>
+                                Defect Notes &amp; Observations <small class="text-muted fw-normal">(Optional)</small>
                             </label>
-                            <textarea name="defect_notes" id="reportDefectNotes" class="form-control" rows="2" placeholder="Describe defect details or reason (e.g. 5 meters contaminated with oil, selvedge torn...)" oninput="syncReportReasonAndNotes()"></textarea>
+                            <textarea name="defect_notes" id="reportDefectNotes" class="form-control" rows="2" placeholder="Add additional observations if needed"></textarea>
                         </div>
                     </div>
                 </div>
@@ -501,21 +490,9 @@
 
                         <!-- Damage Reason -->
                         <div class="col-md-6">
-                            <label class="form-label fw-bold" id="editReasonLabel">
-                                Damage / Defect Reason <span class="text-danger" id="editReasonReqStar">*</span>
-                            </label>
-                            <select name="damage_reason" id="editReasonSelect" class="form-select" onchange="syncEditReasonAndNotes()">
-                                <option value="">-- Choose Defect Reason --</option>
-                                <option value="Fabric Stain / Oil Dirt">Fabric Stain / Oil Dirt (Permanent oil marks, dye stains)</option>
-                                <option value="Weaving / Knitting Defect">Weaving / Knitting Defect (Loom fault, miss-pick, loose yarn)</option>
-                                <option value="Color Bleed / Shade Variation">Color Bleed / Shade Variation (Irreversible shade variation)</option>
-                                <option value="Torn / Hole / Cut Fabric">Torn / Hole / Cut Fabric (Physical cut or puncture)</option>
-                                <option value="Moisture / Water Damage">Moisture / Water Damage (Wet roll, fungus, water discoloration)</option>
-                                <option value="Needle / Machinery Tear">Needle / Machinery Tear (Torn selvedge or pin holes)</option>
-                                <option value="Shortage / Misprint Defect">Shortage / Misprint Defect (Short meterage or print smudge)</option>
-                                <option value="Other Fabric Damage">Other Fabric Damage (Specify in notes below)</option>
-                            </select>
-                            <small class="text-muted d-block mt-1" id="editReasonHelp">Select defect type or describe custom reason in notes below</small>
+                            <label class="form-label fw-bold" for="editReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
+                            <input type="text" name="damage_reason" id="editReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
+                            <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
                         </div>
 
                         <!-- Damaged Quantity -->
@@ -570,10 +547,9 @@
                         <!-- Defect Notes -->
                         <div class="col-12">
                             <label class="form-label fw-semibold" id="editNotesLabel">
-                                Defect Notes &amp; Observations <span class="text-danger" id="editNotesReqStar" style="display:none;">*</span>
-                                <small class="text-muted fw-normal" id="editNotesStatusText">(Optional if dropdown reason is selected)</small>
+                                Defect Notes &amp; Observations <small class="text-muted fw-normal">(Optional)</small>
                             </label>
-                            <textarea name="defect_notes" id="editDefectNotes" class="form-control" rows="2" placeholder="Describe defect details or reason (e.g. 5 meters contaminated with machine oil...)" oninput="syncEditReasonAndNotes()"></textarea>
+                            <textarea name="defect_notes" id="editDefectNotes" class="form-control" rows="2" placeholder="Add additional observations if needed"></textarea>
                         </div>
                     </div>
                 </div>
@@ -845,74 +821,6 @@ function getRollMetrics(r) {
     };
 }
 
-function syncReportReasonAndNotes() {
-    const reasonSelect = document.getElementById('reportReasonSelect');
-    const notesInput = document.getElementById('reportDefectNotes');
-    const reasonStar = document.getElementById('reportReasonReqStar');
-    const notesStar = document.getElementById('reportNotesReqStar');
-    const notesStatus = document.getElementById('reportNotesStatusText');
-
-    if (!reasonSelect || !notesInput) return;
-
-    const reasonVal = reasonSelect.value.trim();
-    const notesVal = notesInput.value.trim();
-
-    if (reasonVal !== '' && reasonVal !== 'Other Fabric Damage') {
-        if (notesStar) notesStar.style.display = 'none';
-        if (notesStatus) notesStatus.textContent = '(Optional — defect reason selected)';
-        if (reasonStar) reasonStar.style.display = '';
-        notesInput.removeAttribute('required');
-    } else if (reasonVal === 'Other Fabric Damage') {
-        if (notesStar) notesStar.style.display = '';
-        if (notesStatus) notesStatus.textContent = '(Required — please specify custom defect in notes)';
-        if (reasonStar) reasonStar.style.display = '';
-        notesInput.setAttribute('required', 'required');
-    } else if (notesVal !== '') {
-        if (notesStar) notesStar.style.display = '';
-        if (notesStatus) notesStatus.textContent = '(Custom defect reason entered in notes)';
-        if (reasonStar) reasonStar.style.display = 'none';
-        notesInput.removeAttribute('required');
-    } else {
-        if (notesStar) notesStar.style.display = 'none';
-        if (notesStatus) notesStatus.textContent = '(Required if no dropdown reason selected)';
-        if (reasonStar) reasonStar.style.display = '';
-    }
-}
-
-function syncEditReasonAndNotes() {
-    const reasonSelect = document.getElementById('editReasonSelect');
-    const notesInput = document.getElementById('editDefectNotes');
-    const reasonStar = document.getElementById('editReasonReqStar');
-    const notesStar = document.getElementById('editNotesReqStar');
-    const notesStatus = document.getElementById('editNotesStatusText');
-
-    if (!reasonSelect || !notesInput) return;
-
-    const reasonVal = reasonSelect.value.trim();
-    const notesVal = notesInput.value.trim();
-
-    if (reasonVal !== '' && reasonVal !== 'Other Fabric Damage') {
-        if (notesStar) notesStar.style.display = 'none';
-        if (notesStatus) notesStatus.textContent = '(Optional — defect reason selected)';
-        if (reasonStar) reasonStar.style.display = '';
-        notesInput.removeAttribute('required');
-    } else if (reasonVal === 'Other Fabric Damage') {
-        if (notesStar) notesStar.style.display = '';
-        if (notesStatus) notesStatus.textContent = '(Required — please specify custom defect in notes)';
-        if (reasonStar) reasonStar.style.display = '';
-        notesInput.setAttribute('required', 'required');
-    } else if (notesVal !== '') {
-        if (notesStar) notesStar.style.display = '';
-        if (notesStatus) notesStatus.textContent = '(Custom defect reason entered in notes)';
-        if (reasonStar) reasonStar.style.display = 'none';
-        notesInput.removeAttribute('required');
-    } else {
-        if (notesStar) notesStar.style.display = 'none';
-        if (notesStatus) notesStatus.textContent = '(Required if no dropdown reason selected)';
-        if (reasonStar) reasonStar.style.display = '';
-    }
-}
-
 function updateEditCalculations(m, qty, weight) {
     if (!m) return;
     const lossVal = weight * m.ratePerKg;
@@ -977,7 +885,7 @@ function openEditDamageModal(damageData) {
     document.getElementById('editDamageStatus').textContent = damageData.status;
 
     document.getElementById('editSellerSelect').value = damageData.seller_id;
-    document.getElementById('editReasonSelect').value = damageData.damage_reason;
+    document.getElementById('editReasonInput').value = damageData.damage_reason;
     document.getElementById('editDamagedQty').value = damageData.damaged_quantity || 1;
     document.getElementById('editDamagedWeight').value = parseFloat(damageData.damaged_weight || 0).toFixed(2);
     document.getElementById('editEstimatedLoss').value = parseFloat(damageData.loss_amount || 0).toFixed(2);
@@ -1004,7 +912,6 @@ function openEditDamageModal(damageData) {
     }
 
     loadSupplierRollsForEdit(damageData.seller_id, damageData.seller_roll_id, damageData.id);
-    syncEditReasonAndNotes();
 
     const modal = new bootstrap.Modal(document.getElementById('editDamageModal'));
     modal.show();
@@ -1100,7 +1007,6 @@ function handleEditRollSelectionChange(selectEl, resetValues = true) {
         updateEditCalculations(m, curQty, curWeight);
     }
 
-    syncEditReasonAndNotes();
     if (infoBox) infoBox.style.display = '';
 }
 
@@ -1188,8 +1094,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const reportForm = document.getElementById('reportDamageForm');
     if (reportForm) {
         reportForm.addEventListener('submit', function(e) {
-            const reason = document.getElementById('reportReasonSelect').value.trim();
-            const notes = document.getElementById('reportDefectNotes').value.trim();
+            const reason = document.getElementById('reportReasonInput').value.trim();
             const photoInput = document.getElementById('reportPhotoInput');
 
             if (damageScannedLabels.length === 0) {
@@ -1202,8 +1107,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.preventDefault();
                 return false;
             }
-            if (!reason && !notes) {
-                alert('Please select a Damage / Defect Reason OR provide details in Defect Notes & Observations.');
+            if (!reason) {
+                alert('Please enter a Damage / Defect Reason.');
                 e.preventDefault();
                 return false;
             }
@@ -1220,8 +1125,7 @@ document.addEventListener('DOMContentLoaded', () => {
         editForm.addEventListener('submit', function(e) {
             const sellerId = document.getElementById('editSellerSelect').value;
             const rollId = document.getElementById('editRollSelect').value;
-            const reason = document.getElementById('editReasonSelect').value.trim();
-            const notes = document.getElementById('editDefectNotes').value.trim();
+            const reason = document.getElementById('editReasonInput').value.trim();
             const qty = parseInt(document.getElementById('editDamagedQty').value) || 0;
             const photoInput = document.getElementById('editPhotoInput');
 
@@ -1249,8 +1153,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     return false;
                 }
             }
-            if (!reason && !notes) {
-                alert('Please select a Damage / Defect Reason OR provide details in Defect Notes & Observations.');
+            if (!reason) {
+                alert('Please enter a Damage / Defect Reason.');
                 e.preventDefault();
                 return false;
             }
