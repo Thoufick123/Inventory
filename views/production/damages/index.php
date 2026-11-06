@@ -326,12 +326,6 @@
     </div>
 </div>
 
-<datalist id="damageReasonOptions">
-    <?php foreach ($damageReasons as $damageReasonOption): ?>
-        <option value="<?= e($damageReasonOption['damage_reason']) ?>"></option>
-    <?php endforeach; ?>
-</datalist>
-
 <!-- 1. Report Damage Modal -->
 <div class="modal fade" id="reportDamageModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -364,12 +358,16 @@
 
                         <!-- Damage Reason -->
                         <div class="col-md-6">
-                            <label class="form-label fw-bold" for="reportReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
-                            <div class="input-group">
-                                <input type="text" name="damage_reason" id="reportReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
-                                <button type="button" class="btn btn-outline-primary" onclick="addDamageReason('reportReasonInput')"><i class="bi bi-plus-lg me-1"></i>Add New</button>
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="form-label fw-bold mb-0" for="reportReasonSelect">Damage / Defect Reason <span class="text-danger">*</span></label>
+                                <button type="button" class="btn btn-link btn-sm text-decoration-none p-0" onclick="addDamageReason('reportReasonSelect')"><i class="bi bi-plus-circle me-1"></i>New</button>
                             </div>
-                            <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
+                            <select name="damage_reason" id="reportReasonSelect" class="form-select" required>
+                                <option value="">-- Select Reason --</option>
+                                <?php foreach ($damageReasons as $damageReasonOption): ?>
+                                    <option value="<?= e($damageReasonOption['damage_reason']) ?>"><?= e($damageReasonOption['damage_reason']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
 
                         <!-- Damaged Weight (Disabled with clear visibility - Auto-calculated) -->
@@ -493,12 +491,16 @@
 
                         <!-- Damage Reason -->
                         <div class="col-md-6">
-                            <label class="form-label fw-bold" for="editReasonInput">Damage / Defect Reason <span class="text-danger">*</span></label>
-                            <div class="input-group">
-                                <input type="text" name="damage_reason" id="editReasonInput" class="form-control" list="damageReasonOptions" maxlength="255" required placeholder="Select an existing reason or type a new one">
-                                <button type="button" class="btn btn-outline-primary" onclick="addDamageReason('editReasonInput')"><i class="bi bi-plus-lg me-1"></i>Add New</button>
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <label class="form-label fw-bold mb-0" for="editReasonSelect">Damage / Defect Reason <span class="text-danger">*</span></label>
+                                <button type="button" class="btn btn-link btn-sm text-decoration-none p-0" onclick="addDamageReason('editReasonSelect')"><i class="bi bi-plus-circle me-1"></i>New</button>
                             </div>
-                            <small class="text-muted d-block mt-1">Choose a saved reason or enter a new reason.</small>
+                            <select name="damage_reason" id="editReasonSelect" class="form-select" required>
+                                <option value="">-- Select Reason --</option>
+                                <?php foreach ($damageReasons as $damageReasonOption): ?>
+                                    <option value="<?= e($damageReasonOption['damage_reason']) ?>"><?= e($damageReasonOption['damage_reason']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
 
                         <!-- Damaged Quantity -->
@@ -891,7 +893,7 @@ function openEditDamageModal(damageData) {
     document.getElementById('editDamageStatus').textContent = damageData.status;
 
     document.getElementById('editSellerSelect').value = damageData.seller_id;
-    document.getElementById('editReasonInput').value = damageData.damage_reason;
+    document.getElementById('editReasonSelect').value = damageData.damage_reason;
     document.getElementById('editDamagedQty').value = damageData.damaged_quantity || 1;
     document.getElementById('editDamagedWeight').value = parseFloat(damageData.damaged_weight || 0).toFixed(2);
     document.getElementById('editEstimatedLoss').value = parseFloat(damageData.loss_amount || 0).toFixed(2);
@@ -1100,7 +1102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const reportForm = document.getElementById('reportDamageForm');
     if (reportForm) {
         reportForm.addEventListener('submit', function(e) {
-            const reason = document.getElementById('reportReasonInput').value.trim();
+            const reason = document.getElementById('reportReasonSelect').value.trim();
             const photoInput = document.getElementById('reportPhotoInput');
 
             if (damageScannedLabels.length === 0) {
@@ -1131,7 +1133,7 @@ document.addEventListener('DOMContentLoaded', () => {
         editForm.addEventListener('submit', function(e) {
             const sellerId = document.getElementById('editSellerSelect').value;
             const rollId = document.getElementById('editRollSelect').value;
-            const reason = document.getElementById('editReasonInput').value.trim();
+            const reason = document.getElementById('editReasonSelect').value.trim();
             const qty = parseInt(document.getElementById('editDamagedQty').value) || 0;
             const photoInput = document.getElementById('editPhotoInput');
 
@@ -1212,7 +1214,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-async function addDamageReason(inputId) {
+async function addDamageReason(selectId) {
     const newReason = window.prompt('Enter the new damage / defect reason:');
     if (newReason === null) return;
 
@@ -1237,15 +1239,15 @@ async function addDamageReason(inputId) {
             throw new Error(result.message || 'Unable to save this damage reason.');
         }
 
-        const datalist = document.getElementById('damageReasonOptions');
         const savedReason = result.reason;
-        if (datalist && !Array.from(datalist.options).some(option => option.value.toLowerCase() === savedReason.toLowerCase())) {
+        const select = document.getElementById(selectId);
+        if (select && !Array.from(select.options).some(option => option.value.toLowerCase() === savedReason.toLowerCase())) {
             const option = document.createElement('option');
             option.value = savedReason;
-            datalist.appendChild(option);
+            option.textContent = savedReason;
+            select.appendChild(option);
         }
-        const input = document.getElementById(inputId);
-        if (input) input.value = savedReason;
+        if (select) select.value = savedReason;
     } catch (error) {
         window.alert(error.message || 'Unable to save this damage reason.');
     }
