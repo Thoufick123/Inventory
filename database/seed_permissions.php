@@ -38,6 +38,11 @@ foreach ($permissionBlocks[1] as $permissionBlock) {
 
 $definitions = array_merge($definitions, [
     ['module' => 'inventory', 'action' => 'delete', 'desc' => 'Delete an available Production inventory QR piece'],
+    ['module' => 'production_billing', 'action' => 'view', 'desc' => 'View Production Bills'],
+    ['module' => 'production_billing', 'action' => 'create', 'desc' => 'Create Production Bills'],
+    ['module' => 'production_billing', 'action' => 'edit', 'desc' => 'Edit Production Bills'],
+    ['module' => 'production_billing', 'action' => 'delete', 'desc' => 'Delete Production Bills'],
+    ['module' => 'production_billing', 'action' => 'print', 'desc' => 'Print Production Bills'],
 
     // WhatsApp Channel Hub
     ['module' => 'whatsapp_orders', 'action' => 'view', 'desc' => 'View WhatsApp B2B Orders and history'],

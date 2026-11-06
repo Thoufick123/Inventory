@@ -129,6 +129,9 @@ if (!empty($authUser['shop_name'])) {
                             <?php if (hasPermission('sellers', 'view')): ?>
                             <li><a href="<?= url('production/purchases') ?>" class="<?= ($activeMenu ?? '') === 'prod-purchases' ? 'active' : '' ?>">Purchases</a></li>
                             <?php endif; ?>
+                            <?php if (hasPermission('production_billing', 'view')): ?>
+                            <li><a href="<?= url('production/billing') ?>" class="<?= ($activeMenu ?? '') === 'prod-billing' ? 'active' : '' ?>">Billing</a></li>
+                            <?php endif; ?>
                             <?php if (hasPermission('damages', 'view')): ?>
                             <li><a href="<?= url('production/damages') ?>" class="<?= ($activeMenu ?? '') === 'prod-damages' ? 'active' : '' ?>">Damages</a></li>
                             <?php endif; ?>
