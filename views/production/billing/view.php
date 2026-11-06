@@ -38,7 +38,7 @@
 <div class="card border-0 shadow-sm mb-3">
     <div class="table-responsive">
         <table class="table align-middle mb-0">
-            <thead class="table-light"><tr><th>Item / QR codes</th><th class="text-center">Qty</th><th class="text-end">MRP</th><th class="text-end">Discount</th><th class="text-end">Taxable</th><th class="text-end">GST</th><th class="text-end">Total</th></tr></thead>
+            <thead class="table-light"><tr><th>Item / QR codes</th><th class="text-center">Qty</th><th class="text-end">MRP</th><th class="text-end">Discount</th><th class="text-end">Taxable</th><th>GST details</th><th class="text-end">Tax</th><th class="text-end">Total</th></tr></thead>
             <tbody>
                 <?php foreach ($billItems as $item): ?>
                     <tr>
@@ -49,6 +49,18 @@
                         <td class="text-end">₹<?= number_format((float)$item['mrp'] * (int)$item['quantity'], 2) ?></td>
                         <td class="text-end">₹<?= number_format((float)$item['discount_amount'], 2) ?></td>
                         <td class="text-end">₹<?= number_format((float)$item['taxable_amount'], 2) ?></td>
+                        <td>
+                            <div><?= htmlspecialchars($item['gst_type'] ?? 'BOTH') ?> · <?= ($item['tax_input_type'] ?? 'PERCENT') === 'PERCENT' ? 'Percentage' : 'Fixed' ?></div>
+                            <?php if (($item['gst_type'] ?? '') === 'BOTH'): ?>
+                                <small class="text-muted">SGST <?= number_format((float)$item['sgst_rate'], 2) ?><?= ($item['tax_input_type'] ?? 'PERCENT') === 'PERCENT' ? '%' : ' ₹/piece' ?> · CGST <?= number_format((float)$item['cgst_rate'], 2) ?><?= ($item['tax_input_type'] ?? 'PERCENT') === 'PERCENT' ? '%' : ' ₹/piece' ?></small>
+                            <?php elseif (($item['gst_type'] ?? '') === 'IGST'): ?>
+                                <small class="text-muted">IGST <?= number_format((float)$item['igst_rate'], 2) ?><?= ($item['tax_input_type'] ?? 'PERCENT') === 'PERCENT' ? '%' : ' ₹/piece' ?></small>
+                            <?php elseif (($item['gst_type'] ?? '') === 'SGST'): ?>
+                                <small class="text-muted">SGST <?= number_format((float)$item['sgst_rate'], 2) ?><?= ($item['tax_input_type'] ?? 'PERCENT') === 'PERCENT' ? '%' : ' ₹/piece' ?></small>
+                            <?php elseif (($item['gst_type'] ?? '') === 'CGST'): ?>
+                                <small class="text-muted">CGST <?= number_format((float)$item['cgst_rate'], 2) ?><?= ($item['tax_input_type'] ?? 'PERCENT') === 'PERCENT' ? '%' : ' ₹/piece' ?></small>
+                            <?php endif; ?>
+                        </td>
                         <td class="text-end">₹<?= number_format((float)$item['tax_amount'], 2) ?></td>
                         <td class="text-end fw-semibold">₹<?= number_format((float)$item['total_amount'], 2) ?></td>
                     </tr>
@@ -64,11 +76,14 @@
             <div class="d-flex justify-content-between py-1"><span>Gross / MRP</span><strong>₹<?= number_format((float)$bill['gross_amount'], 2) ?></strong></div>
             <div class="d-flex justify-content-between py-1"><span>Discount</span><strong>₹<?= number_format((float)$bill['discount_amount'], 2) ?></strong></div>
             <div class="d-flex justify-content-between py-1"><span>Taxable subtotal</span><strong>₹<?= number_format((float)$bill['subtotal'], 2) ?></strong></div>
-            <?php if ($bill['tax_type'] === 'IGST'): ?>
-                <div class="d-flex justify-content-between py-1"><span>IGST</span><strong>₹<?= number_format((float)$bill['igst_amount'], 2) ?></strong></div>
-            <?php else: ?>
+            <?php if ((float)$bill['cgst_amount'] > 0): ?>
                 <div class="d-flex justify-content-between py-1"><span>CGST</span><strong>₹<?= number_format((float)$bill['cgst_amount'], 2) ?></strong></div>
+            <?php endif; ?>
+            <?php if ((float)$bill['sgst_amount'] > 0): ?>
                 <div class="d-flex justify-content-between py-1"><span>SGST</span><strong>₹<?= number_format((float)$bill['sgst_amount'], 2) ?></strong></div>
+            <?php endif; ?>
+            <?php if ((float)$bill['igst_amount'] > 0): ?>
+                <div class="d-flex justify-content-between py-1"><span>IGST</span><strong>₹<?= number_format((float)$bill['igst_amount'], 2) ?></strong></div>
             <?php endif; ?>
             <div class="d-flex justify-content-between py-1"><span>Total taxes</span><strong>₹<?= number_format((float)$bill['tax_amount'], 2) ?></strong></div>
             <hr>

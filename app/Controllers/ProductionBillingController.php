@@ -287,7 +287,6 @@ class ProductionBillingController
         $customerGstin = trim((string)($_POST['customer_gstin'] ?? ''));
         $buyerType = strtoupper(trim((string)($_POST['buyer_type'] ?? 'COMPANY')));
         $billDate = trim((string)($_POST['bill_date'] ?? date('Y-m-d')));
-        $taxType = strtoupper(trim((string)($_POST['tax_type'] ?? 'CGST_SGST')));
         $paymentMethod = strtoupper(trim((string)($_POST['payment_method'] ?? 'CASH')));
         $submittedItems = $_POST['items'] ?? [];
 
@@ -317,8 +316,8 @@ class ProductionBillingController
             $companyGstin = null;
         }
         $dateParts = preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $billDate, $dateMatch) ? $dateMatch : null;
-        if (!$dateParts || !checkdate((int)$dateParts[2], (int)$dateParts[3], (int)$dateParts[1]) || !in_array($taxType, ['CGST_SGST', 'IGST'], true)) {
-            Response::redirect($billId ? 'production/billing/edit/' . $billId : 'production/billing/create', 'error', 'The bill date or tax type is invalid.');
+        if (!$dateParts || !checkdate((int)$dateParts[2], (int)$dateParts[3], (int)$dateParts[1])) {
+            Response::redirect($billId ? 'production/billing/edit/' . $billId : 'production/billing/create', 'error', 'The bill date is invalid.');
             return;
         }
         if (!in_array($paymentMethod, ['CASH', 'UPI', 'CASH_UPI', 'CARD', 'NET_BANKING', 'CREDIT'], true)) {
@@ -362,10 +361,35 @@ class ProductionBillingController
             }
 
             $unitPrice = filter_var($submitted['unit_price'] ?? null, FILTER_VALIDATE_FLOAT);
-            $gstPercentage = filter_var($submitted['gst_percentage'] ?? null, FILTER_VALIDATE_FLOAT);
-            if ($unitPrice === false || $unitPrice < 0 || $gstPercentage === false || $gstPercentage < 0 || $gstPercentage > 100) {
+            $gstType = strtoupper(trim((string)($submitted['gst_type'] ?? 'BOTH')));
+            $taxInputType = strtoupper(trim((string)($submitted['tax_input_type'] ?? 'PERCENT')));
+            $sgstRate = filter_var($submitted['sgst_rate'] ?? 0, FILTER_VALIDATE_FLOAT);
+            $cgstRate = filter_var($submitted['cgst_rate'] ?? 0, FILTER_VALIDATE_FLOAT);
+            $igstRate = filter_var($submitted['igst_rate'] ?? 0, FILTER_VALIDATE_FLOAT);
+            $validGstTypes = ['SGST', 'IGST', 'CGST', 'BOTH', 'EXEMPTED'];
+            $validTaxInputTypes = ['PERCENT', 'FIXED'];
+            if (
+                $unitPrice === false || $unitPrice < 0 ||
+                !in_array($gstType, $validGstTypes, true) ||
+                !in_array($taxInputType, $validTaxInputTypes, true) ||
+                $sgstRate === false || $cgstRate === false || $igstRate === false ||
+                min($sgstRate, $cgstRate, $igstRate) < 0 ||
+                ($taxInputType === 'PERCENT' && max($sgstRate, $cgstRate, $igstRate) > 100)
+            ) {
                 Response::redirect($billId ? 'production/billing/edit/' . $billId : 'production/billing/create', 'error', 'A product price or GST rate is invalid.');
                 return;
+            }
+
+            if ($gstType === 'EXEMPTED') {
+                $sgstRate = $cgstRate = $igstRate = 0.0;
+            } elseif ($gstType === 'SGST') {
+                $cgstRate = $igstRate = 0.0;
+            } elseif ($gstType === 'CGST') {
+                $sgstRate = $igstRate = 0.0;
+            } elseif ($gstType === 'IGST') {
+                $sgstRate = $cgstRate = 0.0;
+            } else {
+                $igstRate = 0.0;
             }
 
             $itemPayload[] = [
@@ -373,7 +397,11 @@ class ProductionBillingController
                 'tags' => $tags,
                 'quantity' => count($tags),
                 'unit_price' => round((float)$unitPrice, 2),
-                'gst_percentage' => round((float)$gstPercentage, 3),
+                'gst_type' => $gstType,
+                'tax_input_type' => $taxInputType,
+                'sgst_rate' => round((float)$sgstRate, 3),
+                'cgst_rate' => round((float)$cgstRate, 3),
+                'igst_rate' => round((float)$igstRate, 3),
             ];
         }
         if (!$itemPayload) {
@@ -392,14 +420,26 @@ class ProductionBillingController
             $mrp = max(0, (float)$stock['mrp']);
             $unitPrice = $item['unit_price'];
             $gross = round($mrp * $qty, 2);
-            $lineTotal = round($unitPrice * $qty, 2);
-            $discount = max(0, round($gross - $lineTotal, 2));
-            $gst = $item['gst_percentage'];
-            $taxable = $gst > 0 ? round($lineTotal / (1 + ($gst / 100)), 2) : $lineTotal;
-            $tax = round($lineTotal - $taxable, 2);
-            $cgst = $taxType === 'CGST_SGST' ? round($tax / 2, 2) : 0.0;
-            $sgst = $taxType === 'CGST_SGST' ? round($tax - $cgst, 2) : 0.0;
-            $igst = $taxType === 'IGST' ? $tax : 0.0;
+            $taxable = round($unitPrice * $qty, 2);
+            $discount = max(0, round($gross - $taxable, 2));
+            $taxAmount = static function (float $rate) use ($item, $taxable, $qty): float {
+                if ($rate <= 0) {
+                    return 0.0;
+                }
+                return round(
+                    $item['tax_input_type'] === 'PERCENT' ? $taxable * $rate / 100 : $rate * $qty,
+                    2
+                );
+            };
+            $cgst = $taxAmount($item['cgst_rate']);
+            $sgst = $taxAmount($item['sgst_rate']);
+            $igst = $taxAmount($item['igst_rate']);
+            $tax = round($cgst + $sgst + $igst, 2);
+            $lineTotal = round($taxable + $tax, 2);
+            $gstPercentage = $item['tax_input_type'] === 'PERCENT'
+                ? $item['cgst_rate'] + $item['sgst_rate'] + $item['igst_rate']
+                : 0.0;
+            $item['gst_percentage'] = round($gstPercentage, 3);
             $item['amounts'] = [
                 'mrp' => $mrp,
                 'discount_percentage' => $mrp > 0 ? round(($discount / $gross) * 100, 3) : 0,
@@ -421,6 +461,10 @@ class ProductionBillingController
             $totals['total_amount'] += $lineTotal;
         }
         unset($item);
+        $taxType = count(array_unique(array_column($itemPayload, 'gst_type'))) === 1
+            && $itemPayload[0]['gst_type'] === 'IGST'
+            ? 'IGST'
+            : 'CGST_SGST';
         foreach ($totals as &$amount) {
             $amount = round($amount, 2);
         }
@@ -514,14 +558,16 @@ class ProductionBillingController
                 Database::execute(
                     "INSERT INTO production_bill_items
                      (bill_id, qc_item_id, variant_id, product_name, sku, size_name, color_name, quantity, mrp,
-                      unit_price, discount_percentage, discount_amount, gst_percentage, taxable_amount, cgst_amount,
-                      sgst_amount, igst_amount, tax_amount, total_amount)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                      unit_price, discount_percentage, discount_amount, gst_percentage, gst_type, tax_input_type,
+                      sgst_rate, cgst_rate, igst_rate, taxable_amount, cgst_amount, sgst_amount, igst_amount,
+                      tax_amount, total_amount)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         $billId, $stock['qc_item_id'], $stock['variant_id'] ?: null,
                         $stock['product_name'], $stock['sku'], $stock['size_name'], $stock['color_name'],
                         $item['quantity'], $amounts['mrp'], $item['unit_price'], $amounts['discount_percentage'],
-                        $amounts['discount_amount'], $item['gst_percentage'], $amounts['taxable_amount'],
+                        $amounts['discount_amount'], $item['gst_percentage'], $item['gst_type'], $item['tax_input_type'],
+                        $item['sgst_rate'], $item['cgst_rate'], $item['igst_rate'], $amounts['taxable_amount'],
                         $amounts['cgst_amount'], $amounts['sgst_amount'], $amounts['igst_amount'],
                         $amounts['tax_amount'], $amounts['total_amount'],
                     ]

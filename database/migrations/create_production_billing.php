@@ -52,15 +52,15 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
 
-    $columnExists = static function (string $column): bool {
+    $columnExists = static function (string $table, string $column): bool {
         return (bool)Database::fetchOne(
             "SELECT COLUMN_NAME FROM information_schema.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'production_bills' AND COLUMN_NAME = ?",
-            [$column]
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            [$table, $column]
         );
     };
 
-    if (!$columnExists('buyer_type')) {
+    if (!$columnExists('production_bills', 'buyer_type')) {
         Database::execute(
             "ALTER TABLE production_bills
              ADD COLUMN buyer_type enum('COMPANY','CUSTOMER') NOT NULL DEFAULT 'COMPANY' AFTER bill_number"
@@ -86,6 +86,11 @@ try {
             discount_percentage decimal(7,3) NOT NULL DEFAULT '0.000',
             discount_amount decimal(12,2) NOT NULL DEFAULT '0.00',
             gst_percentage decimal(7,3) NOT NULL DEFAULT '0.000',
+            gst_type enum('SGST','IGST','CGST','BOTH','EXEMPTED') NOT NULL DEFAULT 'BOTH',
+            tax_input_type enum('PERCENT','FIXED') NOT NULL DEFAULT 'PERCENT',
+            sgst_rate decimal(7,3) NOT NULL DEFAULT '0.000',
+            cgst_rate decimal(7,3) NOT NULL DEFAULT '0.000',
+            igst_rate decimal(7,3) NOT NULL DEFAULT '0.000',
             taxable_amount decimal(12,2) NOT NULL DEFAULT '0.00',
             cgst_amount decimal(12,2) NOT NULL DEFAULT '0.00',
             sgst_amount decimal(12,2) NOT NULL DEFAULT '0.00',
@@ -98,6 +103,26 @@ try {
             KEY idx_production_bill_items_qc (qc_item_id),
             CONSTRAINT production_bill_items_ibfk_1 FOREIGN KEY (bill_id) REFERENCES production_bills (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
+    $itemColumns = [
+        'gst_type' => "ALTER TABLE production_bill_items ADD COLUMN gst_type enum('SGST','IGST','CGST','BOTH','EXEMPTED') NOT NULL DEFAULT 'BOTH' AFTER gst_percentage",
+        'tax_input_type' => "ALTER TABLE production_bill_items ADD COLUMN tax_input_type enum('PERCENT','FIXED') NOT NULL DEFAULT 'PERCENT' AFTER gst_type",
+        'sgst_rate' => "ALTER TABLE production_bill_items ADD COLUMN sgst_rate decimal(7,3) NOT NULL DEFAULT '0.000' AFTER tax_input_type",
+        'cgst_rate' => "ALTER TABLE production_bill_items ADD COLUMN cgst_rate decimal(7,3) NOT NULL DEFAULT '0.000' AFTER sgst_rate",
+        'igst_rate' => "ALTER TABLE production_bill_items ADD COLUMN igst_rate decimal(7,3) NOT NULL DEFAULT '0.000' AFTER cgst_rate",
+    ];
+    foreach ($itemColumns as $column => $alterSql) {
+        if (!$columnExists('production_bill_items', $column)) {
+            Database::execute($alterSql);
+        }
+    }
+
+    Database::execute(
+        "UPDATE production_bill_items
+         SET sgst_rate = gst_percentage / 2, cgst_rate = gst_percentage / 2,
+             gst_type = CASE WHEN gst_percentage > 0 THEN 'BOTH' ELSE 'EXEMPTED' END
+         WHERE sgst_rate = 0 AND cgst_rate = 0 AND igst_rate = 0"
     );
 
     Database::execute(

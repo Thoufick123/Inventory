@@ -11,6 +11,11 @@ $existingItems = array_map(static function (array $item): array {
         'mrp' => (float)$item['mrp'],
         'unit_price' => (float)$item['unit_price'],
         'gst_percentage' => (float)$item['gst_percentage'],
+        'gst_type' => (string)($item['gst_type'] ?? ((float)$item['gst_percentage'] > 0 ? 'BOTH' : 'EXEMPTED')),
+        'tax_input_type' => (string)($item['tax_input_type'] ?? 'PERCENT'),
+        'sgst_rate' => (float)($item['sgst_rate'] ?? ((float)$item['gst_percentage'] / 2)),
+        'cgst_rate' => (float)($item['cgst_rate'] ?? ((float)$item['gst_percentage'] / 2)),
+        'igst_rate' => (float)($item['igst_rate'] ?? 0),
         'tags' => $item['tags'],
     ];
 }, $billItems ?? []);
@@ -68,12 +73,6 @@ $existingItems = array_map(static function (array $item): array {
                 <div class="card-header bg-white fw-semibold"><i class="bi bi-credit-card me-2 text-primary"></i>Invoice &amp; Payment</div>
                 <div class="card-body">
                     <div class="mb-3"><label class="form-label">Bill date</label><input class="form-control" type="date" name="bill_date" required value="<?= $escape($bill['bill_date'] ?? date('Y-m-d')) ?>"></div>
-                    <div class="mb-3"><label class="form-label">GST type</label>
-                        <select class="form-select" name="tax_type" id="taxType">
-                            <option value="CGST_SGST" <?= ($bill['tax_type'] ?? 'CGST_SGST') === 'CGST_SGST' ? 'selected' : '' ?>>CGST + SGST</option>
-                            <option value="IGST" <?= ($bill['tax_type'] ?? '') === 'IGST' ? 'selected' : '' ?>>IGST</option>
-                        </select>
-                    </div>
                     <div class="mb-3"><label class="form-label">Payment method</label>
                         <select class="form-select" name="payment_method" id="paymentMethod">
                             <?php foreach (['CASH' => 'Cash', 'UPI' => 'UPI', 'CASH_UPI' => 'Cash + UPI', 'CARD' => 'Card', 'NET_BANKING' => 'Net Banking', 'CREDIT' => 'Credit'] as $value => $label): ?>
@@ -108,7 +107,7 @@ $existingItems = array_map(static function (array $item): array {
             <div class="card border-0 shadow-sm mb-3">
                 <div class="table-responsive">
                     <table class="table align-middle mb-0">
-                        <thead class="table-light"><tr><th>Product / QR codes</th><th class="text-end">MRP</th><th style="width:115px">Discount %</th><th style="width:135px">Price / piece</th><th style="width:100px">GST %</th><th class="text-end">Total</th><th></th></tr></thead>
+                        <thead class="table-light"><tr><th>Product / QR codes</th><th class="text-end">MRP</th><th style="width:100px">Discount %</th><th style="width:120px">Price / piece<br><small>before tax</small></th><th style="min-width:330px">GST / Tax details</th><th class="text-end">Tax</th><th class="text-end">Total incl. tax</th><th></th></tr></thead>
                         <tbody id="billCart"><tr><td colspan="7" class="text-center text-muted py-5">Scan or search for items to add to this bill.</td></tr></tbody>
                     </table>
                 </div>
@@ -120,8 +119,8 @@ $existingItems = array_map(static function (array $item): array {
                         <div class="col-lg-6">
                             <div class="d-flex justify-content-between py-1"><span class="text-muted">Gross / MRP</span><strong id="grossTotal">₹0.00</strong></div>
                             <div class="d-flex justify-content-between py-1"><span class="text-muted">Discount</span><strong id="discountTotal">₹0.00</strong></div>
-                            <div class="d-flex justify-content-between py-1"><span class="text-muted">Taxable subtotal</span><strong id="subtotal">₹0.00</strong></div>
-                            <div class="d-flex justify-content-between py-1"><span class="text-muted" id="taxLabel">Taxes (CGST + SGST)</span><strong id="taxTotal">₹0.00</strong></div>
+                            <div class="d-flex justify-content-between py-1"><span class="text-muted">Subtotal before GST</span><strong id="subtotal">₹0.00</strong></div>
+                            <div class="d-flex justify-content-between py-1"><span class="text-muted">Total GST</span><strong id="taxTotal">₹0.00</strong></div>
                             <hr>
                             <div class="d-flex justify-content-between fs-5"><span class="fw-bold">Total</span><strong id="grandTotal">₹0.00</strong></div>
                             <div id="splitBalance" class="small text-muted text-end mt-2"></div>
@@ -164,7 +163,12 @@ $existingItems = array_map(static function (array $item): array {
         tags: Array.isArray(item.tags) ? item.tags : [],
         unit_price: Number(item.unit_price),
         mrp: Number(item.mrp),
-        gst_percentage: Number(item.gst_percentage)
+        gst_percentage: Number(item.gst_percentage),
+        gst_type: item.gst_type || (Number(item.gst_percentage) > 0 ? 'BOTH' : 'EXEMPTED'),
+        tax_input_type: item.tax_input_type || 'PERCENT',
+        sgst_rate: Number(item.sgst_rate ?? Number(item.gst_percentage || 0) / 2),
+        cgst_rate: Number(item.cgst_rate ?? Number(item.gst_percentage || 0) / 2),
+        igst_rate: Number(item.igst_rate || 0)
     }));
 
     const assignedTags = () => new Set([...cart.values()].flatMap(item => item.tags.map(tag => tag.toUpperCase())));
@@ -174,7 +178,7 @@ $existingItems = array_map(static function (array $item): array {
         if (!cart.size) {
             const row = cartBody.insertRow();
             const cell = row.insertCell();
-            cell.colSpan = 7;
+            cell.colSpan = 8;
             cell.className = 'text-center text-muted py-5';
             cell.textContent = 'Scan or search for items to add to this bill.';
             updateTotals();
@@ -245,22 +249,95 @@ $existingItems = array_map(static function (array $item): array {
             priceCell.append(priceInput);
 
             const gstCell = row.insertCell();
-            const gstInput = document.createElement('input');
-            gstInput.type = 'number';
-            gstInput.min = '0';
-            gstInput.max = '100';
-            gstInput.step = '0.01';
-            gstInput.className = 'form-control form-control-sm';
-            gstInput.value = Number(item.gst_percentage || 0);
-            gstInput.addEventListener('input', () => {
-                item.gst_percentage = Math.min(100, Math.max(0, Number(gstInput.value) || 0));
+            const gstControls = document.createElement('div');
+            gstControls.className = 'd-flex flex-column gap-1';
+            const gstTopRow = document.createElement('div');
+            gstTopRow.className = 'd-flex gap-1';
+            const gstTypeSelect = document.createElement('select');
+            gstTypeSelect.className = 'form-select form-select-sm';
+            gstTypeSelect.setAttribute('aria-label', 'GST type');
+            [
+                ['SGST', 'SGST'],
+                ['IGST', 'IGST'],
+                ['CGST', 'CGST'],
+                ['BOTH', 'Both (CGST and SGST)'],
+                ['EXEMPTED', 'Exempted']
+            ].forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                gstTypeSelect.append(option);
+            });
+            gstTypeSelect.value = item.gst_type || 'BOTH';
+
+            const taxInputTypeSelect = document.createElement('select');
+            taxInputTypeSelect.className = 'form-select form-select-sm';
+            taxInputTypeSelect.setAttribute('aria-label', 'Tax input type');
+            [['PERCENT', 'Percentage (%)'], ['FIXED', 'Fixed amount / piece']].forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                taxInputTypeSelect.append(option);
+            });
+            taxInputTypeSelect.value = item.tax_input_type || 'PERCENT';
+            gstTopRow.append(gstTypeSelect, taxInputTypeSelect);
+            gstControls.append(gstTopRow);
+
+            const ratesRow = document.createElement('div');
+            ratesRow.className = 'd-flex gap-1';
+            const rateInputs = {};
+            [['sgst_rate', 'SGST', 'SGST'], ['igst_rate', 'IGST', 'IGST'], ['cgst_rate', 'CGST', 'CGST']].forEach(([key, label, type]) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'flex-fill';
+                wrapper.dataset.gstRateType = type;
+                const rateInput = document.createElement('input');
+                rateInput.type = 'number';
+                rateInput.min = '0';
+                rateInput.step = '0.01';
+                rateInput.className = 'form-control form-control-sm';
+                rateInput.placeholder = label;
+                rateInput.name = `items[${index}][${key}]`;
+                rateInput.value = Number(item[key] || 0);
+                rateInput.addEventListener('input', () => {
+                    item[key] = Math.max(0, Number(rateInput.value) || 0);
+                    updateTotals();
+                });
+                wrapper.append(rateInput);
+                rateInputs[key] = {wrapper, input: rateInput};
+                ratesRow.append(wrapper);
+            });
+            gstControls.append(ratesRow);
+            const updateGstControls = () => {
+                const type = gstTypeSelect.value;
+                const visibleTypes = type === 'BOTH' ? ['SGST', 'CGST'] : (type === 'EXEMPTED' ? [] : [type]);
+                Object.entries(rateInputs).forEach(([key, entry]) => {
+                    entry.wrapper.classList.toggle('d-none', !visibleTypes.includes(entry.wrapper.dataset.gstRateType));
+                    const unit = taxInputTypeSelect.value === 'PERCENT' ? '(%)' : '(₹ / piece)';
+                    entry.input.placeholder = `${entry.wrapper.dataset.gstRateType} ${unit}`;
+                    entry.input.setAttribute('aria-label', `${entry.wrapper.dataset.gstRateType} rate ${unit}`);
+                    entry.input.max = taxInputTypeSelect.value === 'PERCENT' ? '100' : '';
+                });
+            };
+            gstTypeSelect.addEventListener('change', () => {
+                item.gst_type = gstTypeSelect.value;
+                updateGstControls();
                 updateTotals();
             });
-            gstCell.append(gstInput);
+            taxInputTypeSelect.addEventListener('change', () => {
+                item.tax_input_type = taxInputTypeSelect.value;
+                updateGstControls();
+                updateTotals();
+            });
+            updateGstControls();
+            gstCell.append(gstControls);
 
-            const totalCell = row.insertCell();
-            totalCell.className = 'text-end text-nowrap fw-semibold';
-            totalCell.dataset.totalFor = item.qc_item_id;
+            const taxCell = row.insertCell();
+            taxCell.className = 'text-end text-nowrap';
+            taxCell.dataset.taxFor = item.qc_item_id;
+
+            const lineTotalCell = row.insertCell();
+            lineTotalCell.className = 'text-end text-nowrap fw-semibold';
+            lineTotalCell.dataset.totalFor = item.qc_item_id;
 
             const removeCell = row.insertCell();
             const removeButton = document.createElement('button');
@@ -274,7 +351,7 @@ $existingItems = array_map(static function (array $item): array {
             });
             removeCell.append(removeButton);
 
-            [['qc_item_id', item.qc_item_id], ['unit_price', item.unit_price], ['gst_percentage', item.gst_percentage]].forEach(([key, value]) => {
+            [['qc_item_id', item.qc_item_id], ['unit_price', item.unit_price], ['gst_type', item.gst_type || 'BOTH'], ['tax_input_type', item.tax_input_type || 'PERCENT']].forEach(([key, value]) => {
                 const input = document.createElement('input');
                 input.type = 'hidden';
                 input.name = `items[${index}][${key}]`;
@@ -298,31 +375,44 @@ $existingItems = array_map(static function (array $item): array {
         let discount = 0;
         let subtotal = 0;
         let taxes = 0;
+        let grandTotal = 0;
         [...cart.values()].forEach(item => {
             const quantity = item.tags.length;
             const lineGross = Number(item.mrp || 0) * quantity;
-            const lineTotal = Number(item.unit_price || 0) * quantity;
-            const gst = Math.max(0, Number(item.gst_percentage || 0));
-            const taxable = gst > 0 ? lineTotal / (1 + gst / 100) : lineTotal;
+            const taxable = Number(item.unit_price || 0) * quantity;
+            const inputType = item.tax_input_type || 'PERCENT';
+            const gstType = item.gst_type || 'BOTH';
+            const rates = {
+                SGST: Number(item.sgst_rate || 0),
+                CGST: Number(item.cgst_rate || 0),
+                IGST: Number(item.igst_rate || 0)
+            };
+            const includedTypes = gstType === 'BOTH' ? ['SGST', 'CGST'] : (gstType === 'EXEMPTED' ? [] : [gstType]);
+            const lineTax = includedTypes.reduce((sum, type) => {
+                const rate = rates[type] || 0;
+                const componentTax = inputType === 'PERCENT' ? taxable * rate / 100 : rate * quantity;
+                return sum + Math.round((componentTax + Number.EPSILON) * 100) / 100;
+            }, 0);
+            const lineTotal = taxable + lineTax;
             gross += lineGross;
-            discount += Math.max(0, lineGross - lineTotal);
+            discount += Math.max(0, lineGross - taxable);
             subtotal += taxable;
-            taxes += lineTotal - taxable;
+            taxes += lineTax;
+            grandTotal += lineTotal;
             const lineTotalCell = cartBody.querySelector(`[data-total-for="${item.qc_item_id}"]`);
+            const taxCell = cartBody.querySelector(`[data-tax-for="${item.qc_item_id}"]`);
             if (lineTotalCell) lineTotalCell.textContent = money(lineTotal);
+            if (taxCell) taxCell.textContent = money(lineTax);
         });
         document.getElementById('grossTotal').textContent = money(gross);
         document.getElementById('discountTotal').textContent = money(discount);
         document.getElementById('subtotal').textContent = money(subtotal);
         document.getElementById('taxTotal').textContent = money(taxes);
-        document.getElementById('grandTotal').textContent = money([...cart.values()].reduce((sum, item) => sum + item.unit_price * item.tags.length, 0));
-        const taxType = document.getElementById('taxType').value;
-        document.getElementById('taxLabel').textContent = taxType === 'IGST' ? 'Taxes (IGST)' : 'Taxes (CGST + SGST)';
-        const total = [...cart.values()].reduce((sum, item) => sum + item.unit_price * item.tags.length, 0);
+        document.getElementById('grandTotal').textContent = money(grandTotal);
         const cash = Number(form.elements.cash_amount?.value || 0);
         const upi = Number(form.elements.upi_amount?.value || 0);
         document.getElementById('splitBalance').textContent = document.getElementById('paymentMethod').value === 'CASH_UPI'
-            ? `Cash + UPI: ${money(cash + upi)} / ${money(total)}`
+            ? `Cash + UPI: ${money(cash + upi)} / ${money(grandTotal)}`
             : '';
     }
 
@@ -344,6 +434,11 @@ $existingItems = array_map(static function (array $item): array {
                 mrp: Number(item.mrp || 0),
                 unit_price: Number(item.unit_price || item.mrp || 0),
                 gst_percentage: Number(item.gst_percentage || 0),
+                gst_type: Number(item.gst_percentage || 0) > 0 ? 'BOTH' : 'EXEMPTED',
+                tax_input_type: 'PERCENT',
+                sgst_rate: Number(item.gst_percentage || 0) / 2,
+                cgst_rate: Number(item.gst_percentage || 0) / 2,
+                igst_rate: 0,
                 tags: []
             });
         }
@@ -417,7 +512,6 @@ $existingItems = array_map(static function (array $item): array {
             });
         }
     });
-    document.getElementById('taxType').addEventListener('change', updateTotals);
     buyerType.addEventListener('change', updateBuyerFields);
     document.getElementById('paymentMethod').addEventListener('change', event => {
         document.getElementById('splitPaymentFields').classList.toggle('d-none', event.target.value !== 'CASH_UPI');
