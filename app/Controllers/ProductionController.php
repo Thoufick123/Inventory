@@ -2216,16 +2216,14 @@ class ProductionController {
         try {
             Database::beginTransaction();
             $createdAt = date('Y-m-d H:i:s');
-            $countToday = Database::fetchOne("SELECT COUNT(*) as cnt FROM roll_damages");
-            $nextSeq = (int)($countToday['cnt'] ?? 0) + 1;
-            foreach ($damageItems as $index => $item) {
-                $damageNumber = 'DMG-ROL-' . date('Y') . '-' . sprintf("%04d", $nextSeq + $index);
+            foreach ($damageItems as $item) {
+                $temporaryDamageNumber = 'TMP-ROL-' . bin2hex(random_bytes(16));
                 Database::execute(
                     "INSERT INTO roll_damages
                         (damage_number, seller_id, seller_roll_id, qr_code, damaged_quantity, damaged_weight, loss_amount, damage_reason, defect_notes, photo_url, status, resolution_type, reported_by, created_at, updated_at)
                      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, ?, ?)",
                     [
-                        $damageNumber,
+                        $temporaryDamageNumber,
                         $item['seller_id'],
                         $item['seller_roll_id'],
                         $item['qr_code'],
@@ -2240,6 +2238,11 @@ class ProductionController {
                     ]
                 );
                 $damageId = (int)Database::lastInsertId();
+                $damageNumber = 'DMG-ROL-' . date('Y') . '-' . sprintf('%06d', $damageId) . '-ID' . $damageId;
+                Database::execute(
+                    "UPDATE roll_damages SET damage_number = ? WHERE id = ?",
+                    [$damageNumber, $damageId]
+                );
                 $totalLossAmount += (float)$item['loss_amount'];
 
                 AuditService::log('production', 'create', 'roll_damages', $damageId, null, [
