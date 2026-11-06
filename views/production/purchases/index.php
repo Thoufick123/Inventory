@@ -72,7 +72,21 @@
                     </td>
                     <td class="text-end fw-bold">₹<?= number_format((float)$purchase['total_amount'], 2) ?></td>
                     <td>
-                        <a class="btn btn-sm btn-outline-primary mb-1" href="<?= url('production/purchases/print/' . $purchase['id']) ?>" target="_blank" rel="noopener"><i class="bi bi-printer me-1"></i>Print Report</a>
+                        <div class="d-flex flex-wrap gap-1">
+                            <?php if (hasPermission('sellers', 'view')): ?>
+                                <a class="btn btn-sm btn-outline-secondary" href="<?= url('production/purchases/view/' . $purchase['id']) ?>" title="View Purchase"><i class="bi bi-eye"></i></a>
+                                <a class="btn btn-sm btn-outline-primary" href="<?= url('production/purchases/print/' . $purchase['id']) ?>" target="_blank" rel="noopener" title="Print Report"><i class="bi bi-printer"></i></a>
+                            <?php endif; ?>
+                            <?php if (hasPermission('sellers', 'edit')): ?>
+                                <a class="btn btn-sm btn-outline-primary" href="<?= url('production/purchases/edit/' . $purchase['id']) ?>" title="Edit Purchase"><i class="bi bi-pencil"></i></a>
+                            <?php endif; ?>
+                            <?php if (hasPermission('sellers', 'delete')): ?>
+                                <form method="POST" action="<?= url('production/purchases/delete/' . $purchase['id']) ?>" class="d-inline" onsubmit="return confirm('Delete purchase <?= e(addslashes($purchase['purchase_number'])) ?>? Fabric rolls already referenced by Production cannot be removed.');">
+                                    <?= CSRF::field() ?>
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete Purchase"><i class="bi bi-trash"></i></button>
+                                </form>
+                            <?php endif; ?>
+                        </div>
                         <?php if (!empty($purchase['invoice_number'])): ?><span class="small d-block mb-1"><?= e($purchase['invoice_number']) ?></span><?php endif; ?>
                         <?php if (!empty($purchase['document_url'])): ?>
                             <a class="btn btn-sm btn-outline-secondary" href="<?= uploadUrl($purchase['document_url']) ?>" target="_blank" rel="noopener"><i class="bi bi-file-earmark-text me-1"></i>View</a>

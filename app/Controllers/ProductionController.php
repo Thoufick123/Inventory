@@ -436,6 +436,20 @@ class ProductionController {
         ]);
     }
 
+    private function refreshSupplierRollTotals(int $sellerId): void {
+        $totals = Database::fetchOne(
+            "SELECT COUNT(*) AS roll_count, COALESCE(SUM(weight), 0) AS roll_weight,
+                    COALESCE(SUM(price), 0) AS roll_price
+             FROM seller_rolls
+             WHERE seller_id = ?",
+            [$sellerId]
+        );
+        Database::execute(
+            "UPDATE sellers SET roll_count = ?, roll_weight = ?, roll_price = ? WHERE id = ?",
+            [(int)$totals['roll_count'], (float)$totals['roll_weight'], (float)$totals['roll_price'], $sellerId]
+        );
+    }
+
     public function printProductionPurchase(string $id): void {
         $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
@@ -482,6 +496,381 @@ class ProductionController {
             'totalTax' => round(array_sum($taxes), 2),
             'overallTotal' => (float)$purchase['total_amount'],
         ]);
+    }
+
+    private function getProductionPurchase(int $purchaseId): ?array {
+        return Database::fetchOne(
+            "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
+                    s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
+                    s.state AS seller_state, s.address AS seller_address
+             FROM production_purchases pp
+             JOIN sellers s ON s.id = pp.seller_id
+             WHERE pp.id = ?",
+            [$purchaseId]
+        );
+    }
+
+    public function viewProductionPurchase(string $id): void {
+        $purchase = $this->getProductionPurchase((int)$id);
+        if (!$purchase) {
+            Response::error(404, 'Purchase record not found.');
+            return;
+        }
+        $items = Database::fetchAll(
+            "SELECT ppi.*, sr.start_code, sr.end_code, sr.photo_url
+             FROM production_purchase_items ppi
+             LEFT JOIN seller_rolls sr ON sr.id = ppi.seller_roll_id
+             WHERE ppi.purchase_id = ?
+             ORDER BY ppi.id",
+            [(int)$purchase['id']]
+        );
+        Response::view('production.purchases.view', [
+            'pageTitle' => 'Purchase ' . $purchase['purchase_number'],
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-purchases',
+            'purchase' => $purchase,
+            'items' => $items,
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Purchases', 'url' => url('production/purchases')],
+                ['label' => $purchase['purchase_number']],
+            ],
+        ]);
+    }
+
+    public function editProductionPurchase(string $id): void {
+        $purchase = $this->getProductionPurchase((int)$id);
+        if (!$purchase) {
+            Response::error(404, 'Purchase record not found.');
+            return;
+        }
+        $items = Database::fetchAll(
+            "SELECT ppi.*, sr.photo_url
+             FROM production_purchase_items ppi
+             LEFT JOIN seller_rolls sr ON sr.id = ppi.seller_roll_id
+             WHERE ppi.purchase_id = ?
+             ORDER BY ppi.id",
+            [(int)$purchase['id']]
+        );
+        Response::view('production.purchases.edit', [
+            'pageTitle' => 'Edit Purchase ' . $purchase['purchase_number'],
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-purchases',
+            'purchase' => $purchase,
+            'items' => $items,
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Purchases', 'url' => url('production/purchases')],
+                ['label' => 'Edit ' . $purchase['purchase_number']],
+            ],
+        ]);
+    }
+
+    public function updateProductionPurchase(string $id): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::back();
+            return;
+        }
+
+        $purchaseId = (int)$id;
+        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ?", [$purchaseId]);
+        if (!$purchase) {
+            Session::flash('error', 'Purchase record not found.');
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+
+        $purchaseDate = trim((string)($_POST['purchase_date'] ?? ''));
+        $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $purchaseDate);
+        if (!$date || $date->format('Y-m-d') !== $purchaseDate) {
+            Session::flash('error', 'Enter a valid purchase date.');
+            Response::back();
+            return;
+        }
+
+        $submittedItems = $_POST['items'] ?? [];
+        if (!is_array($submittedItems)) {
+            Session::flash('error', 'Invalid purchase items submitted.');
+            Response::back();
+            return;
+        }
+        $existingItems = Database::fetchAll(
+            "SELECT * FROM production_purchase_items WHERE purchase_id = ? ORDER BY id",
+            [$purchaseId]
+        );
+        $existingById = [];
+        foreach ($existingItems as $existingItem) {
+            $existingById[(int)$existingItem['id']] = $existingItem;
+        }
+
+        $seenIds = [];
+        $updatedItems = [];
+        $calculateTaxAmount = static function (float $base, string $mode, float $value): float {
+            return round($mode === 'AMOUNT' ? $value : ($base * $value / 100), 2);
+        };
+        foreach ($submittedItems as $key => $submitted) {
+            if (!is_array($submitted)) {
+                continue;
+            }
+            $itemId = (int)($submitted['id'] ?? 0);
+            if ($itemId > 0 && isset($seenIds[$itemId])) {
+                Session::flash('error', 'A purchase item was submitted more than once.');
+                Response::back();
+                return;
+            }
+            $oldItem = $itemId > 0 ? ($existingById[$itemId] ?? null) : null;
+            if ($itemId > 0 && !$oldItem) {
+                Session::flash('error', 'A submitted item does not belong to this purchase.');
+                Response::back();
+                return;
+            }
+            $itemType = strtoupper(trim((string)($submitted['item_type'] ?? '')));
+            if ($oldItem && $itemType !== $oldItem['item_type']) {
+                Session::flash('error', 'Purchase item types cannot be changed while editing.');
+                Response::back();
+                return;
+            }
+            if (!$oldItem && $itemType !== 'GENERAL_SUPPLY') {
+                Session::flash('error', 'Fabric rolls cannot be added through purchase editing.');
+                Response::back();
+                return;
+            }
+            if (!empty($submitted['remove_item'])) {
+                if (!$oldItem || $oldItem['item_type'] !== 'GENERAL_SUPPLY') {
+                    Session::flash('error', 'Only general supply items can be removed from an existing purchase.');
+                    Response::back();
+                    return;
+                }
+                $seenIds[$itemId] = true;
+                $updatedItems[] = ['delete_id' => $itemId];
+                continue;
+            }
+
+            $gstType = strtoupper(trim((string)($submitted['gst_type'] ?? 'EXEMPTED')));
+            $taxMode = strtoupper(trim((string)($submitted['tax_mode'] ?? 'PERCENT')));
+            $taxValueInput = $submitted['tax_value'] ?? '0';
+            $cgstValueInput = $submitted['cgst_tax_value'] ?? '0';
+            if (!in_array($gstType, ['SGST', 'CGST', 'IGST', 'BOTH', 'EXEMPTED'], true)
+                || !in_array($taxMode, ['PERCENT', 'AMOUNT'], true)
+                || !is_numeric($taxValueInput) || (float)$taxValueInput < 0
+                || !is_numeric($cgstValueInput) || (float)$cgstValueInput < 0
+                || ($taxMode === 'PERCENT' && (
+                    (float)$taxValueInput > 100 || ($gstType === 'BOTH' && (float)$cgstValueInput > 100)
+                ))) {
+                Session::flash('error', 'Enter valid GST values for each item.');
+                Response::back();
+                return;
+            }
+            $taxValue = $gstType === 'EXEMPTED' ? 0.0 : (float)$taxValueInput;
+            $cgstTaxValue = $gstType === 'BOTH' ? (float)$cgstValueInput : 0.0;
+
+            $itemName = trim((string)($submitted['item_name'] ?? $oldItem['item_name'] ?? ''));
+            $quantity = $oldItem && $oldItem['item_type'] === 'FABRIC_ROLL'
+                ? (float)$oldItem['quantity']
+                : (is_numeric($submitted['quantity'] ?? null) ? (float)$submitted['quantity'] : 0);
+            $unitPrice = is_numeric($submitted['unit_price'] ?? null) ? (float)$submitted['unit_price'] : -1;
+            $unit = strtoupper(trim((string)($submitted['unit'] ?? $oldItem['unit'] ?? '')));
+            if ($unit === 'OTHER') {
+                $unit = strtoupper(trim((string)($submitted['custom_unit'] ?? '')));
+            }
+            $allowedUnits = ['PCS', 'KG', 'METRE', 'LITRE', 'BOX', 'PACK', 'PAIR', 'SET', 'BUNDLE'];
+            if ($itemName === '' || mb_strlen($itemName) > 255 || $quantity <= 0 || $unitPrice < 0
+                || $unit === '' || mb_strlen($unit) > 30
+                || (!in_array($unit, $allowedUnits, true) && strtoupper(trim((string)($submitted['unit'] ?? ''))) !== 'OTHER')) {
+                Session::flash('error', 'Each purchase item needs a valid description, quantity, unit, and non-negative price.');
+                Response::back();
+                return;
+            }
+
+            $baseAmount = round($itemType === 'FABRIC_ROLL' ? $unitPrice : $quantity * $unitPrice, 2);
+            if ($itemType === 'FABRIC_ROLL') {
+                $rollNumber = mb_strtoupper(trim((string)($submitted['roll_number'] ?? $oldItem['roll_number'] ?? '')));
+                $color = mb_strtoupper(trim((string)($submitted['color'] ?? $oldItem['color'] ?? '')));
+                $design = mb_strtoupper(trim((string)($submitted['design_name'] ?? $oldItem['design_name'] ?? '')));
+                $designCount = (int)($submitted['design_count'] ?? $oldItem['design_count'] ?? 0);
+                $weight = (float)($submitted['weight_kg'] ?? $oldItem['weight_kg'] ?? 0);
+                if ($rollNumber === '' || mb_strlen($rollNumber) > 50 || $color === '' || mb_strlen($color) > 100
+                    || $design === '' || mb_strlen($design) > 150 || $designCount < 1 || $weight <= 0) {
+                    Session::flash('error', 'Fabric roll details must be complete and valid.');
+                    Response::back();
+                    return;
+                }
+                $itemName = trim((string)($submitted['item_name'] ?? $oldItem['item_name']));
+                $unit = 'PCS';
+            } else {
+                $rollNumber = $color = $design = null;
+                $designCount = $weight = null;
+            }
+
+            $sgstAmount = in_array($gstType, ['SGST', 'BOTH'], true) ? $calculateTaxAmount($baseAmount, $taxMode, $taxValue) : 0.0;
+            $cgstAmount = $gstType === 'CGST'
+                ? $calculateTaxAmount($baseAmount, $taxMode, $taxValue)
+                : ($gstType === 'BOTH' ? $calculateTaxAmount($baseAmount, $taxMode, $cgstTaxValue) : 0.0);
+            $igstAmount = $gstType === 'IGST' ? $calculateTaxAmount($baseAmount, $taxMode, $taxValue) : 0.0;
+            $updatedItems[] = [
+                'id' => $itemId, 'type' => $itemType, 'item_name' => mb_strtoupper($itemName),
+                'quantity' => $quantity, 'unit' => $unit, 'unit_price' => $unitPrice,
+                'base_amount' => $baseAmount, 'weight' => $weight, 'roll_number' => $rollNumber,
+                'color' => $color, 'design_name' => $design, 'design_count' => $designCount,
+                'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
+                'cgst_tax_value' => $cgstTaxValue, 'sgst_amount' => $sgstAmount,
+                'cgst_amount' => $cgstAmount, 'igst_amount' => $igstAmount,
+                'total' => $baseAmount + $sgstAmount + $cgstAmount + $igstAmount,
+                'seller_roll_id' => (int)($oldItem['seller_roll_id'] ?? 0),
+            ];
+            if ($itemId > 0) {
+                $seenIds[$itemId] = true;
+            }
+        }
+
+        foreach ($existingItems as $existingItem) {
+            $existingId = (int)$existingItem['id'];
+            if ($existingItem['item_type'] === 'FABRIC_ROLL' && !isset($seenIds[$existingId])) {
+                Session::flash('error', 'Fabric roll purchase lines cannot be removed while editing.');
+                Response::back();
+                return;
+            }
+            if ($existingItem['item_type'] === 'GENERAL_SUPPLY' && !isset($seenIds[$existingId])) {
+                $updatedItems[] = ['delete_id' => $existingId];
+            }
+        }
+        $remainingItems = array_filter($updatedItems, static fn(array $item): bool => !isset($item['delete_id']));
+        if (!$remainingItems) {
+            Session::flash('error', 'A purchase must contain at least one item.');
+            Response::back();
+            return;
+        }
+
+        $totalAmount = 0.0;
+        foreach ($updatedItems as $item) {
+            if (!isset($item['delete_id'])) {
+                $totalAmount += $item['total'];
+            }
+        }
+        try {
+            Database::beginTransaction();
+            foreach ($updatedItems as $item) {
+                if (isset($item['delete_id'])) {
+                    Database::execute("DELETE FROM production_purchase_items WHERE id = ? AND purchase_id = ?", [$item['delete_id'], $purchaseId]);
+                    continue;
+                }
+                if ($item['id'] > 0) {
+                    Database::execute(
+                        "UPDATE production_purchase_items
+                         SET item_name = ?, quantity = ?, unit = ?, weight_kg = ?, unit_price = ?, total_price = ?,
+                             gst_type = ?, tax_input_type = ?, sgst_value = ?, cgst_value = ?, igst_value = ?,
+                             sgst_amount = ?, cgst_amount = ?, igst_amount = ?, roll_number = ?, color = ?,
+                             design_name = ?, design_count = ?
+                         WHERE id = ? AND purchase_id = ?",
+                        [$item['item_name'], $item['quantity'], $item['unit'], $item['weight'], $item['unit_price'], $item['total'],
+                            $item['gst_type'], $item['tax_mode'], in_array($item['gst_type'], ['SGST', 'BOTH'], true) ? $item['tax_value'] : 0,
+                            $item['gst_type'] === 'CGST' ? $item['tax_value'] : $item['cgst_tax_value'],
+                            $item['gst_type'] === 'IGST' ? $item['tax_value'] : 0,
+                            $item['sgst_amount'], $item['cgst_amount'], $item['igst_amount'], $item['roll_number'], $item['color'],
+                            $item['design_name'], $item['design_count'], $item['id'], $purchaseId]
+                    );
+                    if ($item['type'] === 'FABRIC_ROLL' && $item['seller_roll_id'] > 0) {
+                        Database::execute(
+                            "UPDATE seller_rolls SET roll_number = ?, color = ?, design_name = ?, design_count = ?,
+                                    weight = ?, price = ?, material_type = ?
+                             WHERE id = ?",
+                            [$item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
+                                $item['weight'], $item['unit_price'], $item['item_name'], $item['seller_roll_id']]
+                        );
+                    }
+                    continue;
+                }
+                Database::execute(
+                    "INSERT INTO production_purchase_items
+                        (purchase_id, item_type, item_name, quantity, unit, unit_price, total_price,
+                         gst_type, tax_input_type, sgst_value, cgst_value, igst_value,
+                         sgst_amount, cgst_amount, igst_amount)
+                     VALUES (?, 'GENERAL_SUPPLY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [$purchaseId, $item['item_name'], $item['quantity'], $item['unit'], $item['unit_price'], $item['total'],
+                        $item['gst_type'], $item['tax_mode'], $item['tax_value'], $item['cgst_tax_value'], 0,
+                        $item['sgst_amount'], $item['cgst_amount'], $item['igst_amount']]
+                );
+            }
+            $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
+            Database::execute(
+                "UPDATE production_purchases
+                 SET purchase_date = ?, invoice_number = ?, notes = ?, total_amount = ?, updated_at = NOW()
+                 WHERE id = ?",
+                [$purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null,
+                    trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId]
+            );
+            Database::commit();
+            AuditService::log('production', 'UPDATE', 'production_purchases', $purchaseId, $purchase, [
+                'purchase_number' => $purchase['purchase_number'], 'total_amount' => round($totalAmount, 2),
+            ]);
+            Session::flash('success', 'Purchase updated successfully.');
+            Response::redirect(url('production/purchases'));
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
+            error_log('Production purchase could not be updated: ' . $e->getMessage());
+            Session::flash('error', 'Purchase could not be updated. Please review the entries and try again.');
+            Response::back();
+        }
+    }
+
+    public function deleteProductionPurchase(string $id): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::back();
+            return;
+        }
+        $purchaseId = (int)$id;
+        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ?", [$purchaseId]);
+        if (!$purchase) {
+            Session::flash('error', 'Purchase record not found.');
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+
+        $linkedRoll = Database::fetchOne(
+            "SELECT sr.id, sr.roll_number
+             FROM production_purchase_items ppi
+             JOIN seller_rolls sr ON sr.id = ppi.seller_roll_id
+             LEFT JOIN production_program_rolls ppr ON ppr.seller_roll_id = sr.id
+             LEFT JOIN production_programs pp ON pp.seller_roll_id = sr.id
+             LEFT JOIN cutting_batches cb ON cb.seller_roll_id = sr.id
+             LEFT JOIN cutting_batch_rolls cbr ON cbr.seller_roll_id = sr.id
+             LEFT JOIN roll_damages rd ON rd.seller_roll_id = sr.id
+             WHERE ppi.purchase_id = ?
+               AND (ppr.id IS NOT NULL OR pp.id IS NOT NULL OR cb.id IS NOT NULL OR cbr.id IS NOT NULL OR rd.id IS NOT NULL)
+             LIMIT 1",
+            [$purchaseId]
+        );
+        if ($linkedRoll) {
+            Session::flash('error', "Cannot delete purchase {$purchase['purchase_number']}; roll {$linkedRoll['roll_number']} is referenced by Production, Cutting, or Damage records.");
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+
+        try {
+            Database::beginTransaction();
+            Database::execute(
+                "DELETE sr FROM seller_rolls sr
+                 JOIN production_purchase_items ppi ON ppi.seller_roll_id = sr.id
+                 WHERE ppi.purchase_id = ?",
+                [$purchaseId]
+            );
+            $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
+            Database::execute("DELETE FROM production_purchases WHERE id = ?", [$purchaseId]);
+            Database::commit();
+            AuditService::log('production', 'DELETE', 'production_purchases', $purchaseId, $purchase, null);
+            Session::flash('success', "Purchase {$purchase['purchase_number']} deleted.");
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
+            error_log('Production purchase could not be deleted: ' . $e->getMessage());
+            Session::flash('error', 'Purchase could not be deleted because related records still depend on it.');
+        }
+        Response::redirect(url('production/purchases'));
     }
 
     public function createProductionPurchase(): void {
