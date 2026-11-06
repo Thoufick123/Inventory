@@ -2708,6 +2708,18 @@ class WarehouseController {
             Response::back();
         }
 
+        foreach ($items as $item) {
+            $itemTags = array_filter(array_map('trim', explode(',', (string)($item['tag_code'] ?? ''))));
+            foreach ($itemTags as $pieceTag) {
+                $exchangedReplacement = WarehouseService::getExchangedReplacementByPieceTag($pieceTag);
+                if ($exchangedReplacement) {
+                    Session::flash('error', "QR code '{$pieceTag}' was already issued to a customer as an exchange replacement and is no longer in warehouse stock.");
+                    Response::back();
+                    return;
+                }
+            }
+        }
+
         // Handle Photo upload
         $photoUrl = null;
         if (!empty($_FILES['photo']['name']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
@@ -3038,6 +3050,20 @@ class WarehouseController {
         }
 
         $candidateCodes = array_values(array_unique(array_filter($candidateCodes)));
+
+        foreach (array_unique(array_merge([$extractedTag], $candidateCodes)) as $scannedPieceTag) {
+            $exchangedReplacement = WarehouseService::getExchangedReplacementByPieceTag((string)$scannedPieceTag);
+            if ($exchangedReplacement) {
+                echo json_encode([
+                    'success' => false,
+                    'is_exchanged_out' => true,
+                    'message' => "QR code '{$scannedPieceTag}' was already issued to a customer as an exchange replacement ("
+                        . ($exchangedReplacement['exchange_number'] ?? 'exchange')
+                        . "). It cannot be logged as warehouse damage because it is no longer in stock."
+                ]);
+                exit;
+            }
+        }
 
         $variant = null;
 
@@ -4558,6 +4584,18 @@ class WarehouseController {
             $seenTags = [];
             foreach ($items as $item) {
                 if (!empty($item['scanned_qr_codes'])) {
+                    foreach (array_filter(array_map('trim', explode(',', $item['scanned_qr_codes']))) as $scannedPieceTag) {
+                        $exchangedReplacement = WarehouseService::getExchangedReplacementByPieceTag($scannedPieceTag);
+                        if ($exchangedReplacement) {
+                            Response::redirect(
+                                url('warehouse/purchases/create'),
+                                'error',
+                                "QR code '{$scannedPieceTag}' was already issued to a customer as an exchange replacement and is no longer available in warehouse stock."
+                            );
+                            return;
+                        }
+                    }
+
                     $vInfo = Database::fetchOne(
                         "SELECT pv.id, pv.qr_type, pv.pack_quantity, COALESCE(pv.is_complementary, p.is_complementary, 0) as is_comp,
                                 COALESCE(wc.category_type, 'NORMAL') as cat_type
@@ -5062,6 +5100,20 @@ class WarehouseController {
         }
 
         $candidateCodes = array_values(array_unique(array_filter($candidateCodes)));
+        foreach (array_unique(array_merge([$extractedTag], $candidateCodes)) as $scannedPieceTag) {
+            $exchangedReplacement = WarehouseService::getExchangedReplacementByPieceTag((string)$scannedPieceTag);
+            if ($exchangedReplacement) {
+                echo json_encode([
+                    'success' => false,
+                    'is_exchanged_out' => true,
+                    'message' => "QR code '{$scannedPieceTag}' was already issued to a customer as an exchange replacement ("
+                        . ($exchangedReplacement['exchange_number'] ?? 'exchange')
+                        . "). It is no longer available in warehouse stock."
+                ]);
+                exit;
+            }
+        }
+
         $variant = null;
 
         $baseVariantSql = "
@@ -6472,6 +6524,13 @@ class WarehouseController {
                     if (empty($stag) || strlen($stag) < 3) continue;
                     $stagUpper = strtoupper($stag);
 
+                    $exchangedReplacement = WarehouseService::getExchangedReplacementByPieceTag($stag);
+                    if ($exchangedReplacement) {
+                        Session::flash('error', "QR code '{$stag}' was already issued to a customer as an exchange replacement and cannot be allocated.");
+                        Response::redirect(url('warehouse/allocation/create'));
+                        return;
+                    }
+
                     if (isset($seenInSubmission[$stagUpper])) {
                         $vCheck = Database::fetchOne(
                             "SELECT pv.id, pv.qr_type, pv.pack_quantity,
@@ -7009,6 +7068,20 @@ class WarehouseController {
         }
 
         $candidateCodes = array_values(array_unique(array_filter($candidateCodes)));
+
+        foreach (array_unique(array_merge([$extractedTag], $candidateCodes)) as $scannedPieceTag) {
+            $exchangedReplacement = WarehouseService::getExchangedReplacementByPieceTag((string)$scannedPieceTag);
+            if ($exchangedReplacement) {
+                echo json_encode([
+                    'success' => false,
+                    'is_exchanged_out' => true,
+                    'message' => "QR code '{$scannedPieceTag}' was already issued to a customer as an exchange replacement ("
+                        . ($exchangedReplacement['exchange_number'] ?? 'exchange')
+                        . "). It cannot be allocated from warehouse stock."
+                ]);
+                exit;
+            }
+        }
 
         // Guardrail: Check if this piece tag or candidate code is already allocated in ANY active/dispatched/delivered allocation
         foreach ($candidateCodes as $codeToCheck) {

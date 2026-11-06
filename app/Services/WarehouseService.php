@@ -2082,6 +2082,31 @@ class WarehouseService {
     }
 
     /**
+     * Find a piece QR that has already left warehouse stock as a direct-purchase exchange replacement.
+     */
+    public static function getExchangedReplacementByPieceTag(string $pieceTag): ?array {
+        $pieceTag = trim($pieceTag);
+        if ($pieceTag === '') {
+            return null;
+        }
+
+        return Database::fetchOne(
+            "SELECT e.exchange_number, r.return_number
+             FROM exchange_items ei
+             JOIN exchanges e ON e.id = ei.exchange_id
+             JOIN `returns` r ON r.id = e.return_id
+             WHERE ei.item_type = 'NEW'
+               AND r.source_type = 'WAREHOUSE_PURCHASE'
+               AND e.status = 'COMPLETED'
+               AND ei.piece_tag IS NOT NULL
+               AND FIND_IN_SET(UPPER(?), REPLACE(UPPER(ei.piece_tag), ' ', '')) > 0
+             ORDER BY e.id DESC
+             LIMIT 1",
+            [$pieceTag]
+        );
+    }
+
+    /**
      * Get Complete Details for a Single Direct Purchase Return / Exchange.
      */
     public static function getPurchaseReturnDetails(int $id): ?array {
