@@ -454,7 +454,7 @@ class ProductionController {
         $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
-                    s.state AS seller_state, s.address AS seller_address
+                    s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
              WHERE pp.id = ?",
@@ -502,7 +502,7 @@ class ProductionController {
         return Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
-                    s.state AS seller_state, s.address AS seller_address
+                    s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
              WHERE pp.id = ?",
@@ -545,7 +545,7 @@ class ProductionController {
             return;
         }
         $items = Database::fetchAll(
-            "SELECT ppi.*, sr.photo_url
+            "SELECT ppi.*, sr.photo_url, sr.start_seq, sr.end_seq, sr.start_code, sr.end_code
              FROM production_purchase_items ppi
              LEFT JOIN seller_rolls sr ON sr.id = ppi.seller_roll_id
              WHERE ppi.purchase_id = ?
@@ -596,7 +596,11 @@ class ProductionController {
             return;
         }
         $existingItems = Database::fetchAll(
-            "SELECT * FROM production_purchase_items WHERE purchase_id = ? ORDER BY id",
+            "SELECT ppi.*, sr.photo_url
+             FROM production_purchase_items ppi
+             LEFT JOIN seller_rolls sr ON sr.id = ppi.seller_roll_id
+             WHERE ppi.purchase_id = ?
+             ORDER BY ppi.id",
             [$purchaseId]
         );
         $existingById = [];
@@ -698,9 +702,27 @@ class ProductionController {
                 }
                 $itemName = trim((string)($submitted['item_name'] ?? $oldItem['item_name']));
                 $unit = 'PCS';
+                $photoUrl = $oldItem['photo_url'] ?? null;
+                $photo = $_FILES['roll_photo_' . $itemId] ?? null;
+                if ($photo && $photo['error'] !== UPLOAD_ERR_NO_FILE) {
+                    $extension = strtolower(pathinfo($photo['name'], PATHINFO_EXTENSION));
+                    if ($photo['error'] !== UPLOAD_ERR_OK || !in_array($extension, ['jpg', 'jpeg', 'png', 'webp'], true)
+                        || $photo['size'] > 5 * 1024 * 1024) {
+                        Session::flash('error', 'Roll photos must be JPG, PNG, or WEBP files up to 5 MB.');
+                        Response::back();
+                        return;
+                    }
+                    $photoUrl = CloudinaryService::upload($photo, 'grm_inventory/sellers/rolls', 'image');
+                    if (!$photoUrl) {
+                        Session::flash('error', 'A roll photo could not be uploaded. Please try again.');
+                        Response::back();
+                        return;
+                    }
+                }
             } else {
                 $rollNumber = $color = $design = null;
                 $designCount = $weight = null;
+                $photoUrl = null;
             }
 
             $sgstAmount = in_array($gstType, ['SGST', 'BOTH'], true) ? $calculateTaxAmount($baseAmount, $taxMode, $taxValue) : 0.0;
@@ -718,6 +740,7 @@ class ProductionController {
                 'cgst_amount' => $cgstAmount, 'igst_amount' => $igstAmount,
                 'total' => $baseAmount + $sgstAmount + $cgstAmount + $igstAmount,
                 'seller_roll_id' => (int)($oldItem['seller_roll_id'] ?? 0),
+                'photo_url' => $photoUrl,
             ];
             if ($itemId > 0) {
                 $seenIds[$itemId] = true;
@@ -748,6 +771,25 @@ class ProductionController {
                 $totalAmount += $item['total'];
             }
         }
+        $documentUrl = null;
+        if (!empty($_FILES['document']['name'])) {
+            $file = $_FILES['document'];
+            $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if ($file['error'] !== UPLOAD_ERR_OK
+                || !in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'pdf'], true)
+                || $file['size'] > 5 * 1024 * 1024) {
+                Session::flash('error', 'Invoice must be a JPG, PNG, WEBP, or PDF file up to 5 MB.');
+                Response::back();
+                return;
+            }
+            $documentUrl = CloudinaryService::upload($file, 'grm_inventory/production/purchases', 'auto');
+            if (!$documentUrl) {
+                Session::flash('error', 'Invoice upload failed. Please try again.');
+                Response::back();
+                return;
+            }
+        }
+
         try {
             Database::beginTransaction();
             foreach ($updatedItems as $item) {
@@ -773,10 +815,10 @@ class ProductionController {
                     if ($item['type'] === 'FABRIC_ROLL' && $item['seller_roll_id'] > 0) {
                         Database::execute(
                             "UPDATE seller_rolls SET roll_number = ?, color = ?, design_name = ?, design_count = ?,
-                                    weight = ?, price = ?, material_type = ?
+                                    weight = ?, price = ?, material_type = ?, photo_url = ?
                              WHERE id = ?",
                             [$item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
-                                $item['weight'], $item['unit_price'], $item['item_name'], $item['seller_roll_id']]
+                                $item['weight'], $item['unit_price'], $item['item_name'], $item['photo_url'], $item['seller_roll_id']]
                         );
                     }
                     continue;
@@ -788,16 +830,20 @@ class ProductionController {
                          sgst_amount, cgst_amount, igst_amount)
                      VALUES (?, 'GENERAL_SUPPLY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [$purchaseId, $item['item_name'], $item['quantity'], $item['unit'], $item['unit_price'], $item['total'],
-                        $item['gst_type'], $item['tax_mode'], $item['tax_value'], $item['cgst_tax_value'], 0,
+                        $item['gst_type'], $item['tax_mode'],
+                        in_array($item['gst_type'], ['SGST', 'BOTH'], true) ? $item['tax_value'] : 0,
+                        $item['gst_type'] === 'CGST' ? $item['tax_value'] : $item['cgst_tax_value'],
+                        $item['gst_type'] === 'IGST' ? $item['tax_value'] : 0,
                         $item['sgst_amount'], $item['cgst_amount'], $item['igst_amount']]
                 );
             }
             $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
             Database::execute(
                 "UPDATE production_purchases
-                 SET purchase_date = ?, invoice_number = ?, notes = ?, total_amount = ?, updated_at = NOW()
+                 SET purchase_date = ?, invoice_number = ?, document_url = COALESCE(?, document_url),
+                     notes = ?, total_amount = ?, updated_at = NOW()
                  WHERE id = ?",
-                [$purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null,
+                [$purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null, $documentUrl,
                     trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId]
             );
             Database::commit();

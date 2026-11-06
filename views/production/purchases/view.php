@@ -3,11 +3,7 @@
         <h2 class="mb-1"><i class="bi bi-receipt me-2 text-primary"></i><?= e($purchase['purchase_number']) ?></h2>
         <span class="text-muted">Purchase details and itemized tax summary</span>
     </div>
-    <div class="d-flex gap-2">
-        <a href="<?= url('production/purchases') ?>" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Purchases</a>
-        <a href="<?= url('production/purchases/print/' . $purchase['id']) ?>" target="_blank" rel="noopener" class="btn btn-outline-primary"><i class="bi bi-printer me-1"></i>Print</a>
-        <?php if (hasPermission('sellers', 'edit')): ?><a href="<?= url('production/purchases/edit/' . $purchase['id']) ?>" class="btn btn-primary"><i class="bi bi-pencil me-1"></i>Edit</a><?php endif; ?>
-    </div>
+    <a href="<?= url('production/purchases') ?>" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Purchases</a>
 </div>
 
 <div class="row g-3 mb-4">
