@@ -972,6 +972,15 @@ if (!empty($generatedItems) && !$isViewingExisting) {
     Database::beginTransaction();
     try {
         $nextSequenceByPrefix = [];
+        $availableQrCodesByVariant = [];
+        $requestedQrCountByVariant = [];
+        foreach ($generatedItems as $item) {
+            if (empty($item['is_series'])) {
+                $itemVariantId = (int)($item['variant_id'] ?? 0);
+                $requestedQrCountByVariant[$itemVariantId] = ($requestedQrCountByVariant[$itemVariantId] ?? 0) + 1;
+            }
+        }
+
         foreach ($generatedItems as &$generatedItem) {
             $variantId = (int)($generatedItem['variant_id'] ?? 0);
             $qrPrefix = (string)($generatedItem['qr_prefix'] ?? '');
@@ -999,6 +1008,26 @@ if (!empty($generatedItems) && !$isViewingExisting) {
                     $generatedItem['series_end_code'] = $savedPackQr['qr_code'];
                     continue;
                 }
+            }
+
+            if (!array_key_exists($variantId, $availableQrCodesByVariant)) {
+                $savedQrCodes = Database::fetchAll(
+                    "SELECT qr_code
+                     FROM warehouse_qr_codes
+                     WHERE variant_id = ? AND warehouse_id = ? AND inwarded_at IS NULL
+                     ORDER BY id DESC
+                     LIMIT " . (int)($requestedQrCountByVariant[$variantId] ?? 0) . "
+                     FOR UPDATE",
+                    [$variantId, $targetWarehouseId]
+                );
+                $availableQrCodesByVariant[$variantId] = array_reverse(array_column($savedQrCodes, 'qr_code'));
+            }
+
+            if (!empty($availableQrCodesByVariant[$variantId])) {
+                $tagCode = array_shift($availableQrCodesByVariant[$variantId]);
+                $generatedItem['tag_code'] = $tagCode;
+                $generatedItem['qr_payload'] = $tagCode;
+                continue;
             }
 
             if (!isset($nextSequenceByPrefix[$qrPrefix])) {
