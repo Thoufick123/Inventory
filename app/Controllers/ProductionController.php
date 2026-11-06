@@ -437,7 +437,7 @@ class ProductionController {
 
     public function createProductionPurchase(): void {
         $sellers = Database::fetchAll(
-            "SELECT id, name, company
+            "SELECT id, name, company, phone, email, gst_number, city, state, address, payment_terms
              FROM sellers
              WHERE seller_type = 'MATERIAL_SUPPLIER' AND is_active = 1
              ORDER BY company, name"

@@ -17,7 +17,16 @@
                     <select class="form-select" name="seller_id" id="purchaseSeller" required>
                         <option value="">-- Select registered supplier --</option>
                         <?php foreach ($sellers as $seller): ?>
-                            <option value="<?= (int)$seller['id'] ?>"><?= e($seller['company'] ?: $seller['name']) ?><?= $seller['company'] ? ' — ' . e($seller['name']) : '' ?></option>
+                            <option value="<?= (int)$seller['id'] ?>"
+                                data-supplier-name="<?= e($seller['name'] ?? '') ?>"
+                                data-supplier-company="<?= e($seller['company'] ?? '') ?>"
+                                data-supplier-phone="<?= e($seller['phone'] ?? '') ?>"
+                                data-supplier-email="<?= e($seller['email'] ?? '') ?>"
+                                data-supplier-gst="<?= e($seller['gst_number'] ?? '') ?>"
+                                data-supplier-city="<?= e($seller['city'] ?? '') ?>"
+                                data-supplier-state="<?= e($seller['state'] ?? '') ?>"
+                                data-supplier-address="<?= e($seller['address'] ?? '') ?>"
+                                data-supplier-payment-terms="<?= e($seller['payment_terms'] ?? '') ?>"><?= e($seller['company'] ?: $seller['name']) ?><?= $seller['company'] ? ' — ' . e($seller['name']) : '' ?></option>
                         <?php endforeach; ?>
                     </select>
                     <?php if (empty($sellers)): ?><small class="text-danger">Add a supplier profile before recording a purchase.</small><?php endif; ?>
@@ -38,6 +47,21 @@
                 <div class="col-md-6">
                     <label class="form-label" for="purchaseNotes">Purchase Notes</label>
                     <input type="text" class="form-control" name="notes" id="purchaseNotes" maxlength="500">
+                </div>
+                <div class="col-12 d-none" id="selectedSupplierDetails" aria-live="polite">
+                    <div class="border rounded bg-light p-3">
+                        <div class="fw-semibold mb-3"><i class="bi bi-person-vcard me-1 text-primary"></i>Selected Supplier Information</div>
+                        <div class="row g-3">
+                            <div class="col-md-4"><small class="text-muted d-block">Contact Person</small><span data-supplier-detail="name">—</span></div>
+                            <div class="col-md-4"><small class="text-muted d-block">Company</small><span data-supplier-detail="company">—</span></div>
+                            <div class="col-md-4"><small class="text-muted d-block">Phone</small><span data-supplier-detail="phone">—</span></div>
+                            <div class="col-md-4"><small class="text-muted d-block">Email</small><span data-supplier-detail="email">—</span></div>
+                            <div class="col-md-4"><small class="text-muted d-block">GSTIN / Tax ID</small><span data-supplier-detail="gst">—</span></div>
+                            <div class="col-md-4"><small class="text-muted d-block">City / State</small><span data-supplier-detail="location">—</span></div>
+                            <div class="col-md-6"><small class="text-muted d-block">Business Address</small><span data-supplier-detail="address">—</span></div>
+                            <div class="col-md-6"><small class="text-muted d-block">Payment Terms</small><span data-supplier-detail="payment-terms">—</span></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -191,12 +215,37 @@
     const suppliesContainer = document.getElementById('suppliesContainer');
     const rollTemplate = document.getElementById('fabricRollTemplate');
     const supplyTemplate = document.getElementById('supplyTemplate');
+    const supplierSelect = document.getElementById('purchaseSeller');
+    const supplierDetails = document.getElementById('selectedSupplierDetails');
     let rollIndex = 0;
     let supplyIndex = 0;
     let nextSequence = 1;
     let sequencePrefix = 'FB<?= date('my') ?>';
     const money = value => '₹' + (Number(value) || 0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
     const safe = value => String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+
+    function updateSupplierDetails() {
+        const selected = supplierSelect.options[supplierSelect.selectedIndex];
+        if (!selected || !selected.value) {
+            supplierDetails.classList.add('d-none');
+            return;
+        }
+
+        const fields = {
+            name: selected.dataset.supplierName,
+            company: selected.dataset.supplierCompany,
+            phone: selected.dataset.supplierPhone,
+            email: selected.dataset.supplierEmail,
+            gst: selected.dataset.supplierGst,
+            location: [selected.dataset.supplierCity, selected.dataset.supplierState].filter(Boolean).join(', '),
+            address: selected.dataset.supplierAddress,
+            'payment-terms': selected.dataset.supplierPaymentTerms
+        };
+        Object.entries(fields).forEach(([field, value]) => {
+            supplierDetails.querySelector(`[data-supplier-detail="${field}"]`).textContent = value || '—';
+        });
+        supplierDetails.classList.remove('d-none');
+    }
 
     function updateSummary() {
         const cards = Array.from(rollsContainer.querySelectorAll('.roll-card'));
@@ -366,6 +415,8 @@
     document.getElementById('addFabricRoll').addEventListener('click', addRoll);
     document.getElementById('addSupply').addEventListener('click', addSupply);
     document.getElementById('previewLabels').addEventListener('click', previewLabels);
+    supplierSelect.addEventListener('change', updateSupplierDetails);
+    updateSupplierDetails();
     fetch('<?= url("api/sellers/next-roll-codes") ?>')
         .then(response => { if (!response.ok) throw new Error('Unable to fetch roll code sequence.'); return response.json(); })
         .then(response => {
