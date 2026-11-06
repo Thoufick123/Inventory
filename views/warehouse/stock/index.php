@@ -39,17 +39,18 @@ if (!function_exists('renderCategoryTypeBadge')) {
 <div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4">
     <div>
         <h2 class="mb-1"><i class="bi bi-boxes me-2 text-primary"></i>Warehouse Stock &amp; Inventory</h2>
-        
     </div>
-    <div class="d-flex gap-2 flex-wrap">
-        <!-- <a href="<?= url('warehouse/catalog') ?>" class="btn btn-outline-primary shadow-sm">
-            <i class="bi bi-journal-bookmark me-1"></i> Product Catalog
-        </a>
-        <?php if (hasPermission('inward', 'create') || hasPermission('inward', 'verify')): ?>
-        <a href="<?= url('warehouse/inward') ?>" class="btn btn-primary shadow-sm fw-semibold">
-            <i class="bi bi-box-arrow-in-down me-1"></i> + Inward Production GRN
-        </a>
-        <?php endif; ?> -->
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+        <!-- Main View Mode Switcher -->
+        <div class="btn-group shadow-sm" role="group" id="mainStockViewSwitcher">
+            <button type="button" class="btn <?= ($viewMode ?? 'ledger') !== 'pieces' ? 'btn-primary active' : 'btn-outline-primary bg-white text-dark' ?> fw-semibold" id="btnShowLedgerView" onclick="switchMainStockView('ledger')">
+                <i class="bi bi-table me-1"></i> Ledger View
+            </button>
+            <button type="button" class="btn <?= ($viewMode ?? 'ledger') === 'pieces' ? 'btn-primary active' : 'btn-outline-primary bg-white text-dark' ?> fw-semibold" id="btnShowPieceView" onclick="switchMainStockView('pieces')">
+                <i class="bi bi-card-list me-1"></i> Piece-by-Piece View <span class="badge bg-warning text-dark ms-1"><?= count($pieceItems ?? []) ?> pcs</span>
+            </button>
+        </div>
+
         <?php if (hasPermission('stock', 'view')): ?>
         <a href="<?= url('warehouse/adjustments') ?>" class="btn btn-outline-secondary">
             <i class="bi bi-sliders me-1"></i> Stock Adjustments
@@ -302,6 +303,8 @@ if (!function_exists('renderCategoryTypeBadge')) {
     </div>
 <?php endif; ?>
 
+<!-- LEDGER / SUMMARY VIEW SECTION -->
+<div id="ledgerStockViewSection" style="display: <?= ($viewMode ?? 'ledger') !== 'pieces' ? 'block' : 'none' ?>;">
 <!-- PRODUCT TYPE TABS -->
 <ul class="nav nav-pills mb-3 gap-2" id="inventorySectionTabs" role="tablist">
     <li class="nav-item" role="presentation">
@@ -791,6 +794,407 @@ if (!function_exists('renderCategoryTypeBadge')) {
     </div>
 
 <?php endif; ?>
+</div><!-- /#ledgerStockViewSection -->
+
+<!-- 2. PIECE-BY-PIECE WAREHOUSE INVENTORY SECTION (Image 2 Reference Built for Central Warehouse) -->
+<div id="pieceStockViewSection" style="display: <?= ($viewMode ?? 'ledger') === 'pieces' ? 'block' : 'none' ?>;">
+
+    <!-- Fast 2D QR Code Search & Quick Label Print Bar -->
+    <div class="card shadow-sm mb-4 border-primary">
+        <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="fw-bold fs-7"><i class="bi bi-qr-code-scan me-2"></i>Garment &amp; Product QR Code Search &amp; Quick Label Print</span>
+            <span class="badge bg-white text-primary fw-bold fs-8" id="whPieceSearchMatchBadge">Showing all <?= count($pieceItems ?? []) ?> pieces</span>
+        </div>
+        <div class="card-body p-3">
+            <div class="row g-2 align-items-center">
+                <div class="col-lg-7 col-md-6">
+                    <div class="input-group input-group-lg">
+                        <span class="input-group-text bg-light border-primary"><i class="bi bi-upc-scan text-primary fs-5"></i></span>
+                        <input type="text" id="whPieceSearchInput" class="form-control border-primary fw-bold" 
+                               placeholder="Search or Scan Piece QR sticker tag (e.g. <?= (!empty($pieceItems[0]['tag_code']) ? $pieceItems[0]['tag_code'] : 'SSS112601') ?>)..." 
+                               oninput="filterWhPieces()" onkeyup="if(event.key==='Enter') filterWhPieces()">
+                        <button type="button" class="btn btn-outline-secondary" onclick="clearWhPieceSearch()" title="Clear Search">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="col-lg-5 col-md-6 d-flex gap-2 justify-content-md-end flex-wrap">
+                    <button type="button" class="btn btn-primary btn-lg fw-semibold shadow-sm flex-grow-1 flex-md-grow-0" id="btnWhPrintFiltered" onclick="openWhBatchPrintModal()">
+                        <i class="bi bi-printer-fill me-1"></i> Print Filtered Labels (<span id="whFilteredCountLabel"><?= count($pieceItems ?? []) ?></span>)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Quick Sub-Filters Row -->
+            <div class="d-flex align-items-center gap-2 mt-3 flex-wrap">
+                <span class="small text-muted fw-bold text-uppercase me-1"><i class="bi bi-funnel me-1"></i>Filter:</span>
+                <button type="button" class="btn btn-sm btn-dark fw-semibold px-3 py-1 wh-source-filter-btn active" data-source="all" onclick="filterWhPieceSource('all', this)">
+                    All Pieces (<?= count($pieceItems ?? []) ?>)
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-success fw-semibold px-3 py-1 wh-source-filter-btn" data-source="OWN_PRODUCTION" onclick="filterWhPieceSource('OWN_PRODUCTION', this)">
+                    <i class="bi bi-buildings me-1"></i> Production Unit (<?= count(array_filter($pieceItems ?? [], fn($p) => ($p['source_type'] ?? '') === 'OWN_PRODUCTION')) ?>)
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-warning text-dark fw-semibold px-3 py-1 wh-source-filter-btn" data-source="EXTERNAL_PURCHASE" onclick="filterWhPieceSource('EXTERNAL_PURCHASE', this)">
+                    <i class="bi bi-shop me-1"></i> Third-Party (<?= count(array_filter($pieceItems ?? [], fn($p) => ($p['source_type'] ?? '') === 'EXTERNAL_PURCHASE')) ?>)
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-danger fw-semibold px-3 py-1 wh-source-filter-btn" data-source="COMPLEMENTARY" onclick="filterWhPieceSource('COMPLEMENTARY', this)">
+                    <i class="bi bi-gift-fill me-1"></i> Complementary (<?= count(array_filter($pieceItems ?? [], fn($p) => ($p['category_type'] ?? '') === 'COMPLEMENTARY')) ?>)
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-info text-dark fw-semibold px-3 py-1 wh-source-filter-btn" data-source="SERIES" onclick="filterWhPieceSource('SERIES', this)">
+                    <i class="bi bi-boxes me-1"></i> Series Pack (<?= count(array_filter($pieceItems ?? [], fn($p) => ($p['category_type'] ?? '') === 'SERIES')) ?>)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Central Warehouse Pieces Main Card -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-transparent py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+                <h5 class="card-title mb-0 d-flex align-items-center gap-2">
+                    <i class="bi bi-boxes text-primary"></i>
+                    Central Warehouse Individual Pieces
+                    <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill fs-7 px-2" id="whPieceCountBadge">
+                        <?= count($pieceItems ?? []) ?> In Stock / <?= count($pieceItems ?? []) ?> Total Pieces
+                    </span>
+                </h5>
+                <span class="text-muted small">
+                    <i class="bi bi-geo-alt-fill text-danger me-1"></i>
+                    Piece-by-piece inventory for <?= e($currentWarehouse['name'] ?? 'Central Distribution Warehouse') ?> (<?= count($pieceItems ?? []) ?> pieces available in warehouse)
+                </span>
+            </div>
+
+            <!-- View Switcher within Piece Mode: List vs Cards -->
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-primary active fw-semibold" id="btnWhDisplayList" onclick="switchWhPieceDisplay('list')">
+                        <i class="bi bi-list-ul me-1"></i> List (<?= count($pieceItems ?? []) ?>)
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary fw-semibold" id="btnWhDisplayCard" onclick="switchWhPieceDisplay('card')">
+                        <i class="bi bi-grid-3x3-gap me-1"></i> Cards
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-body p-4">
+
+            <!-- Empty Search State -->
+            <div class="text-center text-muted py-5" id="whEmptyPieceSearchState" style="display: none;">
+                <i class="bi bi-search fs-1 d-block mb-2 text-secondary"></i>
+                <h6 class="fw-semibold mb-1">No Matching Warehouse Garment Tag Found</h6>
+                <p class="small mb-0">No piece in warehouse stock matches the scanned or searched QR code.</p>
+            </div>
+
+            <?php if (empty($pieceItems)): ?>
+                <div class="text-center py-5 text-muted">
+                    <i class="bi bi-box-seam fs-1 d-block mb-3 text-secondary"></i>
+                    <h6 class="fw-semibold mb-1">No Warehouse Stock Pieces Found</h6>
+                    <p class="small text-muted mb-0">Inward production batches or vendor products into this warehouse to view individual pieces.</p>
+                </div>
+            <?php else: ?>
+                <!-- 1. Piece List Container (Exact Image 2 Structure Adapted for Central Warehouse) -->
+                <div class="list-group list-group-flush gap-2" id="whPieceListContainer" style="display: flex;">
+                    <?php foreach ($pieceItems as $it): ?>
+                        <article class="list-group-item inventory-piece-list-item d-flex flex-wrap align-items-center gap-3 p-3 wh-piece-row"
+                                 id="whPieceRow_<?= $it['piece_no'] ?>"
+                                 data-piece-no="<?= $it['piece_no'] ?>"
+                                 data-tag="<?= strtoupper($it['tag_code']) ?>"
+                                 data-sku="<?= strtoupper($it['sku']) ?>"
+                                 data-size="<?= strtoupper($it['size_name']) ?>"
+                                 data-color="<?= strtoupper($it['color_name']) ?>"
+                                 data-product="<?= strtoupper($it['product_name']) ?>"
+                                 data-source="<?= $it['source_type'] ?>"
+                                 data-cat-type="<?= $it['category_type'] ?? 'NORMAL' ?>">
+                            
+                            <!-- 1. Piece # & QR Badge (Image 2 Left Column) -->
+                            <div class="inventory-list-tag" style="min-width: 175px;">
+                                <div class="small text-muted fw-semibold mb-1">Piece #<?= $it['piece_no'] ?></div>
+                                <span class="badge bg-dark text-white font-monospace fs-7 px-2 py-1">
+                                    <i class="bi bi-qr-code-scan me-1 text-warning"></i><?= e($it['tag_code']) ?>
+                                </span>
+                                <div class="small text-muted mt-1">Garment #<?= $it['piece_seq'] ?> of <?= $it['total_in_variant'] ?></div>
+                            </div>
+
+                            <!-- 2. Product Icon & Style Name with Breadcrumb (Image 2 Middle-Left Column) -->
+                            <div class="inventory-list-product" style="min-width: 200px; flex: 1 1 220px;">
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="bg-primary bg-opacity-10 text-primary rounded p-2 text-center d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
+                                        <i class="bi <?= $it['source_type'] === 'OWN_PRODUCTION' ? 'bi-bag-check' : 'bi-box-seam' ?> fs-5"></i>
+                                    </div>
+                                    <div>
+                                        <div class="fw-bold text-dark"><?= e($it['product_name']) ?></div>
+                                        <?php if (!empty($it['category_name'])): ?>
+                                            <div class="mt-1">
+                                                <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-7"><?= e($it['category_name']) ?></span>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 3. Variant, Status, Batch Info, Price (Image 2 Middle-Right Column) -->
+                            <div class="inventory-list-meta d-flex flex-wrap gap-3 align-items-center" style="flex: 1 1 340px;">
+                                <!-- Variant & Status Badges -->
+                                <div>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        <span class="badge bg-secondary-subtle text-secondary border font-monospace px-2 py-1">Size: <?= e($it['size_name']) ?></span>
+                                        <span class="badge bg-info-subtle text-info border font-monospace px-2 py-1">Color: <?= e($it['color_name']) ?></span>
+                                    </div>
+                                    <div class="mt-1">
+                                        <?php if ($it['source_type'] === 'OWN_PRODUCTION'): ?>
+                                            <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-0.5 d-inline-block" style="font-size: 11px;">
+                                                <i class="bi bi-patch-check me-1"></i>QC PASSED
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="badge bg-info-subtle text-info border border-info-subtle px-2 py-0.5 d-inline-block" style="font-size: 11px;">
+                                                <i class="bi bi-check2-circle me-1"></i>VERIFIED INWARD
+                                            </span>
+                                        <?php endif; ?>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-0.5 d-inline-block ms-1" style="font-size: 11px;">
+                                            <i class="bi bi-building-check me-1"></i>AVAILABLE
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <!-- QC Batch & Lineage Info (Warehouse Context) -->
+                                <div>
+                                    <?php if ($it['source_type'] === 'OWN_PRODUCTION'): ?>
+                                        <div>
+                                            <a href="<?= url('production/qc/inspect/' . $it['qc_batch_id']) ?>" class="fw-semibold text-decoration-none">
+                                                QC Batch #<?= $it['qc_batch_id'] ?>
+                                            </a>
+                                        </div>
+                                        <small class="text-muted d-block">
+                                            Program: <span class="text-primary"><?= e($it['program_number']) ?></span>
+                                        </small>
+                                        <small class="text-secondary" style="font-size: 11px;">Batch: <?= e($it['batch_number']) ?></small>
+                                    <?php else: ?>
+                                        <div>
+                                            <span class="fw-semibold text-dark"><i class="bi bi-shop me-1 text-primary"></i><?= e($it['seller_name'] ?? 'Vendor Partner') ?></span>
+                                        </div>
+                                        <small class="text-muted d-block"><?= e($it['batch_number']) ?></small>
+                                        <small class="text-secondary" style="font-size: 11px;"><i class="bi bi-geo-alt me-1"></i><?= e($it['warehouse_name']) ?></small>
+                                    <?php endif; ?>
+                                </div>
+
+                                <!-- Price & MRP -->
+                                <div>
+                                    <div class="fw-semibold text-dark fs-6">₹<?= number_format($it['selling_price'], 2) ?></div>
+                                    <?php if ($it['mrp'] > $it['selling_price']): ?>
+                                        <small class="text-muted text-decoration-line-through">₹<?= number_format($it['mrp'], 2) ?></small>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+
+                            <!-- 4. Actions Dropdown (Image 2 Right Column) -->
+                            <div class="inventory-list-actions d-flex justify-content-end ms-auto">
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-light border dropdown-toggle fw-semibold" type="button" data-bs-toggle="dropdown">
+                                        Actions
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                        <li>
+                                            <button type="button" class="dropdown-item" onclick="printSinglePieceLabel(<?= htmlspecialchars(json_encode($it), ENT_QUOTES, 'UTF-8') ?>)">
+                                                <i class="bi bi-printer me-2 text-primary"></i>Print QR Label
+                                            </button>
+                                        </li>
+                                        <li>
+                                            <a class="dropdown-item" href="<?= url('warehouse/stock/detail/' . $it['variant_id'] . '?warehouse_id=' . ($selectedWarehouseId ?? 1)) ?>">
+                                                <i class="bi bi-clock-history me-2 text-info"></i>Stock Ledger &amp; History
+                                            </a>
+                                        </li>
+                                        <?php if (hasPermission('allocation', 'create')): ?>
+                                        <li>
+                                            <a class="dropdown-item" href="<?= url('warehouse/allocation') ?>">
+                                                <i class="bi bi-arrow-right-circle me-2 text-success"></i>Shop Allocation
+                                            </a>
+                                        </li>
+                                        <?php endif; ?>
+                                        <?php if (hasPermission('damage', 'create')): ?>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li>
+                                            <a class="dropdown-item text-danger" href="<?= url('warehouse/damage/create?variant_id=' . $it['variant_id'] . '&qr_code=' . urlencode($it['tag_code'])) ?>">
+                                                <i class="bi bi-exclamation-triangle me-2"></i>Report Damage / Quarantine
+                                            </a>
+                                        </li>
+                                        <?php endif; ?>
+                                    </ul>
+                                </div>
+                            </div>
+
+                        </article>
+                    <?php endforeach; ?>
+                </div>
+
+                <!-- 2. Piece Card Grid Container -->
+                <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3" id="whPieceCardsContainer" style="display: none;">
+                    <?php foreach ($pieceItems as $it): ?>
+                        <div class="col wh-piece-card-col" 
+                             id="whPieceCard_<?= $it['piece_no'] ?>"
+                             data-piece-no="<?= $it['piece_no'] ?>"
+                             data-tag="<?= strtoupper($it['tag_code']) ?>"
+                             data-sku="<?= strtoupper($it['sku']) ?>"
+                             data-size="<?= strtoupper($it['size_name']) ?>"
+                             data-color="<?= strtoupper($it['color_name']) ?>"
+                             data-product="<?= strtoupper($it['product_name']) ?>"
+                             data-source="<?= $it['source_type'] ?>"
+                             data-cat-type="<?= $it['category_type'] ?? 'NORMAL' ?>">
+                            <article class="card inventory-piece-card h-100 shadow-sm border">
+                                <div class="card-header bg-white border-bottom-0 d-flex justify-content-between align-items-start gap-2 pt-3">
+                                    <span class="badge bg-secondary-subtle text-secondary font-monospace">Piece #<?= $it['piece_no'] ?></span>
+                                    <div class="text-end">
+                                        <span class="badge bg-dark text-white font-monospace fs-7 px-2 py-1">
+                                            <i class="bi bi-qr-code-scan me-1 text-warning"></i><?= e($it['tag_code']) ?>
+                                        </span>
+                                        <div class="small text-muted mt-1" style="font-size: 11px;">Garment #<?= $it['piece_seq'] ?> of <?= $it['total_in_variant'] ?></div>
+                                    </div>
+                                </div>
+                                <div class="card-body pt-1">
+                                    <div class="d-flex align-items-center gap-2 mb-2">
+                                        <div class="bg-primary bg-opacity-10 text-primary rounded p-2 text-center d-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
+                                            <i class="bi <?= $it['source_type'] === 'OWN_PRODUCTION' ? 'bi-bag-check' : 'bi-box-seam' ?> fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <div class="fw-bold text-dark text-truncate" style="max-width: 220px;" title="<?= e($it['product_name']) ?>"><?= e($it['product_name']) ?></div>
+                                            <?php if (!empty($it['category_name'])): ?>
+                                                <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-7 text-truncate" style="max-width: 220px;"><?= e($it['category_name']) ?></span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <div class="small text-muted mb-2">
+                                        <?php if ($it['source_type'] === 'OWN_PRODUCTION'): ?>
+                                            <div>QC Batch #<?= $it['qc_batch_id'] ?> · <?= e($it['program_number']) ?></div>
+                                        <?php else: ?>
+                                            <div><i class="bi bi-shop me-1 text-warning"></i><?= e($it['seller_name'] ?? 'Vendor') ?></div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                                        <div class="d-flex gap-1">
+                                            <span class="badge bg-secondary-subtle text-secondary border font-monospace">Size: <?= e($it['size_name']) ?></span>
+                                            <span class="badge bg-info-subtle text-info border font-monospace">Color: <?= e($it['color_name']) ?></span>
+                                        </div>
+                                        <div class="text-end">
+                                            <div class="fw-semibold text-dark">₹<?= number_format($it['selling_price'], 2) ?></div>
+                                            <?php if ($it['mrp'] > $it['selling_price']): ?>
+                                                <small class="text-muted text-decoration-line-through">₹<?= number_format($it['mrp'], 2) ?></small>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-0.5">
+                                            <i class="bi bi-patch-check me-1"></i><?= e($it['qc_status'] ?? 'QC PASSED') ?>
+                                        </span>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-0.5 ms-1">
+                                            <i class="bi bi-building-check me-1"></i>AVAILABLE
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="card-footer bg-white border-top-0 d-flex justify-content-end pb-3 pt-0">
+                                    <div class="dropdown">
+                                        <button class="btn btn-sm btn-light border dropdown-toggle" type="button" data-bs-toggle="dropdown">Actions</button>
+                                        <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                            <li><button type="button" class="dropdown-item" onclick="printSinglePieceLabel(<?= htmlspecialchars(json_encode($it), ENT_QUOTES, 'UTF-8') ?>)"><i class="bi bi-printer me-2 text-primary"></i>Print QR Label</button></li>
+                                            <li><a class="dropdown-item" href="<?= url('warehouse/stock/detail/' . $it['variant_id'] . '?warehouse_id=' . ($selectedWarehouseId ?? 1)) ?>"><i class="bi bi-clock-history me-2 text-info"></i>History</a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </article>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+        </div>
+
+        <!-- Pagination Controls Footer for Warehouse Pieces -->
+        <div class="card-footer bg-white py-3 border-top d-flex align-items-center justify-content-between flex-wrap gap-3" id="whPiecePaginationFooter">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <span class="small text-muted fw-medium" id="whPageEntriesInfo">
+                    Showing 1 to 10 of <?= count($pieceItems ?? []) ?> pieces
+                </span>
+                <div class="d-flex align-items-center gap-2">
+                    <label for="whPageSizeSelect" class="small text-muted mb-0 fw-medium">Show:</label>
+                    <select id="whPageSizeSelect" class="form-select form-select-sm" style="width: auto;" onchange="changeWhPageSize(this.value)">
+                        <option value="10" selected>10 per page</option>
+                        <option value="25">25 per page</option>
+                        <option value="50">50 per page</option>
+                        <option value="100">100 per page</option>
+                        <option value="all">All pieces (<?= count($pieceItems ?? []) ?>)</option>
+                    </select>
+                </div>
+            </div>
+            <nav aria-label="Warehouse Pieces Pagination">
+                <ul class="pagination pagination-sm mb-0 shadow-xs" id="whPiecePaginationList">
+                    <!-- Dynamically rendered page numbers -->
+                </ul>
+            </nav>
+        </div>
+    </div>
+
+</div><!-- /#pieceStockViewSection -->
+
+<!-- Single Piece QR Sticker Modal -->
+<div class="modal fade" id="singlePieceQrModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-dark text-white py-3">
+                <h5 class="modal-title fs-6 fw-bold"><i class="bi bi-qr-code me-2 text-warning"></i>Piece Sticker Label</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4 text-center">
+                <div class="border rounded-3 p-3 bg-white shadow-xs d-inline-block text-start mb-3" style="max-width: 320px;" id="singlePiecePrintableArea">
+                    <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                        <span class="fw-bold font-monospace text-primary" id="lblPieceSku">SKU</span>
+                        <span class="badge bg-dark text-white font-monospace" id="lblPieceTag">TAG</span>
+                    </div>
+                    <div class="d-flex gap-3 align-items-center">
+                        <div id="lblPieceQrCodeBox" style="width: 80px; height: 80px;" class="d-flex align-items-center justify-content-center bg-light border"></div>
+                        <div>
+                            <div class="fw-bold small text-dark mb-1" id="lblPieceProduct">Product Name</div>
+                            <div class="d-flex gap-1 mb-1">
+                                <span class="badge bg-secondary-subtle text-secondary border font-monospace" id="lblPieceSize">Size</span>
+                                <span class="badge bg-info-subtle text-info border font-monospace" id="lblPieceColor">Color</span>
+                            </div>
+                            <div class="small">MRP: <span class="text-decoration-line-through text-muted" id="lblPieceMrp">₹0</span></div>
+                            <div class="fw-bold text-success fs-6" id="lblPiecePrice">₹0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0 justify-content-center pt-0 pb-4">
+                <button type="button" class="btn btn-light border px-4" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary px-4 fw-semibold" onclick="printSinglePieceSticker()"><i class="bi bi-printer me-1"></i> Print Label</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Batch QR Sticker Print Modal -->
+<div class="modal fade" id="whBatchQrPrintModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content shadow-lg border-0">
+            <div class="modal-header bg-dark text-white py-3 no-print">
+                <h5 class="modal-title fw-bold"><i class="bi bi-printer me-2 text-primary"></i>Batch QR Sticker Tags (Warehouse Pieces)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4 bg-light">
+                <div class="bg-white p-3 rounded shadow-xs mb-3 border d-flex justify-content-between align-items-center flex-wrap gap-2 no-print">
+                    <div>
+                        <h6 class="mb-0 fw-bold text-dark"><i class="bi bi-tag me-1 text-primary"></i>Ready to Print QR Stickers</h6>
+                        <small class="text-muted" id="whPrintableCountBadge">0 Stickers Ready</small>
+                    </div>
+                    <button type="button" class="btn btn-success fw-bold px-4" onclick="window.print()">
+                        <i class="bi bi-printer-fill me-1"></i> Print Stickers Now
+                    </button>
+                </div>
+                <div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 g-3 bg-white p-3 rounded border" id="whBatchPrintSheet">
+                    <!-- Dynamic QR cards -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Floating Bulk Price Action Toolbar (Active when items are selected) -->
 <div id="priceEditFloatingBar" class="card shadow-lg border-0 position-fixed bottom-0 start-50 translate-middle-x mb-4 px-4 py-2 z-3 d-none align-items-center flex-row gap-3 rounded-pill bg-dark text-white border border-light border-opacity-25" style="backdrop-filter: blur(12px); z-index: 1060; max-width: 92vw; box-shadow: 0 10px 25px rgba(0,0,0,0.3) !important;">
@@ -1382,9 +1786,437 @@ function liveFilterStockRows(query) {
         tr.style.display = (!term || text.includes(term)) ? '' : 'none';
     });
 }
+
+/* =========================================================================
+   WAREHOUSE PIECE-BY-PIECE VIEW CONTROLLER & PAGINATION ENGINE
+   ========================================================================= */
+let currentWhView = '<?= $viewMode ?? 'ledger' ?>';
+let currentWhPieceDisplay = 'list';
+let currentWhPiecePage = 1;
+let whPiecePageSize = 10;
+let currentWhSourceFilter = 'all';
+let matchingWhPieceElements = [];
+const allWhPieceData = <?= json_encode($pieceItems ?? []) ?>;
+
+function switchMainStockView(mode) {
+    currentWhView = mode;
+    const ledgerSec = document.getElementById('ledgerStockViewSection');
+    const pieceSec = document.getElementById('pieceStockViewSection');
+    const btnLedger = document.getElementById('btnShowLedgerView');
+    const btnPiece = document.getElementById('btnShowPieceView');
+
+    if (mode === 'pieces') {
+        if (ledgerSec) ledgerSec.style.display = 'none';
+        if (pieceSec) pieceSec.style.display = 'block';
+        if (btnPiece) { btnPiece.classList.add('btn-primary', 'active'); btnPiece.classList.remove('btn-outline-primary', 'bg-white', 'text-dark'); }
+        if (btnLedger) { btnLedger.classList.remove('btn-primary', 'active'); btnLedger.classList.add('btn-outline-primary', 'bg-white', 'text-dark'); }
+        renderWhPagination();
+    } else {
+        if (pieceSec) pieceSec.style.display = 'none';
+        if (ledgerSec) ledgerSec.style.display = 'block';
+        if (btnLedger) { btnLedger.classList.add('btn-primary', 'active'); btnLedger.classList.remove('btn-outline-primary', 'bg-white', 'text-dark'); }
+        if (btnPiece) { btnPiece.classList.remove('btn-primary', 'active'); btnPiece.classList.add('btn-outline-primary', 'bg-white', 'text-dark'); }
+    }
+
+    try {
+        const url = new URL(window.location);
+        url.searchParams.set('view', mode);
+        window.history.replaceState({}, '', url);
+    } catch(e) {}
+}
+
+function switchWhPieceDisplay(displayMode) {
+    currentWhPieceDisplay = displayMode;
+    const listContainer = document.getElementById('whPieceListContainer');
+    const cardsContainer = document.getElementById('whPieceCardsContainer');
+    const btnList = document.getElementById('btnWhDisplayList');
+    const btnCard = document.getElementById('btnWhDisplayCard');
+
+    if (displayMode === 'card') {
+        if (listContainer) listContainer.style.display = 'none';
+        if (cardsContainer) cardsContainer.style.display = 'flex';
+        if (btnCard) { btnCard.classList.add('btn-primary', 'active'); btnCard.classList.remove('btn-outline-secondary'); }
+        if (btnList) { btnList.classList.remove('btn-primary', 'active'); btnList.classList.add('btn-outline-secondary'); }
+    } else {
+        if (cardsContainer) cardsContainer.style.display = 'none';
+        if (listContainer) listContainer.style.display = 'flex';
+        if (btnList) { btnList.classList.add('btn-primary', 'active'); btnList.classList.remove('btn-outline-secondary'); }
+        if (btnCard) { btnCard.classList.remove('btn-primary', 'active'); btnCard.classList.add('btn-outline-secondary'); }
+    }
+    renderWhPagination();
+}
+
+function filterWhPieceSource(sourceType, btn) {
+    currentWhSourceFilter = sourceType;
+    document.querySelectorAll('.wh-source-filter-btn').forEach(b => {
+        b.classList.remove('active', 'btn-dark', 'btn-success', 'btn-warning', 'btn-danger', 'btn-info');
+        const s = b.dataset.source;
+        if (s === 'all') b.classList.add('btn-outline-dark');
+        else if (s === 'OWN_PRODUCTION') b.classList.add('btn-outline-success');
+        else if (s === 'EXTERNAL_PURCHASE') b.classList.add('btn-outline-warning', 'text-dark');
+        else if (s === 'COMPLEMENTARY') b.classList.add('btn-outline-danger');
+        else if (s === 'SERIES') b.classList.add('btn-outline-info', 'text-dark');
+    });
+
+    if (btn) {
+        btn.classList.add('active');
+        if (sourceType === 'all') btn.classList.replace('btn-outline-dark', 'btn-dark');
+        else if (sourceType === 'OWN_PRODUCTION') btn.classList.replace('btn-outline-success', 'btn-success');
+        else if (sourceType === 'EXTERNAL_PURCHASE') { btn.classList.remove('btn-outline-warning'); btn.classList.add('btn-warning', 'text-dark'); }
+        else if (sourceType === 'COMPLEMENTARY') btn.classList.replace('btn-outline-danger', 'btn-danger');
+        else if (sourceType === 'SERIES') { btn.classList.remove('btn-outline-info'); btn.classList.add('btn-info', 'text-white'); }
+    }
+
+    filterWhPieces();
+}
+
+function filterWhPieces() {
+    const input = document.getElementById('whPieceSearchInput');
+    const rawVal = input ? input.value.trim().toUpperCase() : '';
+    const allRows = Array.from(document.querySelectorAll('.wh-piece-row'));
+    const totalCount = allRows.length;
+
+    matchingWhPieceElements = [];
+
+    allRows.forEach(row => {
+        row.classList.remove('inventory-search-highlight');
+        const pieceNo = row.dataset.pieceNo;
+        const cardCol = document.getElementById('whPieceCard_' + pieceNo);
+        if (cardCol) cardCol.classList.remove('inventory-search-highlight');
+
+        const tag = (row.dataset.tag || '').toUpperCase();
+        const sku = (row.dataset.sku || '').toUpperCase();
+        const prod = (row.dataset.product || '').toUpperCase();
+        const size = (row.dataset.size || '').toUpperCase();
+        const color = (row.dataset.color || '').toUpperCase();
+        const src = row.dataset.source || '';
+        const catType = row.dataset.catType || '';
+
+        // Source filter match
+        let sourceMatch = true;
+        if (currentWhSourceFilter === 'OWN_PRODUCTION') sourceMatch = (src === 'OWN_PRODUCTION');
+        else if (currentWhSourceFilter === 'EXTERNAL_PURCHASE') sourceMatch = (src === 'EXTERNAL_PURCHASE');
+        else if (currentWhSourceFilter === 'COMPLEMENTARY') sourceMatch = (catType === 'COMPLEMENTARY');
+        else if (currentWhSourceFilter === 'SERIES') sourceMatch = (catType === 'SERIES');
+
+        // Text query match
+        const textMatch = !rawVal || tag.includes(rawVal) || sku.includes(rawVal) || prod.includes(rawVal) || size === rawVal || color.includes(rawVal);
+
+        if (sourceMatch && textMatch) {
+            matchingWhPieceElements.push(row);
+        } else {
+            row.style.display = 'none';
+            if (cardCol) cardCol.style.display = 'none';
+        }
+    });
+
+    const badge = document.getElementById('whPieceSearchMatchBadge');
+    if (badge) {
+        if (rawVal || currentWhSourceFilter !== 'all') {
+            badge.textContent = `Filtered: ${matchingWhPieceElements.length} of ${totalCount} pieces`;
+            badge.className = 'badge bg-warning text-dark fw-bold fs-8';
+        } else {
+            badge.textContent = `Showing all ${totalCount} pieces`;
+            badge.className = 'badge bg-white text-primary fw-bold fs-8';
+        }
+    }
+
+    const filteredCountLbl = document.getElementById('whFilteredCountLabel');
+    if (filteredCountLbl) {
+        filteredCountLbl.textContent = matchingWhPieceElements.length;
+    }
+
+    currentWhPiecePage = 1;
+    renderWhPagination();
+
+    // Exact tag code match highlight
+    if (rawVal) {
+        const exactMatch = matchingWhPieceElements.find(row => (row.dataset.tag || '').toUpperCase() === rawVal);
+        if (exactMatch) {
+            exactMatch.classList.add('inventory-search-highlight');
+            const exactCard = document.getElementById('whPieceCard_' + exactMatch.dataset.pieceNo);
+            if (exactCard) exactCard.classList.add('inventory-search-highlight');
+            exactMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+}
+
+function clearWhPieceSearch() {
+    const input = document.getElementById('whPieceSearchInput');
+    if (input) input.value = '';
+    filterWhPieces();
+}
+
+function changeWhPageSize(newSize) {
+    whPiecePageSize = (newSize === 'all') ? 'all' : parseInt(newSize, 10);
+    currentWhPiecePage = 1;
+    renderWhPagination();
+}
+
+function goToWhPage(pageNum) {
+    currentWhPiecePage = pageNum;
+    renderWhPagination();
+    const container = currentWhPieceDisplay === 'card'
+        ? document.getElementById('whPieceCardsContainer')
+        : document.getElementById('whPieceListContainer');
+    if (container) container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderWhPagination() {
+    if (!matchingWhPieceElements || matchingWhPieceElements.length === 0) {
+        matchingWhPieceElements = Array.from(document.querySelectorAll('.wh-piece-row'));
+    }
+
+    const totalMatching = matchingWhPieceElements.length;
+    const isAll = (whPiecePageSize === 'all');
+    const effectivePageSize = isAll ? totalMatching : parseInt(whPiecePageSize, 10);
+    const totalPages = isAll ? 1 : Math.ceil(totalMatching / effectivePageSize) || 1;
+
+    if (currentWhPiecePage > totalPages) currentWhPiecePage = totalPages;
+    if (currentWhPiecePage < 1) currentWhPiecePage = 1;
+
+    const startIndex = isAll ? 0 : (currentWhPiecePage - 1) * effectivePageSize;
+    const endIndex = isAll ? totalMatching : Math.min(startIndex + effectivePageSize, totalMatching);
+
+    // Toggle row/card visibility based on slice
+    matchingWhPieceElements.forEach((row, idx) => {
+        const visible = idx >= startIndex && idx < endIndex;
+        const pieceNo = row.dataset.pieceNo;
+        const cardCol = document.getElementById('whPieceCard_' + pieceNo);
+
+        if (currentWhPieceDisplay === 'card') {
+            row.style.display = 'none';
+            if (cardCol) cardCol.style.display = visible ? '' : 'none';
+        } else {
+            row.style.display = visible ? 'flex' : 'none';
+            if (cardCol) cardCol.style.display = 'none';
+        }
+    });
+
+    // Empty search state
+    const emptyState = document.getElementById('whEmptyPieceSearchState');
+    if (emptyState) {
+        emptyState.style.display = (totalMatching === 0) ? 'block' : 'none';
+    }
+
+    // Update Entries Counter
+    const infoEl = document.getElementById('whPageEntriesInfo');
+    if (infoEl) {
+        if (totalMatching === 0) {
+            infoEl.textContent = 'Showing 0 pieces';
+        } else {
+            infoEl.textContent = `Showing ${startIndex + 1} to ${endIndex} of ${totalMatching} pieces`;
+        }
+    }
+
+    // Build pagination links
+    const paginationList = document.getElementById('whPiecePaginationList');
+    if (!paginationList) return;
+    paginationList.innerHTML = '';
+
+    if (totalPages <= 1) return;
+
+    // Prev Button
+    const prevLi = document.createElement('li');
+    prevLi.className = `page-item ${currentWhPiecePage === 1 ? 'disabled' : ''}`;
+    prevLi.innerHTML = `<button class="page-link" onclick="goToWhPage(${currentWhPiecePage - 1})"><i class="bi bi-chevron-left"></i></button>`;
+    paginationList.appendChild(prevLi);
+
+    // Determine pagination window (max 7 buttons)
+    let startPage = Math.max(1, currentWhPiecePage - 2);
+    let endPage = Math.min(totalPages, currentWhPiecePage + 2);
+    if (startPage > 1) {
+        const li1 = document.createElement('li');
+        li1.className = 'page-item';
+        li1.innerHTML = `<button class="page-link" onclick="goToWhPage(1)">1</button>`;
+        paginationList.appendChild(li1);
+        if (startPage > 2) {
+            const ell = document.createElement('li');
+            ell.className = 'page-item disabled';
+            ell.innerHTML = `<span class="page-link">…</span>`;
+            paginationList.appendChild(ell);
+        }
+    }
+
+    for (let p = startPage; p <= endPage; p++) {
+        const li = document.createElement('li');
+        li.className = `page-item ${p === currentWhPiecePage ? 'active' : ''}`;
+        li.innerHTML = `<button class="page-link" onclick="goToWhPage(${p})">${p}</button>`;
+        paginationList.appendChild(li);
+    }
+
+    if (endPage < totalPages) {
+        if (endPage < totalPages - 1) {
+            const ell = document.createElement('li');
+            ell.className = 'page-item disabled';
+            ell.innerHTML = `<span class="page-link">…</span>`;
+            paginationList.appendChild(ell);
+        }
+        const liLast = document.createElement('li');
+        liLast.className = 'page-item';
+        liLast.innerHTML = `<button class="page-link" onclick="goToWhPage(${totalPages})">${totalPages}</button>`;
+        paginationList.appendChild(liLast);
+    }
+
+    // Next Button
+    const nextLi = document.createElement('li');
+    nextLi.className = `page-item ${currentWhPiecePage === totalPages ? 'disabled' : ''}`;
+    nextLi.innerHTML = `<button class="page-link" onclick="goToWhPage(${currentWhPiecePage + 1})"><i class="bi bi-chevron-right"></i></button>`;
+    paginationList.appendChild(nextLi);
+}
+
+// Single Piece QR Sticker Modal
+let singlePieceQrInstance = null;
+function printSinglePieceLabel(item) {
+    if (!item) return;
+    document.getElementById('lblPieceSku').innerText = item.sku || 'SKU';
+    document.getElementById('lblPieceTag').innerText = item.tag_code || 'TAG';
+    document.getElementById('lblPieceProduct').innerText = item.product_name || 'Product';
+    document.getElementById('lblPieceSize').innerText = 'Size: ' + (item.size_name || 'Std');
+    document.getElementById('lblPieceColor').innerText = 'Color: ' + (item.color_name || 'Std');
+    document.getElementById('lblPieceMrp').innerText = '₹' + parseFloat(item.mrp || 0).toFixed(2);
+    document.getElementById('lblPiecePrice').innerText = '₹' + parseFloat(item.selling_price || 0).toFixed(2);
+
+    const box = document.getElementById('lblPieceQrCodeBox');
+    box.innerHTML = '';
+    if (typeof QRCode !== 'undefined') {
+        new QRCode(box, {
+            text: item.tag_code || item.sku || 'GRM-ITEM',
+            width: 76,
+            height: 76,
+            colorDark: '#0f172a',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    }
+
+    const modalEl = document.getElementById('singlePieceQrModal');
+    if (!singlePieceQrInstance) {
+        singlePieceQrInstance = new bootstrap.Modal(modalEl);
+    }
+    singlePieceQrInstance.show();
+}
+
+function printSinglePieceSticker() {
+    const printContents = document.getElementById('singlePiecePrintableArea').innerHTML;
+    const printWindow = window.open('', '_blank', 'width=500,height=500');
+    printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Piece QR Sticker Label</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+                body { padding: 20px; font-family: system-ui, sans-serif; }
+                @media print { body { padding: 0; } }
+            </style>
+        </head>
+        <body onload="window.print(); window.close();">
+            <div style="border: 2px dashed #000; padding: 15px; width: 280px; margin: 0 auto; text-align: left;">
+                ${printContents}
+            </div>
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+}
+
+// Batch QR Stickers Print Modal
+let whBatchPrintModalInstance = null;
+function openWhBatchPrintModal() {
+    const sheet = document.getElementById('whBatchPrintSheet');
+    if (!sheet) return;
+    sheet.innerHTML = '';
+
+    const matchingRows = matchingWhPieceElements && matchingWhPieceElements.length > 0 
+        ? matchingWhPieceElements 
+        : Array.from(document.querySelectorAll('.wh-piece-row'));
+
+    const countBadge = document.getElementById('whPrintableCountBadge');
+    if (countBadge) countBadge.innerText = `${matchingRows.length} QR Stickers Ready`;
+
+    const modalEl = document.getElementById('whBatchQrPrintModal');
+    if (!whBatchPrintModalInstance) {
+        whBatchPrintModalInstance = new bootstrap.Modal(modalEl);
+    }
+    whBatchPrintModalInstance.show();
+
+    // Render QR cards
+    matchingRows.forEach((row, idx) => {
+        const pieceNo = row.dataset.pieceNo;
+        const tag = row.dataset.tag;
+        const sku = row.dataset.sku;
+        const prod = row.dataset.product;
+        const size = row.dataset.size;
+        const color = row.dataset.color;
+
+        const card = document.createElement('div');
+        card.className = 'col';
+        card.innerHTML = `
+            <div class="border rounded p-2 text-center bg-white shadow-xs" style="font-size: 11px;">
+                <div class="fw-bold text-truncate text-dark mb-1">${prod}</div>
+                <div id="batchQrCode_${pieceNo}" class="d-flex justify-content-center my-1" style="min-height: 80px;"></div>
+                <div class="font-monospace fw-bold fs-7 text-dark mb-0.5">${tag}</div>
+                <div class="text-muted font-monospace">${sku}</div>
+                <div class="badge bg-light text-dark border font-monospace mt-1">${size} / ${color}</div>
+            </div>
+        `;
+        sheet.appendChild(card);
+
+        setTimeout(() => {
+            const qrBox = document.getElementById('batchQrCode_' + pieceNo);
+            if (qrBox && typeof QRCode !== 'undefined') {
+                new QRCode(qrBox, {
+                    text: tag,
+                    width: 76,
+                    height: 76,
+                    colorDark: '#0f172a',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            }
+        }, 10 * idx);
+    });
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    if (currentWhView === 'pieces') {
+        switchMainStockView('pieces');
+    } else {
+        renderWhPagination();
+    }
+});
 </script>
 
+<!-- QRCode JS CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
 <style>
+.inventory-piece-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.inventory-piece-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.08) !important;
+}
+.inventory-piece-list-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem !important;
+    background: #fff;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+.inventory-piece-list-item:hover {
+    border-color: #93c5fd;
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+}
+.inventory-piece-list-item.inventory-search-highlight,
+.inventory-piece-card.inventory-search-highlight {
+    outline: 3px solid #f59e0b;
+    outline-offset: -2px;
+    background-color: #fffbeb !important;
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16) !important;
+}
 .price-checkbox-col input[type="checkbox"] {
     width: 18px;
     height: 18px;
@@ -1392,5 +2224,21 @@ function liveFilterStockRows(query) {
 }
 tr.table-success td {
     background-color: rgba(25, 135, 84, 0.08) !important;
+}
+@media print {
+    .no-print, .modal-header, .page-header, .sidebar, nav, header {
+        display: none !important;
+    }
+    #whBatchPrintSheet {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        border: none !important;
+        padding: 0 !important;
+    }
+    #whBatchPrintSheet .col {
+        width: 33.33% !important;
+        page-break-inside: avoid;
+        margin-bottom: 12px;
+    }
 }
 </style>

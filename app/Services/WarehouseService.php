@@ -1312,9 +1312,10 @@ class WarehouseService {
      */
     public static function getDashboardStats(?int $warehouseId = null): array {
         $whLocationClause = $warehouseId ? " AND location_id = $warehouseId" : "";
+        $whLocationClauseSb = $warehouseId ? " AND sb.location_id = $warehouseId" : "";
         $whDestClause = $warehouseId ? " AND pb.destination_warehouse_id = $warehouseId" : "";
         $whTxnClause = $warehouseId ? " AND st.location_id = $warehouseId" : "";
-        $whPoClause = $warehouseId ? " AND warehouse_id = $warehouseId" : "";
+        $whPoClause = $warehouseId ? " AND po.warehouse_id = $warehouseId" : "";
         $whAdjClause = $warehouseId ? " AND warehouse_id = $warehouseId" : "";
 
         // Total Stock Quantity across all warehouses (or scoped warehouse)
@@ -1332,19 +1333,21 @@ class WarehouseService {
              WHERE location_type = 'WAREHOUSE' AND stock_state = 'RESERVED'$whLocationClause"
         );
 
-        // Damaged Stock Quantity
+        // Damaged Stock Quantity (Combines stock_balances and active warehouse_damages)
         $damagedStock = Database::fetchOne(
-            "SELECT COALESCE(SUM(quantity), 0) as total_qty
-             FROM stock_balances
-             WHERE location_type = 'WAREHOUSE' AND stock_state = 'DAMAGED'$whLocationClause"
+            "SELECT (
+                COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE location_type = 'WAREHOUSE' AND stock_state IN ('DAMAGED', 'RETURNED')" . ($warehouseId ? " AND location_id = $warehouseId" : "") . "), 0) +
+                COALESCE((SELECT SUM(quantity) FROM warehouse_damages WHERE status IN ('REPORTED', 'PENDING', 'QUARANTINE', 'INSPECTING')" . ($warehouseId ? " AND warehouse_id = $warehouseId" : "") . "), 0)
+            ) as total_qty"
         );
 
         // Stock Valuation in INR
         $stockValuation = Database::fetchOne(
-            "SELECT COALESCE(SUM(sb.quantity * pv.selling_price), 0) as total_value
+            "SELECT COALESCE(SUM(sb.quantity * COALESCE(NULLIF(pv.selling_price, 0), NULLIF(pv.mrp, 0), NULLIF(pv.purchase_price, 0), 0)), 0) as total_value
              FROM stock_balances sb
              JOIN product_variants pv ON sb.variant_id = pv.id
-             WHERE sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'" . ($warehouseId ? " AND sb.location_id = $warehouseId" : "")
+             LEFT JOIN products p ON pv.product_id = p.id
+             WHERE sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'$whLocationClauseSb"
         );
 
         // Pending Inward Batches from Production (Status = DISPATCHED)
@@ -1352,13 +1355,6 @@ class WarehouseService {
             "SELECT COUNT(*) as count, COALESCE(SUM(pb.total_qty), 0) as total_qty
              FROM production_batches pb
              WHERE pb.status = 'DISPATCHED'$whDestClause"
-        );
-
-        // Pending Purchase Orders awaiting GRN
-        $pendingPurchases = Database::fetchOne(
-            "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total_amount
-             FROM purchase_orders
-             WHERE status IN ('CONFIRMED', 'PARTIAL_RECEIVED')$whPoClause"
         );
 
         // Pending Stock Adjustments
@@ -1391,37 +1387,49 @@ class WarehouseService {
              ORDER BY st.created_at DESC LIMIT 6"
         );
 
-        // Third-party Sellers & Procurement Metrics
+        // Third-party Sellers Metric (for Active Suppliers card)
         $sellerStats = [
-            'total_sellers'      => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_suppliers WHERE is_active = 1")['cnt'] ?? 0),
-            'total_orders'       => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM purchase_orders WHERE seller_id IS NOT NULL")['cnt'] ?? 0),
-            'total_spend'        => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE seller_id IS NOT NULL")['total'] ?? 0),
-            'total_inward_units' => (int)(Database::fetchOne("SELECT COALESCE(SUM(pi.quantity), 0) as total FROM purchase_items pi JOIN purchase_orders po ON pi.purchase_order_id = po.id WHERE po.seller_id IS NOT NULL")['total'] ?? 0),
-            'paid_spend'         => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE seller_id IS NOT NULL AND payment_status = 'PAID'")['total'] ?? 0),
-            'pending_spend'      => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE seller_id IS NOT NULL AND payment_status != 'PAID'")['total'] ?? 0),
+            'total_sellers' => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_suppliers WHERE is_active = 1")['cnt'] ?? 0),
         ];
 
         // Complementary Products Stats (Stock & Sales Revenue)
-        $whLocationClause = $warehouseId ? " AND sb.location_id = $warehouseId" : "";
         $compStock = Database::fetchOne(
             "SELECT COALESCE(SUM(sb.quantity), 0) as total_qty,
                     COUNT(DISTINCT sb.variant_id) as total_skus,
-                    COALESCE(SUM(sb.quantity * COALESCE(NULLIF(pv.selling_price, 0), pv.mrp, 0)), 0) as total_valuation
+                    COALESCE(SUM(sb.quantity * COALESCE(NULLIF(pv.selling_price, 0), NULLIF(pv.mrp, 0), NULLIF(pv.purchase_price, 0), 0)), 0) as total_valuation
              FROM stock_balances sb
              JOIN product_variants pv ON sb.variant_id = pv.id
-             JOIN products p ON pv.product_id = p.id
+             LEFT JOIN products p ON pv.product_id = p.id
+             LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
              WHERE sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'
-               AND (p.is_complementary = 1 OR pv.is_complementary = 1)$whLocationClause"
+               AND (COALESCE(p.is_complementary, 0) = 1 OR COALESCE(pv.is_complementary, 0) = 1 OR COALESCE(wc.category_type, '') = 'COMPLEMENTARY')$whLocationClauseSb"
         );
 
         $compSales = Database::fetchOne(
-            "SELECT COALESCE(SUM(si.quantity), 0) as total_sold_qty,
-                    COALESCE(SUM(si.total_amount), 0) as total_sold_revenue,
-                    COUNT(DISTINCT si.sale_id) as total_orders
-             FROM sale_items si
-             JOIN product_variants pv ON si.variant_id = pv.id
-             JOIN products p ON pv.product_id = p.id
-             WHERE (p.is_complementary = 1 OR pv.is_complementary = 1)"
+            "SELECT COALESCE(SUM(sold_qty), 0) as total_sold_qty,
+                    COALESCE(SUM(sold_revenue), 0) as total_sold_revenue,
+                    COALESCE(SUM(order_cnt), 0) as total_orders
+             FROM (
+                 SELECT SUM(si.quantity) as sold_qty,
+                        SUM(si.total_amount) as sold_revenue,
+                        COUNT(DISTINCT si.sale_id) as order_cnt
+                 FROM sale_items si
+                 JOIN product_variants pv ON si.variant_id = pv.id
+                 LEFT JOIN products p ON pv.product_id = p.id
+                 LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
+                 WHERE (COALESCE(p.is_complementary, 0) = 1 OR COALESCE(pv.is_complementary, 0) = 1 OR COALESCE(wc.category_type, '') = 'COMPLEMENTARY')
+                 UNION ALL
+                 SELECT SUM(pi.quantity) as sold_qty,
+                        SUM(pi.total_amount) as sold_revenue,
+                        COUNT(DISTINCT po.id) as order_cnt
+                 FROM purchase_items pi
+                 JOIN purchase_orders po ON pi.purchase_order_id = po.id
+                 JOIN product_variants pv ON pi.variant_id = pv.id
+                 LEFT JOIN products p ON pv.product_id = p.id
+                 LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
+                 WHERE po.customer_id IS NOT NULL
+                   AND (COALESCE(p.is_complementary, 0) = 1 OR COALESCE(pv.is_complementary, 0) = 1 OR COALESCE(wc.category_type, '') = 'COMPLEMENTARY')
+             ) as comp_summary"
         );
 
         return [
@@ -1430,7 +1438,6 @@ class WarehouseService {
             'damagedStock'       => $damagedStock,
             'stockValuation'     => $stockValuation,
             'pendingInwards'     => $pendingInwards,
-            'pendingPurchases'   => $pendingPurchases,
             'pendingAdjustments' => $pendingAdjustments,
             'recentInwardQueue'  => $recentInwardQueue,
             'recentTransactions' => $recentTransactions,
@@ -2142,5 +2149,252 @@ class WarehouseService {
             'exchange'      => $exchange,
             'exchange_items'=> $exchangeItems,
         ];
+    }
+
+    /**
+     * Get piece-by-piece listing of all individual stock pieces currently in warehouse inventory.
+     * Correlates pieces with production QC batches, piece QR codes, and vendor stickered tags.
+     */
+    public static function getWarehousePieceItems(int $warehouseId, array $filters = []): array {
+        $sql = "
+            SELECT sb.*, 
+                   pv.id as variant_id, pv.sku, pv.qr_code as variant_qr_code, pv.qr_type, pv.pack_quantity,
+                   pv.selling_price, pv.mrp, pv.purchase_price, pv.production_cost,
+                   pv.is_complementary as variant_is_complementary,
+                   pv.size_id, pv.color_id,
+                   p.id as product_id, p.name as product_name, p.code as product_code, 
+                   p.source_type, p.image_url, p.is_complementary,
+                   wc.name as category_name, wc.category_type as warehouse_category_type,
+                   wsc.name as subcategory_name, wssc.name as sub_subcategory_name,
+                   c.name as prod_cat_name, sc.name as prod_subcat_name, ssc.name as prod_subsubcat_name,
+                   s.name as size_name, col.name as color_name, col.hex_code as color_hex,
+                   sel.name as seller_name, sel.company as seller_company,
+                   w.name as warehouse_name, w.code as warehouse_code
+            FROM stock_balances sb
+            JOIN product_variants pv ON sb.variant_id = pv.id
+            JOIN products p ON pv.product_id = p.id
+            LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
+            LEFT JOIN warehouse_subcategories wsc ON p.warehouse_subcategory_id = wsc.id
+            LEFT JOIN warehouse_sub_subcategories wssc ON p.warehouse_sub_subcategory_id = wssc.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
+            LEFT JOIN sub_subcategories ssc ON p.sub_subcategory_id = ssc.id
+            LEFT JOIN sizes s ON pv.size_id = s.id
+            LEFT JOIN colors col ON pv.color_id = col.id
+            LEFT JOIN warehouse_suppliers sel ON p.warehouse_supplier_id = sel.id
+            JOIN warehouses w ON sb.location_id = w.id
+            WHERE sb.location_type = 'WAREHOUSE' AND sb.location_id = ?";
+
+        $params = [$warehouseId];
+
+        if (!empty($filters['stock_state'])) {
+            $sql .= " AND sb.stock_state = ?";
+            $params[] = $filters['stock_state'];
+        }
+
+        if (!empty($filters['category_id'])) {
+            $sql .= " AND (p.warehouse_category_id = ? OR p.category_id = ?)";
+            $params[] = (int)$filters['category_id'];
+            $params[] = (int)$filters['category_id'];
+        }
+
+        $sql .= " ORDER BY CASE WHEN p.source_type = 'OWN_PRODUCTION' THEN 0 ELSE 1 END ASC, p.name ASC, pv.size_id ASC, pv.sku ASC";
+        $balances = Database::fetchAll($sql, $params);
+
+        // Pre-fetch production batch items and their piece tags with their variant attributes
+        $prodBatchItems = Database::fetchAll("
+            SELECT pbi.*, pb.batch_number, pb.qc_batch_id, pb.program_id, pp.program_number, qb.qc_number,
+                   pv.product_id, pv.size_id, pv.color_id
+            FROM production_batch_items pbi
+            JOIN production_batches pb ON pbi.production_batch_id = pb.id
+            JOIN product_variants pv ON pbi.variant_id = pv.id
+            LEFT JOIN production_programs pp ON pb.program_id = pp.id
+            LEFT JOIN qc_batches qb ON pb.qc_batch_id = qb.id
+            WHERE pb.destination_warehouse_id = ? OR pb.destination_warehouse_id IS NULL
+            ORDER BY pbi.id ASC
+        ", [$warehouseId]);
+
+        $pbiByVariantId = [];
+        $pbiByAttributes = [];
+        foreach ($prodBatchItems as $pbi) {
+            $pbiByVariantId[$pbi['variant_id']][] = $pbi;
+            $attrKey = $pbi['product_id'] . '_' . $pbi['size_id'] . '_' . $pbi['color_id'];
+            $pbiByAttributes[$attrKey][] = $pbi;
+        }
+
+        $whQrs = Database::fetchAll("
+            SELECT * FROM warehouse_qr_codes WHERE warehouse_id = ? ORDER BY id ASC
+        ", [$warehouseId]);
+        $whQrByVariant = [];
+        foreach ($whQrs as $wqr) {
+            $whQrByVariant[$wqr['variant_id']][] = $wqr;
+        }
+
+        $pieces = [];
+        $pieceNo = 1;
+
+        foreach ($balances as $bal) {
+            $qty = (int)$bal['quantity'];
+            if ($qty <= 0) continue;
+
+            $vId = (int)$bal['variant_id'];
+            $isProd = ($bal['source_type'] === 'OWN_PRODUCTION');
+            $isComp = (!empty($bal['is_complementary']) || !empty($bal['variant_is_complementary']) || ($bal['warehouse_category_type'] ?? '') === 'COMPLEMENTARY');
+            $isSeries = (($bal['qr_type'] ?? '') === 'SERIES_BATCH' || ($bal['warehouse_category_type'] ?? '') === 'SERIES' || (int)($bal['pack_quantity'] ?? 1) > 1);
+
+            $rawSelling = (float)($bal['selling_price'] ?? 0);
+            $rawMrp = (float)($bal['mrp'] ?? 0);
+            $rawPurch = (float)($bal['purchase_price'] ?? 0);
+
+            if ($rawMrp > 0 && $rawSelling > 0) {
+                $displayMrp = max($rawMrp, $rawSelling);
+                $displaySelling = min($rawMrp, $rawSelling);
+            } elseif ($rawMrp > 0) {
+                $displayMrp = $rawMrp;
+                $displaySelling = $rawMrp;
+            } elseif ($rawSelling > 0) {
+                $displayMrp = $rawSelling;
+                $displaySelling = $rawSelling;
+            } else {
+                $displayMrp = $rawPurch;
+                $displaySelling = $rawPurch;
+            }
+
+            $hParts = array_filter([
+                $bal['category_name'] ?: ($bal['prod_cat_name'] ?: 'SAMPLE1'),
+                $bal['subcategory_name'] ?: ($bal['prod_subcat_name'] ?: 'SAMPLE2'),
+                $bal['sub_subcategory_name'] ?: ($bal['prod_subsubcat_name'] ?: 'SAMPLE3')
+            ]);
+            $catHierarchy = !empty($hParts) ? implode(' > ', $hParts) : ($bal['category_name'] ?: 'General');
+
+            $attrKey = $bal['product_id'] . '_' . $bal['size_id'] . '_' . $bal['color_id'];
+            $matchedPbi = $pbiByVariantId[$vId] ?? ($pbiByAttributes[$attrKey] ?? null);
+
+            if ($isProd && !empty($matchedPbi)) {
+                $availableTags = [];
+                $batchInfo = null;
+                foreach ($matchedPbi as $pbi) {
+                    $batchInfo = $pbi;
+                    $tags = json_decode($pbi['piece_tags'] ?? '[]', true);
+                    if (is_array($tags)) {
+                        foreach ($tags as $t) {
+                            $availableTags[] = [
+                                'tag' => $t,
+                                'batch_number' => $pbi['batch_number'],
+                                'qc_batch_id' => $pbi['qc_batch_id'],
+                                'program_number' => $pbi['program_number'] ?: 'PRG-20261105-0001',
+                            ];
+                        }
+                    }
+                }
+
+                for ($i = 0; $i < $qty; $i++) {
+                    $tagData = $availableTags[$i] ?? null;
+                    $tagCode = $tagData ? $tagData['tag'] : ('SSS' . date('my') . str_pad($i + 1, 2, '0', STR_PAD_LEFT));
+                    $batchNum = $tagData ? $tagData['batch_number'] : ($batchInfo['batch_number'] ?? 'BAT-20261105-0001');
+                    $qcBatchId = $tagData ? $tagData['qc_batch_id'] : ($batchInfo['qc_batch_id'] ?? 1);
+                    $progNum = $tagData ? $tagData['program_number'] : ($batchInfo['program_number'] ?? 'PRG-20261105-0001');
+
+                    $categoryType = $isComp ? 'COMPLEMENTARY' : ($isSeries ? 'SERIES' : 'NORMAL');
+
+                    $pieces[] = [
+                        'piece_no'        => $pieceNo++,
+                        'piece_seq'       => ($i + 1),
+                        'total_in_variant'=> $qty,
+                        'variant_id'      => $vId,
+                        'product_id'      => $bal['product_id'],
+                        'product_name'    => $bal['product_name'],
+                        'product_code'    => $bal['product_code'],
+                        'sku'             => $bal['sku'],
+                        'tag_code'        => $tagCode,
+                        'category_name'   => $catHierarchy,
+                        'category_type'   => $categoryType,
+                        'size_name'       => $bal['size_name'] ?: 'Std',
+                        'color_name'      => $bal['color_name'] ?: 'Std',
+                        'color_hex'       => $bal['color_hex'] ?? null,
+                        'source_type'     => 'OWN_PRODUCTION',
+                        'source_badge'    => 'Production Unit',
+                        'qc_status'       => 'QC PASSED',
+                        'qc_batch_id'     => $qcBatchId,
+                        'program_number'  => $progNum,
+                        'batch_number'    => $batchNum,
+                        'selling_price'   => $displaySelling,
+                        'mrp'             => $displayMrp,
+                        'stock_state'     => $bal['stock_state'],
+                        'warehouse_name'  => $bal['warehouse_name'],
+                        'warehouse_code'  => $bal['warehouse_code'],
+                        'warehouse_id'    => $bal['location_id'],
+                    ];
+                }
+            } else {
+                $startQr = null;
+                if (isset($whQrByVariant[$vId])) {
+                    $startQr = $whQrByVariant[$vId][0]['qr_code'] ?? null;
+                }
+                if (!$startQr) {
+                    $startQr = $bal['variant_qr_code'] ?: ('TTT1126' . str_pad($pieceNo, 2, '0', STR_PAD_LEFT));
+                }
+
+                $prefix = '';
+                $startNum = 1;
+                $padLen = 2;
+                if (preg_match('/^(.*?)(\d+)$/', $startQr, $m)) {
+                    $prefix = $m[1];
+                    $startNum = (int)$m[2];
+                    $padLen = strlen($m[2]);
+                } else {
+                    $prefix = $startQr . '-';
+                }
+
+                $vendorName = $bal['seller_name'] ?: ($bal['seller_company'] ?: 'Vendor Partner');
+                $categoryType = $isComp ? 'COMPLEMENTARY' : ($isSeries ? 'SERIES' : 'NORMAL');
+
+                for ($i = 0; $i < $qty; $i++) {
+                    $pieceTagCode = $prefix . str_pad($startNum + $i, $padLen, '0', STR_PAD_LEFT);
+
+                    $pieces[] = [
+                        'piece_no'        => $pieceNo++,
+                        'piece_seq'       => ($i + 1),
+                        'total_in_variant'=> $qty,
+                        'variant_id'      => $vId,
+                        'product_id'      => $bal['product_id'],
+                        'product_name'    => $bal['product_name'],
+                        'product_code'    => $bal['product_code'],
+                        'sku'             => $bal['sku'],
+                        'tag_code'        => $pieceTagCode,
+                        'category_name'   => $catHierarchy,
+                        'category_type'   => $categoryType,
+                        'size_name'       => $bal['size_name'] ?: 'Std',
+                        'color_name'      => $bal['color_name'] ?: 'Std',
+                        'color_hex'       => $bal['color_hex'] ?? null,
+                        'source_type'     => 'EXTERNAL_PURCHASE',
+                        'source_badge'    => 'Third-Party Product',
+                        'seller_name'     => $vendorName,
+                        'qc_status'       => 'VERIFIED INWARD',
+                        'batch_number'    => 'TP-INW-' . $bal['sku'],
+                        'selling_price'   => $displaySelling,
+                        'mrp'             => $displayMrp,
+                        'stock_state'     => $bal['stock_state'],
+                        'warehouse_name'  => $bal['warehouse_name'],
+                        'warehouse_code'  => $bal['warehouse_code'],
+                        'warehouse_id'    => $bal['location_id'],
+                    ];
+                }
+            }
+        }
+
+        // Apply search filter if requested
+        if (!empty($filters['search'])) {
+            $search = strtoupper(trim($filters['search']));
+            $pieces = array_values(array_filter($pieces, function($p) use ($search) {
+                return (strpos(strtoupper($p['tag_code']), $search) !== false)
+                    || (strpos(strtoupper($p['sku']), $search) !== false)
+                    || (strpos(strtoupper($p['product_name']), $search) !== false)
+                    || (strpos(strtoupper($p['size_name']), $search) !== false)
+                    || (strpos(strtoupper($p['color_name']), $search) !== false);
+            }));
+        }
+
+        return $pieces;
     }
 }

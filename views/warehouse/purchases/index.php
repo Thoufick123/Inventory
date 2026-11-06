@@ -80,7 +80,7 @@
 <div class="card border-0 shadow-sm mb-4 bg-white rounded-3">
     <div class="card-body">
         <form id="purchaseFilterForm" method="GET" action="<?= url('warehouse/purchases') ?>" class="row g-3 align-items-end">
-            <div class="col-md-4">
+            <div class="col-md-6">
                 <label class="form-label small fw-semibold d-flex align-items-center justify-content-between">
                     <span><i class="bi bi-search text-primary me-1"></i>Search Customer / Order # / Phone</span>
                     <span id="liveSearchIndicator" class="text-muted small fw-normal d-none"><i class="spinner-border spinner-border-sm text-primary me-1" style="width: 0.8rem; height: 0.8rem;"></i>Filtering...</span>
@@ -98,18 +98,7 @@
                     <?php endif; ?>
                 </div>
             </div>
-            <div class="col-md-3">
-                <label class="form-label small fw-semibold"><i class="bi bi-person text-secondary me-1"></i>Customer</label>
-                <select id="customerFilterSelect" name="customer_id" class="form-select form-select-sm" onchange="autoTriggerFilter()">
-                    <option value="">-- All Customers --</option>
-                    <?php foreach ($customers as $c): ?>
-                        <option value="<?= $c['id'] ?>" <?= ($customerId ?? '') == $c['id'] ? 'selected' : '' ?>>
-                            <?= e($c['name']) ?> (<?= e($c['phone']) ?>)
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="col-md-3">
+            <div class="col-md-4">
                 <label class="form-label small fw-semibold"><i class="bi bi-building text-secondary me-1"></i>Warehouse</label>
                 <select id="warehouseFilterSelect" name="warehouse_id" class="form-select form-select-sm" onchange="autoTriggerFilter()" <?= ((function_exists('currentWarehouseId') && currentWarehouseId() !== null) || count($warehouses) <= 1) ? 'disabled' : '' ?>>
                     <?php if (!function_exists('currentWarehouseId') || currentWarehouseId() === null && count($warehouses) > 1): ?>

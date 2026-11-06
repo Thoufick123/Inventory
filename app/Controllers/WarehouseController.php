@@ -54,12 +54,17 @@ class WarehouseController {
         $whRetClause = $scopedWarehouseId ? " AND warehouse_id = $scopedWarehouseId" : "";
 
         $person2Stats = [
-            'total_stock_units'    => Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE stock_state = 'AVAILABLE'$whStockClause")['total'] ?? 0,
-            'reserved_stock_units' => Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE stock_state = 'RESERVED'$whStockClause")['total'] ?? 0,
-            'active_allocations'   => Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_allocations WHERE status IN ('REQUESTED', 'APPROVED', 'PICKING', 'PACKING')$whAllocClause")['cnt'] ?? 0,
+            'total_stock_units'    => Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'$whStockClause")['total'] ?? 0,
+            'reserved_stock_units' => Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'WAREHOUSE' AND stock_state = 'RESERVED'$whStockClause")['total'] ?? 0,
+            'active_allocations'   => Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_allocations WHERE status IN ('REQUESTED', 'APPROVED', 'PICKED', 'PACKED', 'PICKING', 'PACKING')$whAllocClause")['cnt'] ?? 0,
             'in_transit_transfers' => Database::fetchOne("SELECT COUNT(*) as cnt FROM allocation_outwards ao WHERE 1=1$whOutClause")['cnt'] ?? 0,
-            'total_outwards'       => Database::fetchOne("SELECT COUNT(*) as cnt FROM allocation_outwards ao WHERE 1=1$whOutClause")['cnt'] ?? 0,
-            'pending_returns'      => Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_returns WHERE status IN ('RECEIVED', 'INSPECTING')$whRetClause")['cnt'] ?? 0,
+            'total_outwards'       => Database::fetchOne(
+                "SELECT (
+                    COALESCE((SELECT COUNT(*) FROM allocation_outwards ao WHERE 1=1$whOutClause), 0) +
+                    COALESCE((SELECT COUNT(*) FROM warehouse_allocations wa WHERE wa.status IN ('DISPATCHED', 'DELIVERED', 'COMPLETED') AND wa.id NOT IN (SELECT allocation_id FROM allocation_outwards WHERE allocation_id IS NOT NULL)$whAllocClause), 0)
+                ) as cnt"
+            )['cnt'] ?? 0,
+            'pending_returns'      => Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_returns WHERE status IN ('RECEIVED', 'INSPECTING', 'PENDING')$whRetClause")['cnt'] ?? 0,
             'dispatches_today'     => Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_allocations WHERE status = 'DISPATCHED' AND DATE(updated_at) = CURDATE()$whAllocClause")['cnt'] ?? 0,
         ];
 
@@ -1130,6 +1135,13 @@ class WarehouseController {
 
         $categories = Database::fetchAll("SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name ASC");
 
+        $viewMode = $_GET['view'] ?? 'ledger';
+        $pieceItems = WarehouseService::getWarehousePieceItems((int)$selectedWarehouseId, [
+            'stock_state' => $stockState,
+            'category_id' => $categoryId,
+            'search'      => $search,
+        ]);
+
         Response::view('warehouse.stock.index', [
             'pageTitle'              => 'Warehouse Stock Inventory',
             'activeModule'           => 'warehouse',
@@ -1141,6 +1153,8 @@ class WarehouseController {
             'normalItems'            => $normalItems,
             'seriesItems'            => $seriesItems,
             'returnedItems'          => $returnedItems,
+            'pieceItems'             => $pieceItems,
+            'viewMode'               => $viewMode,
             'prodAvailableQty'       => $prodAvailableQty,
             'prodValuation'          => $prodValuation,
             'tpAvailableQty'         => $tpAvailableQty,

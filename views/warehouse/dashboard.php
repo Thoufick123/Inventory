@@ -22,6 +22,7 @@
 <!-- Row 1: Stock & Vendor Inward Overview -->
 <div class="row g-3 mb-4">
     <div class="col-sm-6 col-xl-3">
+        <?php if (hasPermission('stock', 'view')): ?><a href="<?= url('warehouse/stock') ?>" class="text-decoration-none"><?php endif; ?>
         <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
             <div class="d-flex align-items-center">
                 <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #e6f4ea; color: #059669;">
@@ -29,13 +30,15 @@
                 </div>
                 <div>
                     <div class="text-muted small fw-semibold">Available Stock Units</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($total_stock_units ?? $totalStock['total_qty'] ?? 0) ?></h3>
-                    <small class="text-muted"><?= number_format($totalStock['total_skus'] ?? 0) ?> unique SKUs</small>
+                    <h3 class="fw-bold mb-0 text-dark"><?= number_format((float)($total_stock_units ?? $totalStock['total_qty'] ?? 0)) ?></h3>
+                    <small class="text-muted"><?= number_format((int)($totalStock['total_skus'] ?? 0)) ?> unique SKUs</small>
                 </div>
             </div>
         </div>
+        <?php if (hasPermission('stock', 'view')): ?></a><?php endif; ?>
     </div>
     <div class="col-sm-6 col-xl-3">
+        <?php if (hasPermission('stock', 'view')): ?><a href="<?= url('warehouse/stock') ?>" class="text-decoration-none"><?php endif; ?>
         <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
             <div class="d-flex align-items-center">
                 <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #eff6ff; color: #2563eb;">
@@ -43,13 +46,15 @@
                 </div>
                 <div>
                     <div class="text-muted small fw-semibold">Inventory Valuation</div>
-                    <h3 class="fw-bold mb-0 text-dark">₹<?= number_format($stockValuation['total_value'] ?? 0, 0) ?></h3>
+                    <h3 class="fw-bold mb-0 text-dark">₹<?= number_format((float)($stockValuation['total_value'] ?? 0), 2) ?></h3>
                     <small class="text-muted">Retail selling valuation</small>
                 </div>
             </div>
         </div>
+        <?php if (hasPermission('stock', 'view')): ?></a><?php endif; ?>
     </div>
     <div class="col-sm-6 col-xl-3">
+        <?php if (hasPermission('inward', 'view')): ?><a href="<?= url('warehouse/inward') ?>" class="text-decoration-none"><?php endif; ?>
         <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
             <div class="d-flex align-items-center">
                 <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #fef3c7; color: #d97706;">
@@ -57,13 +62,15 @@
                 </div>
                 <div>
                     <div class="text-muted small fw-semibold">Inward Dispatches</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($pendingInwards['count'] ?? 0) ?></h3>
-                    <small class="text-muted"><?= number_format($pendingInwards['total_qty'] ?? 0) ?> pcs in transit</small>
+                    <h3 class="fw-bold mb-0 text-dark"><?= number_format((int)($pendingInwards['count'] ?? 0)) ?></h3>
+                    <small class="text-muted"><?= number_format((float)($pendingInwards['total_qty'] ?? 0)) ?> pcs in transit</small>
                 </div>
             </div>
         </div>
+        <?php if (hasPermission('inward', 'view')): ?></a><?php endif; ?>
     </div>
     <div class="col-sm-6 col-xl-3">
+        <?php if (hasPermission('wh_sellers', 'view')): ?><a href="<?= url('warehouse/sellers') ?>" class="text-decoration-none"><?php endif; ?>
         <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
             <div class="d-flex align-items-center">
                 <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #f3e8ff; color: #7c3aed;">
@@ -71,13 +78,16 @@
                 </div>
                 <div>
                     <div class="text-muted small fw-semibold">Third-Party Sellers</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($sellerStats['total_sellers'] ?? 0) ?></h3>
+                    <h3 class="fw-bold mb-0 text-dark"><?= number_format((int)($sellerStats['total_sellers'] ?? 0)) ?></h3>
                     <?php if (hasPermission('wh_sellers', 'view')): ?>
-                        <small class="text-muted"><a href="<?= url('warehouse/sellers') ?>" class="text-decoration-none">View All Sellers &rarr;</a></small>
+                        <small class="text-muted"><span class="text-decoration-none text-primary">View All Sellers &rarr;</span></small>
+                    <?php else: ?>
+                        <small class="text-muted">Active registered suppliers</small>
                     <?php endif; ?>
                 </div>
             </div>
         </div>
+        <?php if (hasPermission('wh_sellers', 'view')): ?></a><?php endif; ?>
     </div>
 </div>
 
@@ -96,11 +106,11 @@
                             <span class="text-dark small fw-bold text-uppercase d-flex align-items-center gap-1">
                                 <i class="bi bi-gift-fill text-warning me-1"></i>Complementary Product Stock
                             </span>
-                            <span class="badge bg-warning-subtle text-dark border border-warning small font-monospace"><?= number_format($compStock['total_skus'] ?? 0) ?> SKUs</span>
+                            <span class="badge bg-warning-subtle text-dark border border-warning small font-monospace"><?= number_format((int)($compStock['total_skus'] ?? 0)) ?> SKUs</span>
                         </div>
-                        <h3 class="fw-bold mb-0 text-dark"><?= number_format($compStock['total_qty'] ?? 0) ?> <span class="fs-6 fw-normal text-muted">pcs available</span></h3>
+                        <h3 class="fw-bold mb-0 text-dark"><?= number_format((float)($compStock['total_qty'] ?? 0)) ?> <span class="fs-6 fw-normal text-muted">pcs available</span></h3>
                         <div class="d-flex justify-content-between align-items-center mt-1">
-                            <small class="text-muted">Est. Potential Revenue: <strong class="text-success">₹<?= number_format($compStock['total_valuation'] ?? 0, 2) ?></strong></small>
+                            <small class="text-muted">Est. Potential Revenue: <strong class="text-success">₹<?= number_format((float)($compStock['total_valuation'] ?? 0), 2) ?></strong></small>
                             <small class="text-warning-emphasis fw-semibold">View Inventory &rarr;</small>
                         </div>
                     </div>
@@ -122,12 +132,12 @@
                             <span class="text-dark small fw-bold text-uppercase d-flex align-items-center gap-1">
                                 <i class="bi bi-graph-up-arrow text-success me-1"></i>Complementary Sales Revenue
                             </span>
-                            <span class="badge bg-success-subtle text-success border border-success-subtle small font-monospace"><?= number_format($compSales['total_sold_qty'] ?? 0) ?> pcs sold</span>
+                            <span class="badge bg-success-subtle text-success border border-success-subtle small font-monospace"><?= number_format((float)($compSales['total_sold_qty'] ?? 0)) ?> pcs sold</span>
                         </div>
-                        <h3 class="fw-bold mb-0 text-success">₹<?= number_format($compSales['total_sold_revenue'] ?? 0, 2) ?></h3>
+                        <h3 class="fw-bold mb-0 text-success">₹<?= number_format((float)($compSales['total_sold_revenue'] ?? 0), 2) ?></h3>
                         <div class="d-flex justify-content-between align-items-center mt-1">
                             <small class="text-muted">Realized revenue from sold complementary products</small>
-                            <small class="text-success fw-semibold"><?= number_format($compSales['total_orders'] ?? 0) ?> orders</small>
+                            <small class="text-success fw-semibold"><?= number_format((int)($compSales['total_orders'] ?? 0)) ?> orders</small>
                         </div>
                     </div>
                 </div>
@@ -137,72 +147,10 @@
     </div>
 </div>
 
-<!-- Row 2: Procurement Spend & Vendor Settlement -->
+<!-- Row 2: Dispatch, Allocations & Damage -->
 <div class="row g-3 mb-4">
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
-            <div class="d-flex align-items-center">
-                <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #dcfce7; color: #16a34a;">
-                    <i class="bi bi-receipt fs-3"></i>
-                </div>
-                <div>
-                    <div class="text-muted small fw-semibold">Seller Purchases (Spend)</div>
-                    <h3 class="fw-bold mb-0" style="color: #0f766e;">₹<?= number_format($sellerStats['total_spend'] ?? 0, 2) ?></h3>
-                    <small class="text-muted"><?= number_format($sellerStats['total_orders'] ?? 0) ?> orders recorded</small>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
-            <div class="d-flex align-items-center">
-                <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #cff4fc; color: #0891b2;">
-                    <i class="bi bi-box-seam fs-3"></i>
-                </div>
-                <div>
-                    <div class="text-muted small fw-semibold">Seller Inward Units</div>
-                    <h3 class="fw-bold mb-0" style="color: #0891b2;"><?= number_format($sellerStats['total_inward_units'] ?? 0) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
-                    <small class="text-muted">Inwarded to warehouse stock</small>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
-            <div class="d-flex align-items-center">
-                <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #ffedd5; color: #c2410c;">
-                    <i class="bi bi-wallet2 fs-3"></i>
-                </div>
-                <div>
-                    <div class="text-muted small fw-semibold">Seller Settlement</div>
-                    <h4 class="fw-bold mb-0 text-dark">
-                        <span style="color: #0f766e;">₹<?= number_format($sellerStats['paid_spend'] ?? 0) ?></span>
-                        <small class="text-danger fs-7">/ ₹<?= number_format($sellerStats['pending_spend'] ?? 0) ?> due</small>
-                    </h4>
-                    <small class="text-muted">Paid vs outstanding</small>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
-            <div class="d-flex align-items-center">
-                <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #fce7f3; color: #db2777;">
-                    <i class="bi bi-cart4 fs-3"></i>
-                </div>
-                <div>
-                    <div class="text-muted small fw-semibold">Pending Supplier POs</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($pendingPurchases['count'] ?? 0) ?></h3>
-                    <small class="text-muted">₹<?= number_format($pendingPurchases['total_amount'] ?? 0) ?> ordered</small>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Row 3: Dispatch, Allocations, Damage & Returns -->
-<div class="row g-3 mb-4">
-    <div class="col-sm-6 col-xl-3">
+    <div class="col-sm-6 col-lg-4">
+        <?php if (hasPermission('allocation', 'view')): ?><a href="<?= url('warehouse/allocation') ?>" class="text-decoration-none"><?php endif; ?>
         <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
             <div class="d-flex align-items-center">
                 <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #e0f2fe; color: #0284c7;">
@@ -210,31 +158,31 @@
                 </div>
                 <div>
                     <div class="text-muted small fw-semibold">Active Shop Allocations</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($active_allocations ?? 0) ?></h3>
+                    <h3 class="fw-bold mb-0 text-dark"><?= number_format((int)($active_allocations ?? 0)) ?></h3>
                     <small class="text-muted">Requested / Picking / Packing</small>
                 </div>
             </div>
         </div>
+        <?php if (hasPermission('allocation', 'view')): ?></a><?php endif; ?>
     </div>
-    <div class="col-sm-6 col-xl-3">
-        <?php if (hasPermission('allocation_outward', 'view')): ?>
-        <a href="<?= url('warehouse/allocation/outward') ?>" class="text-decoration-none">
-            <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
-                <div class="d-flex align-items-center">
-                    <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #ffe4e6; color: #e11d48;">
-                        <i class="bi bi-truck fs-3"></i>
-                    </div>
-                    <div>
-                        <div class="text-muted small fw-semibold">Outward</div>
-                        <h3 class="fw-bold mb-0 text-dark"><?= number_format($total_outwards ?? $in_transit_transfers ?? 0) ?></h3>
-                        <small class="text-muted">Total outward dispatches</small>
-                    </div>
+    <div class="col-sm-6 col-lg-4">
+        <?php if (hasPermission('allocation_outward', 'view')): ?><a href="<?= url('warehouse/allocation/outward') ?>" class="text-decoration-none"><?php endif; ?>
+        <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
+            <div class="d-flex align-items-center">
+                <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #ffe4e6; color: #e11d48;">
+                    <i class="bi bi-truck fs-3"></i>
+                </div>
+                <div>
+                    <div class="text-muted small fw-semibold">Outward</div>
+                    <h3 class="fw-bold mb-0 text-dark"><?= number_format((int)($total_outwards ?? $in_transit_transfers ?? 0)) ?></h3>
+                    <small class="text-muted">Total outward dispatches</small>
                 </div>
             </div>
-        </a>
-        <?php endif; ?>
+        </div>
+        <?php if (hasPermission('allocation_outward', 'view')): ?></a><?php endif; ?>
     </div>
-    <div class="col-sm-6 col-xl-3">
+    <div class="col-sm-6 col-lg-4">
+        <?php if (hasPermission('damage', 'view')): ?><a href="<?= url('warehouse/damage') ?>" class="text-decoration-none"><?php endif; ?>
         <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
             <div class="d-flex align-items-center">
                 <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #f1f5f9; color: #475569;">
@@ -242,25 +190,12 @@
                 </div>
                 <div>
                     <div class="text-muted small fw-semibold">Damaged / Quarantine</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($damagedStock['total_qty'] ?? $damaged_units ?? 0) ?></h3>
-                  
+                    <h3 class="fw-bold mb-0 text-dark"><?= number_format((float)($damagedStock['total_qty'] ?? $damaged_units ?? 0)) ?></h3>
+                    <small class="text-muted">Pcs in quarantine / defect</small>
                 </div>
             </div>
         </div>
-    </div>
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-3 p-3 h-100 bg-white">
-            <div class="d-flex align-items-center">
-                <div class="flex-shrink-0 p-3 rounded-3 me-3" style="background-color: #fee2e2; color: #ef4444;">
-                    <i class="bi bi-arrow-return-left fs-3"></i>
-                </div>
-                <div>
-                    <div class="text-muted small fw-semibold">Pending Return QC</div>
-                    <h3 class="fw-bold mb-0 text-dark"><?= number_format($pending_returns ?? 0) ?></h3>
-                    <small class="text-muted">Awaiting classification</small>
-                </div>
-            </div>
-        </div>
+        <?php if (hasPermission('damage', 'view')): ?></a><?php endif; ?>
     </div>
 </div>
 
