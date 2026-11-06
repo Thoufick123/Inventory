@@ -8,6 +8,7 @@
 require_once BASE_PATH . '/app/Services/ProductionService.php';
 require_once BASE_PATH . '/app/Services/AuditService.php';
 require_once BASE_PATH . '/app/Services/CloudinaryService.php';
+require_once BASE_PATH . '/app/Services/SettingsService.php';
 require_once BASE_PATH . '/app/Models/QCBatch.php';
 require_once BASE_PATH . '/app/Models/QCItem.php';
 require_once BASE_PATH . '/app/Models/LabelBatch.php';
@@ -435,6 +436,54 @@ class ProductionController {
         ]);
     }
 
+    public function printProductionPurchase(string $id): void {
+        $purchase = Database::fetchOne(
+            "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
+                    s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
+                    s.state AS seller_state, s.address AS seller_address
+             FROM production_purchases pp
+             JOIN sellers s ON s.id = pp.seller_id
+             WHERE pp.id = ?",
+            [(int)$id]
+        );
+        if (!$purchase) {
+            Response::error(404, 'Purchase record not found.');
+            return;
+        }
+
+        $items = Database::fetchAll(
+            "SELECT item_type, item_name, quantity, unit, weight_kg, unit_price, total_price,
+                    tax_input_type, gst_type, sgst_value, cgst_value, igst_value,
+                    sgst_amount, cgst_amount, igst_amount, roll_number, color, design_name
+             FROM production_purchase_items
+             WHERE purchase_id = ?
+             ORDER BY id",
+            [(int)$purchase['id']]
+        );
+        $subtotal = 0.0;
+        $taxes = ['SGST' => 0.0, 'CGST' => 0.0, 'IGST' => 0.0];
+        foreach ($items as &$item) {
+            $base = (float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1);
+            $item['base_amount'] = round($base, 2);
+            $subtotal += $item['base_amount'];
+            foreach (['SGST' => 'sgst_amount', 'CGST' => 'cgst_amount', 'IGST' => 'igst_amount'] as $type => $field) {
+                $taxes[$type] += (float)($item[$field] ?? 0);
+            }
+        }
+        unset($item);
+
+        $company = SettingsService::getAllGrouped()['company'] ?? [];
+        Response::viewOnly('production.purchases.print', [
+            'purchase' => $purchase,
+            'items' => $items,
+            'company' => $company,
+            'subtotal' => round($subtotal, 2),
+            'taxes' => array_map(static fn(float $amount): float => round($amount, 2), $taxes),
+            'totalTax' => round(array_sum($taxes), 2),
+            'overallTotal' => (float)$purchase['total_amount'],
+        ]);
+    }
+
     public function createProductionPurchase(): void {
         $sellers = Database::fetchAll(
             "SELECT id, name, company, phone, email, gst_number, city, state, address, payment_terms
@@ -501,24 +550,23 @@ class ProductionController {
             $unitPriceInput = $submitted['unit_price'] ?? null;
             $quantity = is_numeric($quantityInput) ? (float)$quantityInput : 0;
             $unitPrice = is_numeric($unitPriceInput) ? (float)$unitPriceInput : -1;
+            $gstType = strtoupper(trim((string)($submitted['gst_type'] ?? 'EXEMPTED')));
             $taxMode = strtoupper(trim((string)($submitted['tax_mode'] ?? 'PERCENT')));
-            $sgstInput = $submitted['sgst_value'] ?? '0';
-            $cgstInput = $submitted['cgst_value'] ?? '0';
+            $taxInput = $submitted['tax_value'] ?? '0';
             if (!in_array($type, ['FABRIC_ROLL', 'GENERAL_SUPPLY'], true) || $quantity <= 0 || $unitPrice < 0) {
                 Session::flash('error', 'Each purchase line needs a valid item type, quantity, and non-negative price.');
                 Response::back();
                 return;
             }
-            if (!in_array($taxMode, ['PERCENT', 'AMOUNT'], true)
-                || !is_numeric($sgstInput) || !is_numeric($cgstInput)
-                || (float)$sgstInput < 0 || (float)$cgstInput < 0
-                || ($taxMode === 'PERCENT' && ((float)$sgstInput > 100 || (float)$cgstInput > 100))) {
-                Session::flash('error', 'SGST and CGST must be non-negative values; percentage taxes cannot exceed 100%.');
+            if (!in_array($gstType, ['SGST', 'IGST', 'CGST', 'EXEMPTED'], true)
+                || !in_array($taxMode, ['PERCENT', 'AMOUNT'], true)
+                || !is_numeric($taxInput) || (float)$taxInput < 0
+                || ($gstType !== 'EXEMPTED' && $taxMode === 'PERCENT' && (float)$taxInput > 100)) {
+                Session::flash('error', 'Choose a valid GST type and enter a non-negative tax value; percentage tax cannot exceed 100%.');
                 Response::back();
                 return;
             }
-            $sgstValue = (float)$sgstInput;
-            $cgstValue = (float)$cgstInput;
+            $taxValue = $gstType === 'EXEMPTED' ? 0.0 : (float)$taxInput;
 
             if ($type === 'FABRIC_ROLL') {
                 $rollNumber = mb_strtoupper(trim((string)($submitted['roll_number'] ?? '')));
@@ -538,15 +586,19 @@ class ProductionController {
                 }
                 $quantity = (int)$quantity;
                 $baseTotal = round($unitPrice, 2);
-                $sgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $sgstValue);
-                $cgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $cgstValue);
+                $taxAmount = $gstType === 'EXEMPTED' ? 0.0 : $calculateTaxAmount($baseTotal, $taxMode, $taxValue);
                 $items[] = [
                     'type' => $type, 'item_name' => $fabricDescription, 'quantity' => $quantity,
                     'unit' => 'PCS', 'weight' => $weight, 'unit_price' => $unitPrice,
-                    'tax_mode' => $taxMode,
-                    'sgst_value' => $sgstValue, 'cgst_value' => $cgstValue,
-                    'sgst_amount' => $sgstAmount, 'cgst_amount' => $cgstAmount,
-                    'line_total' => $baseTotal + $sgstAmount + $cgstAmount,
+                    'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
+                    'tax_amount' => $taxAmount,
+                    'sgst_value' => $gstType === 'SGST' ? $taxValue : 0,
+                    'cgst_value' => $gstType === 'CGST' ? $taxValue : 0,
+                    'igst_value' => $gstType === 'IGST' ? $taxValue : 0,
+                    'sgst_amount' => $gstType === 'SGST' ? $taxAmount : 0,
+                    'cgst_amount' => $gstType === 'CGST' ? $taxAmount : 0,
+                    'igst_amount' => $gstType === 'IGST' ? $taxAmount : 0,
+                    'line_total' => $baseTotal + $taxAmount,
                     'roll_number' => $rollNumber, 'color' => $color,
                     'design_name' => $design, 'design_count' => $designCount,
                     'form_index' => (string)$index, 'photo_url' => null,
@@ -566,15 +618,19 @@ class ProductionController {
                 return;
             }
             $baseTotal = round($quantity * $unitPrice, 2);
-            $sgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $sgstValue);
-            $cgstAmount = $calculateTaxAmount($baseTotal, $taxMode, $cgstValue);
+            $taxAmount = $gstType === 'EXEMPTED' ? 0.0 : $calculateTaxAmount($baseTotal, $taxMode, $taxValue);
             $items[] = [
                 'type' => $type, 'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
                 'unit' => $unit, 'weight' => null, 'unit_price' => $unitPrice,
-                'tax_mode' => $taxMode,
-                'sgst_value' => $sgstValue, 'cgst_value' => $cgstValue,
-                'sgst_amount' => $sgstAmount, 'cgst_amount' => $cgstAmount,
-                'line_total' => $baseTotal + $sgstAmount + $cgstAmount, 'roll_number' => null,
+                'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
+                'tax_amount' => $taxAmount,
+                'sgst_value' => $gstType === 'SGST' ? $taxValue : 0,
+                'cgst_value' => $gstType === 'CGST' ? $taxValue : 0,
+                'igst_value' => $gstType === 'IGST' ? $taxValue : 0,
+                'sgst_amount' => $gstType === 'SGST' ? $taxAmount : 0,
+                'cgst_amount' => $gstType === 'CGST' ? $taxAmount : 0,
+                'igst_amount' => $gstType === 'IGST' ? $taxAmount : 0,
+                'line_total' => $baseTotal + $taxAmount, 'roll_number' => null,
                 'color' => null, 'design_name' => null, 'design_count' => null, 'photo_url' => null,
             ];
         }
@@ -671,12 +727,15 @@ class ProductionController {
                 Database::execute(
                     "INSERT INTO production_purchase_items
                         (purchase_id, item_type, item_name, quantity, unit, weight_kg, unit_price, total_price,
-                         tax_input_type, sgst_value, cgst_value, sgst_amount, cgst_amount,
+                         gst_type, tax_input_type, sgst_value, cgst_value, igst_value,
+                         sgst_amount, cgst_amount, igst_amount,
                          roll_number, color, design_name, design_count, seller_roll_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [$purchaseId, $item['type'], $item['item_name'], $item['quantity'], $item['unit'], $item['weight'],
-                        $item['unit_price'], $item['line_total'], $item['tax_mode'], $item['sgst_value'], $item['cgst_value'],
-                        $item['sgst_amount'], $item['cgst_amount'], $item['roll_number'], $item['color'],
+                        $item['unit_price'], $item['line_total'], $item['gst_type'], $item['tax_mode'],
+                        $item['sgst_value'], $item['cgst_value'], $item['igst_value'],
+                        $item['sgst_amount'], $item['cgst_amount'], $item['igst_amount'],
+                        $item['roll_number'], $item['color'],
                         $item['design_name'], $item['design_count'], $sellerRollId]
                 );
             }

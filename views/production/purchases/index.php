@@ -56,10 +56,15 @@
                                 <?php else: ?>
                                     <?= e($item['item_name']) ?> · <?= number_format((float)$item['quantity'], 3) ?> <?= e($item['unit']) ?>
                                 <?php endif; ?>
+                                <?php
+                                    $purchaseItemTaxType = $item['gst_type'] ?? 'LEGACY';
+                                    $purchaseItemTaxAmount = (float)($item['sgst_amount'] ?? 0)
+                                        + (float)($item['cgst_amount'] ?? 0)
+                                        + (float)($item['igst_amount'] ?? 0);
+                                ?>
                                 <small class="d-block text-muted">
                                     Base ₹<?= number_format((float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1), 2) ?>
-                                    · SGST ₹<?= number_format((float)$item['sgst_amount'], 2) ?>
-                                    · CGST ₹<?= number_format((float)$item['cgst_amount'], 2) ?>
+                                    · <?= e($purchaseItemTaxType === 'LEGACY' ? 'Legacy SGST/CGST' : $purchaseItemTaxType) ?> ₹<?= number_format($purchaseItemTaxAmount, 2) ?>
                                     · Line total ₹<?= number_format((float)$item['total_price'], 2) ?>
                                 </small>
                             </div>
@@ -67,6 +72,7 @@
                     </td>
                     <td class="text-end fw-bold">₹<?= number_format((float)$purchase['total_amount'], 2) ?></td>
                     <td>
+                        <a class="btn btn-sm btn-outline-primary mb-1" href="<?= url('production/purchases/print/' . $purchase['id']) ?>" target="_blank" rel="noopener"><i class="bi bi-printer me-1"></i>Print Report</a>
                         <?php if (!empty($purchase['invoice_number'])): ?><span class="small d-block mb-1"><?= e($purchase['invoice_number']) ?></span><?php endif; ?>
                         <?php if (!empty($purchase['document_url'])): ?>
                             <a class="btn btn-sm btn-outline-secondary" href="<?= uploadUrl($purchase['document_url']) ?>" target="_blank" rel="noopener"><i class="bi bi-file-earmark-text me-1"></i>View</a>
