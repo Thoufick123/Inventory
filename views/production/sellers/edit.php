@@ -294,6 +294,7 @@
                                 <tbody id="rollDetailsTableBody">
                                     <!-- Dynamic rows rendered via JS -->
                                 </tbody>
+                                <tfoot id="rollDetailsTableFoot" class="table-light fw-bold"></tfoot>
                             </table>
                         </div>
                     </div>
@@ -317,6 +318,10 @@
                             <div>
                                 <span class="text-muted small d-block">Total Rolls:</span>
                                 <span class="fw-bold fs-6 text-dark" id="summaryTotalRolls">0 Rolls</span>
+                            </div>
+                            <div>
+                                <span class="text-muted small d-block">Total RQ:</span>
+                                <span class="fw-bold fs-6 text-primary" id="summaryTotalRQ">0 RQ</span>
                             </div>
                             <div>
                                 <span class="text-muted small d-block">Colors / Designs:</span>
@@ -941,6 +946,7 @@ function recalculateMultiRollMetrics() {
 
     let totalWeight = 0;
     let totalPrice = 0;
+    let totalRollQuantity = 0;
     let totalDesignCount = 0;
     let totalAvailQty = 0;
     let totalAvailWeight = 0;
@@ -969,6 +975,7 @@ function recalculateMultiRollMetrics() {
 
         totalWeight += weight;
         totalPrice += price;
+        totalRollQuantity += initialQty;
         totalDesignCount += dCount;
         totalAvailQty += availQty;
         totalAvailWeight += availWeight;
@@ -979,6 +986,7 @@ function recalculateMultiRollMetrics() {
     });
 
     document.getElementById('summaryTotalRolls').innerText = totalRolls + (totalRolls === 1 ? ' Roll' : ' Rolls');
+    document.getElementById('summaryTotalRQ').innerText = totalRollQuantity.toLocaleString('en-IN') + ' RQ';
     document.getElementById('summaryColorsDesigns').innerText = colorsSet.size + ' Colors • ' + Math.max(designsSet.size, totalDesignCount) + ' Designs';
     document.getElementById('summaryTotalWeight').innerText = totalWeight.toFixed(2) + ' kg';
     document.getElementById('summaryTotalPrice').innerText = '₹ ' + totalPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -996,6 +1004,7 @@ function recalculateMultiRollMetrics() {
 
 function renderRollsSummaryTable() {
     const tableBody = document.getElementById('rollDetailsTableBody');
+    const tableFoot = document.getElementById('rollDetailsTableFoot');
     const tableBadge = document.getElementById('tableRollCountBadge');
     const tableContainer = document.getElementById('rollDetailsTableContainer');
     if (!tableBody) return;
@@ -1006,11 +1015,22 @@ function renderRollsSummaryTable() {
     if (cards.length === 0) {
         if (tableContainer) tableContainer.classList.add('d-none');
         tableBody.innerHTML = '';
+        if (tableFoot) tableFoot.innerHTML = '';
         return;
     }
     if (tableContainer) tableContainer.classList.remove('d-none');
 
     let html = '';
+    let totalRollQuantity = 0;
+    let totalWeight = 0;
+    let totalPrice = 0;
+    let totalDamagedQty = 0;
+    let totalDamagedWeight = 0;
+    let totalUsedQty = 0;
+    let totalUsedWeight = 0;
+    let totalAvailableQty = 0;
+    let totalAvailableWeight = 0;
+    let totalAvailablePrice = 0;
     cards.forEach((card, i) => {
         const rollNum = card.querySelector('.roll-num-input')?.value?.trim().toUpperCase() || ('ROLL #' + (i + 1));
         const color = card.querySelector('.roll-color-input')?.value?.trim().toUpperCase() || '—';
@@ -1030,6 +1050,17 @@ function renderRollsSummaryTable() {
         const availQty = Math.max(0, initialQty - usedQty - damagedQty);
         const availWeight = Math.max(0, initialWeight - usedWeight - damagedWeight);
         const availPrice = Math.max(0, initialPrice - usedPrice - damagedPrice);
+
+        totalRollQuantity += initialQty;
+        totalWeight += initialWeight;
+        totalPrice += initialPrice;
+        totalDamagedQty += damagedQty;
+        totalDamagedWeight += damagedWeight;
+        totalUsedQty += usedQty;
+        totalUsedWeight += usedWeight;
+        totalAvailableQty += availQty;
+        totalAvailableWeight += availWeight;
+        totalAvailablePrice += availPrice;
 
         // Photo thumbnail
         const previewContainer = card.querySelector('.roll-thumb-preview');
@@ -1099,6 +1130,30 @@ function renderRollsSummaryTable() {
     });
 
     tableBody.innerHTML = html;
+    if (tableFoot) {
+        const formatNumber = value => value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+        tableFoot.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-end">Total Summary:</td>
+                <td class="text-end text-dark">${formatNumber(totalRollQuantity)} RQ</td>
+                <td class="text-end text-dark">${formatNumber(totalWeight)} kg</td>
+                <td class="text-end text-dark">₹ ${formatNumber(totalPrice)}</td>
+                <td class="text-end text-danger bg-danger-subtle bg-opacity-25">
+                    ${totalDamagedQty > 0 ? '-' + formatNumber(totalDamagedQty) : '0'} RQ
+                    <small class="text-danger d-block fw-normal">${formatNumber(totalDamagedWeight)} kg</small>
+                </td>
+                <td class="text-end text-muted bg-light-subtle">
+                    ${totalUsedQty > 0 ? '-' + formatNumber(totalUsedQty) : '0'} RQ
+                    <small class="text-muted d-block fw-normal">${formatNumber(totalUsedWeight)} kg</small>
+                </td>
+                <td class="text-end text-success bg-success-subtle">
+                    ${formatNumber(totalAvailableQty)} RQ
+                    <small class="text-muted d-block fw-normal">${formatNumber(totalAvailableWeight)} kg • ₹${formatNumber(totalAvailablePrice)}</small>
+                </td>
+                <td class="text-center">${cards.length} Rolls Total</td>
+            </tr>
+        `;
+    }
 }
 
 function previewDocument(input) {
