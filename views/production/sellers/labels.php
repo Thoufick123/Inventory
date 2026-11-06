@@ -58,6 +58,22 @@
             border-color: #198754 !important;
         }
 
+        .fabric-sticker-card.has-damage-report {
+            border: 2px solid #dc3545;
+            background: #fff8f8;
+        }
+
+        .fabric-sticker-card.has-damage-report .code-text {
+            color: #dc3545;
+        }
+
+        .damage-warning {
+            color: #b02a37;
+            font-size: 8px;
+            font-weight: 800;
+            line-height: 1;
+        }
+
         @keyframes pulseSuccess {
             0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
             70% { box-shadow: 0 0 0 10px rgba(25, 135, 84, 0); }
@@ -239,6 +255,15 @@
                 min-height: 130px !important;
             }
 
+            .fabric-sticker-card.has-damage-report {
+                border: 1px solid #000 !important;
+                background: #fff !important;
+            }
+
+            .fabric-sticker-card.has-damage-report .code-text {
+                color: #0f172a !important;
+            }
+
             .print-hidden {
                 display: none !important;
             }
@@ -343,7 +368,7 @@
     <!-- Stickers Grid -->
     <div class="stickers-grid" id="stickersGrid">
         <?php foreach ($stickers as $idx => $stk): ?>
-            <div class="fabric-sticker-card" id="card_<?= $idx ?>" data-idx="<?= $idx ?>" data-code="<?= e($stk['code']) ?>" data-seq="<?= (int)$stk['seq'] ?>" data-piece="<?= $stk['piece_index'] ?>" data-roll="<?= e($stk['roll_number']) ?>" data-roll-id="<?= (int)($stk['roll_id'] ?? 0) ?>">
+            <div class="fabric-sticker-card<?= !empty($stk['in_damage_module']) ? ' has-damage-report' : '' ?>" id="card_<?= $idx ?>" data-idx="<?= $idx ?>" data-code="<?= e($stk['code']) ?>" data-seq="<?= (int)$stk['seq'] ?>" data-piece="<?= $stk['piece_index'] ?>" data-roll="<?= e($stk['roll_number']) ?>" data-roll-id="<?= (int)($stk['roll_id'] ?? 0) ?>">
                 <!-- Interactive Toolbar (hidden on physical print) -->
                 <div class="sticker-card-toolbar no-print">
                     <label class="form-check-label d-flex align-items-center gap-1 cursor-pointer mb-0">
@@ -388,6 +413,9 @@
                                 <div class="spec-item weight-item"><strong>Piece Weight:</strong> <?= number_format($stk['weight'], 2) ?> kg</div>
                             <?php endif; ?>
                             <div class="spec-item piece-count-item">Piece <?= (int)$stk['piece_index'] ?> of <?= (int)$stk['total_qty'] ?></div>
+                            <?php if (!empty($stk['in_damage_module'])): ?>
+                                <div class="damage-warning no-print"><i class="bi bi-exclamation-triangle-fill me-1"></i>In damage module</div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
@@ -897,7 +925,7 @@ function submitAddExtraLabel() {
                 stickersData.push(stk);
 
                 const card = document.createElement('div');
-                card.className = 'fabric-sticker-card newly-added';
+                card.className = 'fabric-sticker-card newly-added' + (stk.in_damage_module ? ' has-damage-report' : '');
                 card.id = 'card_' + newIdx;
                 card.setAttribute('data-idx', newIdx);
                 card.setAttribute('data-code', stk.code);
@@ -942,6 +970,7 @@ function submitAddExtraLabel() {
                                 ${safeDesign}
                                 ${safeWeight}
                                 <div class="spec-item piece-count-item">Piece ${stk.piece_index} of ${stk.total_qty}</div>
+                                ${stk.in_damage_module ? '<div class="damage-warning no-print"><i class="bi bi-exclamation-triangle-fill me-1"></i>In damage module</div>' : ''}
                             </div>
                         </div>
                     </div>

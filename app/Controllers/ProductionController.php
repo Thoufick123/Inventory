@@ -1894,6 +1894,17 @@ class ProductionController {
                 ),
                 true
             );
+            $damagedCodes = array_fill_keys(
+                array_map(
+                    static fn(array $damage): string => strtoupper(trim((string)$damage['qr_code'])),
+                    Database::fetchAll(
+                        "SELECT qr_code FROM roll_damages
+                         WHERE seller_roll_id = ? AND qr_code IS NOT NULL AND TRIM(qr_code) <> ''",
+                        [(int)$r['id']]
+                    )
+                ),
+                true
+            );
             $activeSequences = [];
             for ($seq = $startSeq; $seq <= $endSeq; $seq++) {
                 if (!isset($deletedSequences[$seq])) {
@@ -1922,6 +1933,7 @@ class ProductionController {
                     'supplier_name' => $supplierName,
                     'material_type' => $materialType,
                     'qr_payload'    => $payload,
+                    'in_damage_module' => isset($damagedCodes[strtoupper($code)]),
                     'date'          => !empty($r['created_at']) ? date('d M Y', strtotime($r['created_at'])) : date('d M Y'),
                 ];
             }
