@@ -36,34 +36,164 @@ class ProductionController {
     // SELLERS (Material Suppliers)
     // =========================================================================
 
+    private function storeSupplierProfile(): void {
+        $validator = Validator::make($_POST, [
+            'name' => 'required|minLength:2|maxLength:200',
+            'company' => 'required|minLength:2|maxLength:300',
+            'phone' => 'required',
+            'email' => 'maxLength:255',
+            'city' => 'required|maxLength:100',
+            'state' => 'required|maxLength:100',
+            'address' => 'required|maxLength:500',
+            'gst_number' => 'maxLength:20',
+            'payment_terms' => 'maxLength:200',
+        ]);
+        if ($validator->fails()) {
+            Session::flash('error', $validator->firstError());
+            Response::back();
+            return;
+        }
+
+        $name = mb_strtoupper(trim((string)$_POST['name']));
+        $company = mb_strtoupper(trim((string)$_POST['company']));
+        $phone = trim((string)$_POST['phone']);
+        $email = trim((string)($_POST['email'] ?? ''));
+        $city = mb_strtoupper(trim((string)$_POST['city']));
+        $state = mb_strtoupper(trim((string)$_POST['state']));
+        $address = mb_strtoupper(trim((string)$_POST['address']));
+        $gstNumber = mb_strtoupper(trim((string)($_POST['gst_number'] ?? '')));
+        $paymentTerms = mb_strtoupper(trim((string)($_POST['payment_terms'] ?? '')));
+
+        if (preg_match('/[0-9]/', $name) || preg_match('/[0-9]/', $company)
+            || preg_match('/[0-9]/', $city) || preg_match('/[0-9]/', $state)) {
+            Session::flash('error', 'Supplier, company, city, and state fields cannot contain numbers.');
+            Response::back();
+            return;
+        }
+        if (!preg_match('/^[0-9]{10}$/', $phone)) {
+            Session::flash('error', 'Phone number must be exactly 10 digits.');
+            Response::back();
+            return;
+        }
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            Session::flash('error', 'Please enter a valid email address.');
+            Response::back();
+            return;
+        }
+        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
+            Session::flash('error', 'GST number must be a valid 15-character alphanumeric code.');
+            Response::back();
+            return;
+        }
+
+        Database::execute(
+            "INSERT INTO sellers (name, company, phone, email, gst_number, city, state, address, payment_terms, seller_type, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'MATERIAL_SUPPLIER', 1)",
+            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null, $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null]
+        );
+        $sellerId = (int)Database::lastInsertId();
+        AuditService::log('production', 'CREATE', 'sellers', $sellerId, null, [
+            'Supplier Name' => $name,
+            'Company / Mill' => $company,
+            'Phone' => $phone,
+            'Email' => $email,
+            'City' => $city,
+            'State' => $state,
+        ]);
+        Session::flash('success', 'Supplier details saved. Record goods and invoices in Production Purchases.');
+        Response::redirect(url('production/sellers'));
+    }
+
+    private function updateSupplierProfile(int $sellerId): void {
+        $existing = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
+            [$sellerId]
+        );
+        if (!$existing) {
+            Session::flash('error', 'Material supplier not found.');
+            Response::redirect(url('production/sellers'));
+            return;
+        }
+
+        $validator = Validator::make($_POST, [
+            'name' => 'required|minLength:2|maxLength:200',
+            'company' => 'required|minLength:2|maxLength:300',
+            'phone' => 'required',
+            'email' => 'maxLength:255',
+            'city' => 'required|maxLength:100',
+            'state' => 'required|maxLength:100',
+            'address' => 'required|maxLength:500',
+            'gst_number' => 'maxLength:20',
+            'payment_terms' => 'maxLength:200',
+        ]);
+        if ($validator->fails()) {
+            Session::flash('error', $validator->firstError());
+            Response::back();
+            return;
+        }
+
+        $name = mb_strtoupper(trim((string)$_POST['name']));
+        $company = mb_strtoupper(trim((string)$_POST['company']));
+        $phone = trim((string)$_POST['phone']);
+        $email = trim((string)($_POST['email'] ?? ''));
+        $city = mb_strtoupper(trim((string)$_POST['city']));
+        $state = mb_strtoupper(trim((string)$_POST['state']));
+        $address = mb_strtoupper(trim((string)$_POST['address']));
+        $gstNumber = mb_strtoupper(trim((string)($_POST['gst_number'] ?? '')));
+        $paymentTerms = mb_strtoupper(trim((string)($_POST['payment_terms'] ?? '')));
+
+        if (preg_match('/[0-9]/', $name) || preg_match('/[0-9]/', $company)
+            || preg_match('/[0-9]/', $city) || preg_match('/[0-9]/', $state)) {
+            Session::flash('error', 'Supplier, company, city, and state fields cannot contain numbers.');
+            Response::back();
+            return;
+        }
+        if (!preg_match('/^[0-9]{10}$/', $phone)) {
+            Session::flash('error', 'Phone number must be exactly 10 digits.');
+            Response::back();
+            return;
+        }
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            Session::flash('error', 'Please enter a valid email address.');
+            Response::back();
+            return;
+        }
+        if ($gstNumber !== '' && !preg_match('/^[0-9A-Z]{15}$/', $gstNumber)) {
+            Session::flash('error', 'GST number must be a valid 15-character alphanumeric code.');
+            Response::back();
+            return;
+        }
+
+        Database::execute(
+            "UPDATE sellers SET name = ?, company = ?, phone = ?, email = ?, gst_number = ?, city = ?, state = ?,
+                    address = ?, payment_terms = ?, is_active = ?, updated_at = NOW()
+             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
+            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
+                $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null,
+                isset($_POST['is_active']) ? 1 : 0, $sellerId]
+        );
+        AuditService::log('production', 'UPDATE', 'sellers', $sellerId, $existing, [
+            'name' => $name, 'company' => $company, 'phone' => $phone, 'email' => $email,
+            'gst_number' => $gstNumber, 'city' => $city, 'state' => $state, 'address' => $address,
+            'payment_terms' => $paymentTerms, 'is_active' => isset($_POST['is_active']) ? 1 : 0,
+        ]);
+        Session::flash('success', 'Supplier details updated.');
+        Response::redirect(url('production/sellers'));
+    }
+
     public function sellerList(): void {
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['status'] ?? '';
         $city = trim($_GET['city'] ?? '');
-        $materialType = trim($_GET['material_type'] ?? '');
 
         $sql = "SELECT s.* FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER'";
         $params = [];
 
         if ($search !== '') {
-            $sql .= " AND (
-                s.name LIKE ? 
-                OR s.company LIKE ? 
-                OR s.phone LIKE ? 
-                OR s.city LIKE ? 
-                OR s.state LIKE ? 
-                OR s.gst_number LIKE ? 
-                OR s.material_type LIKE ? 
-                OR s.colors LIKE ?
-                OR s.payment_terms LIKE ?
-                OR EXISTS (
-                    SELECT 1 FROM seller_rolls sr 
-                    WHERE sr.seller_id = s.id 
-                    AND (sr.roll_number LIKE ? OR sr.color LIKE ? OR sr.design_name LIKE ? OR sr.notes LIKE ?)
-                )
-            )";
+            $sql .= " AND (s.name LIKE ? OR s.company LIKE ? OR s.phone LIKE ? OR s.city LIKE ?
+                OR s.state LIKE ? OR s.gst_number LIKE ? OR s.payment_terms LIKE ? OR s.address LIKE ?)";
             $s = '%' . $search . '%';
-            $params = array_merge($params, [$s, $s, $s, $s, $s, $s, $s, $s, $s, $s, $s, $s, $s]);
+            $params = array_merge($params, [$s, $s, $s, $s, $s, $s, $s, $s]);
         }
 
         if ($status !== '') {
@@ -76,72 +206,20 @@ class ProductionController {
             $params[] = $city;
         }
 
-        if ($materialType !== '') {
-            $sql .= " AND s.material_type = ?";
-            $params[] = $materialType;
-        }
-
         $sql .= " ORDER BY s.created_at DESC";
         $sellers = Database::fetchAll($sql, $params);
 
-        foreach ($sellers as &$sItem) {
-            $sItem['rolls'] = Database::fetchAll(
-                "SELECT sr.*,
-                        COALESCE(u.used_quantity, 0) as used_quantity,
-                        COALESCE(u.used_weight, 0) as used_weight,
-                        COALESCE(u.used_price, 0) as used_price,
-                        COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
-                        COALESCE(dmg.damaged_weight, 0) as damaged_weight,
-                        COALESCE(dmg.damaged_price, 0) as damaged_price,
-                        GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
-                        GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight,
-                        GREATEST(0.0, sr.price - COALESCE(u.used_price, 0) - COALESCE(dmg.damaged_price, 0)) as available_price,
-                        dmg.damage_reason,
-                        dmg.damage_status
-                 FROM seller_rolls sr
-                 LEFT JOIN (
-                     SELECT ppr.seller_roll_id, 
-                            SUM(ppr.roll_qty) as used_quantity,
-                            SUM(ppr.roll_weight) as used_weight,
-                            SUM(ppr.roll_price) as used_price
-                     FROM production_program_rolls ppr
-                     JOIN production_programs pp ON ppr.production_program_id = pp.id
-                     WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
-                     GROUP BY ppr.seller_roll_id
-                 ) u ON sr.id = u.seller_roll_id
-                 LEFT JOIN (
-                     SELECT rd.seller_roll_id,
-                            SUM(rd.damaged_quantity) as damaged_quantity,
-                            SUM(rd.damaged_weight) as damaged_weight,
-                            SUM(rd.loss_amount) as damaged_price,
-                            MAX(rd.damage_reason) as damage_reason,
-                            MAX(rd.status) as damage_status
-                     FROM roll_damages rd
-                     WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                     GROUP BY rd.seller_roll_id
-                 ) dmg ON sr.id = dmg.seller_roll_id
-                 WHERE sr.seller_id = ?
-                 ORDER BY sr.id ASC",
-                [$sItem['id']]
-            );
-        }
-        unset($sItem);
-
-        // Fetch distinct filter values
         $cities = Database::fetchAll("SELECT DISTINCT city FROM sellers WHERE seller_type = 'MATERIAL_SUPPLIER' AND city IS NOT NULL AND TRIM(city) != '' ORDER BY city ASC");
-        $materialTypes = Database::fetchAll("SELECT DISTINCT material_type FROM sellers WHERE seller_type = 'MATERIAL_SUPPLIER' AND material_type IS NOT NULL AND TRIM(material_type) != '' ORDER BY material_type ASC");
 
         Response::view('production.sellers.index', [
-            'pageTitle'      => 'Production Material Suppliers',
+            'pageTitle'      => 'Production Suppliers',
             'activeModule'   => 'production',
             'activeMenu'     => 'prod-sellers',
             'sellers'        => $sellers,
             'search'         => $search,
             'status'         => $status,
             'city'           => $city,
-            'materialType'   => $materialType,
             'cities'         => $cities,
-            'materialTypes'  => $materialTypes,
             'breadcrumb'     => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Suppliers'],
@@ -150,8 +228,8 @@ class ProductionController {
     }
 
     public function createSeller(): void {
-        Response::view('production.sellers.create', [
-            'pageTitle'    => 'Add Material Supplier',
+        Response::view('production.sellers.profile_create', [
+            'pageTitle'    => 'Add Supplier',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
             'breadcrumb'   => [
@@ -230,6 +308,10 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+        }
+        if (!empty($_POST['supplier_profile_only'])) {
+            $this->storeSupplierProfile();
+            return;
         }
 
         $validator = Validator::make($_POST, [
@@ -587,8 +669,8 @@ class ProductionController {
             [(int)$id]
         );
 
-        Response::view('production.sellers.edit', [
-            'pageTitle'    => 'Edit Material Supplier',
+        Response::view('production.sellers.profile_edit', [
+            'pageTitle'    => 'Edit Supplier Details',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-sellers',
             'seller'       => $seller,
@@ -605,6 +687,10 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+        }
+        if (!empty($_POST['supplier_profile_only'])) {
+            $this->updateSupplierProfile((int)$id);
+            return;
         }
 
         $existing = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$id]);
@@ -1001,6 +1087,16 @@ class ProductionController {
             return;
         }
 
+        $purchaseCount = Database::fetchOne(
+            "SELECT COUNT(*) AS purchase_count FROM production_purchases WHERE seller_id = ?",
+            [(int)$id]
+        );
+        if ((int)($purchaseCount['purchase_count'] ?? 0) > 0) {
+            Session::flash('error', 'This supplier has purchase history and cannot be deleted. Deactivate the supplier to prevent future purchases.');
+            Response::redirect(url('production/sellers'));
+            return;
+        }
+
         // Check if any fabric rolls from this supplier are used in active production programs or cutting batches
         $usedPrograms = Database::fetchAll(
             "SELECT DISTINCT pp.program_number, pp.name as program_name
@@ -1048,6 +1144,274 @@ class ProductionController {
 
         Session::flash('success', "Material Supplier '{$seller['name']}' and associated fabric rolls deleted successfully.");
         Response::redirect(url('production/sellers'));
+    }
+
+    public function productionPurchaseList(): void {
+        $purchases = Database::fetchAll(
+            "SELECT pp.*, s.name AS seller_name, s.company
+             FROM production_purchases pp
+             JOIN sellers s ON s.id = pp.seller_id
+             ORDER BY pp.purchase_date DESC, pp.id DESC"
+        );
+        foreach ($purchases as &$purchase) {
+            $purchase['items'] = Database::fetchAll(
+                "SELECT ppi.*, sr.start_code, sr.end_code
+                 FROM production_purchase_items ppi
+                 LEFT JOIN seller_rolls sr ON sr.id = ppi.seller_roll_id
+                 WHERE ppi.purchase_id = ?
+                 ORDER BY ppi.id",
+                [(int)$purchase['id']]
+            );
+        }
+        unset($purchase);
+
+        $totalPurchaseValue = (float)(Database::fetchOne(
+            "SELECT COALESCE(SUM(total_amount), 0) AS total FROM production_purchases"
+        )['total'] ?? 0);
+        $supplyStock = Database::fetchAll(
+            "SELECT item_name, unit, SUM(quantity) AS total_quantity, COUNT(*) AS purchase_lines
+             FROM production_purchase_items
+             WHERE item_type = 'GENERAL_SUPPLY'
+             GROUP BY item_name, unit
+             ORDER BY item_name, unit"
+        );
+
+        Response::view('production.purchases.index', [
+            'pageTitle' => 'Production Purchases',
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-purchases',
+            'purchases' => $purchases,
+            'totalPurchaseValue' => $totalPurchaseValue,
+            'supplyStock' => $supplyStock,
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Purchases'],
+            ],
+        ]);
+    }
+
+    public function createProductionPurchase(): void {
+        $sellers = Database::fetchAll(
+            "SELECT id, name, company
+             FROM sellers
+             WHERE seller_type = 'MATERIAL_SUPPLIER' AND is_active = 1
+             ORDER BY company, name"
+        );
+        Response::view('production.purchases.create', [
+            'pageTitle' => 'Record Production Purchase',
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-purchases',
+            'sellers' => $sellers,
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Purchases', 'url' => url('production/purchases')],
+                ['label' => 'Record Purchase'],
+            ],
+        ]);
+    }
+
+    public function storeProductionPurchase(): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::back();
+            return;
+        }
+
+        $sellerId = (int)($_POST['seller_id'] ?? 0);
+        $seller = Database::fetchOne(
+            "SELECT id, name, company FROM sellers
+             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND is_active = 1",
+            [$sellerId]
+        );
+        if (!$seller) {
+            Session::flash('error', 'Select an active registered supplier.');
+            Response::back();
+            return;
+        }
+
+        $purchaseDate = trim((string)($_POST['purchase_date'] ?? ''));
+        $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $purchaseDate);
+        if (!$date || $date->format('Y-m-d') !== $purchaseDate) {
+            Session::flash('error', 'Enter a valid purchase date.');
+            Response::back();
+            return;
+        }
+
+        $submittedItems = $_POST['items'] ?? [];
+        if (!is_array($submittedItems)) {
+            $submittedItems = [];
+        }
+        $items = [];
+        $allowedUnits = ['PCS', 'KG', 'METRE', 'LITRE', 'BOX', 'PACK', 'PAIR', 'SET', 'BUNDLE'];
+        foreach ($submittedItems as $index => $submitted) {
+            if (!is_array($submitted)) {
+                continue;
+            }
+            $type = strtoupper(trim((string)($submitted['item_type'] ?? '')));
+            $quantity = (float)($submitted['quantity'] ?? 0);
+            $unitPrice = (float)($submitted['unit_price'] ?? -1);
+            if (!in_array($type, ['FABRIC_ROLL', 'GENERAL_SUPPLY'], true) || $quantity <= 0 || $unitPrice < 0) {
+                Session::flash('error', 'Each purchase line needs a valid item type, quantity, and non-negative price.');
+                Response::back();
+                return;
+            }
+
+            if ($type === 'FABRIC_ROLL') {
+                $itemName = mb_strtoupper(trim((string)($submitted['fabric_description'] ?? '')));
+                $rollNumber = mb_strtoupper(trim((string)($submitted['roll_number'] ?? '')));
+                $color = mb_strtoupper(trim((string)($submitted['color'] ?? '')));
+                $design = mb_strtoupper(trim((string)($submitted['design_name'] ?? '')));
+                $designCount = (int)($submitted['design_count'] ?? 0);
+                $weight = (float)($submitted['weight_kg'] ?? 0);
+                if ($itemName === '' || mb_strlen($itemName) > 150
+                    || $rollNumber === '' || mb_strlen($rollNumber) > 50
+                    || $color === '' || mb_strlen($color) > 100
+                    || $design === '' || mb_strlen($design) > 150
+                    || $designCount < 1 || $quantity < 1 || floor($quantity) !== $quantity
+                    || $weight <= 0 || $unitPrice <= 0) {
+                    Session::flash('error', 'Fabric roll lines require fabric description, roll number, color, design, designs count, RQ, weight, and a price greater than zero.');
+                    Response::back();
+                    return;
+                }
+                $quantity = (int)$quantity;
+                $items[] = [
+                    'type' => $type, 'item_name' => $itemName, 'quantity' => $quantity,
+                    'unit' => 'PCS', 'weight' => $weight, 'unit_price' => $unitPrice,
+                    'line_total' => $unitPrice, 'roll_number' => $rollNumber, 'color' => $color,
+                    'design_name' => $design, 'design_count' => $designCount,
+                ];
+                continue;
+            }
+
+            $itemName = trim((string)($submitted['item_name'] ?? ''));
+            $unit = strtoupper(trim((string)($submitted['unit'] ?? '')));
+            if ($unit === 'OTHER') {
+                $unit = strtoupper(trim((string)($submitted['custom_unit'] ?? '')));
+            }
+            if ($itemName === '' || mb_strlen($itemName) > 255 || $unit === '' || mb_strlen($unit) > 30
+                || (!in_array($unit, $allowedUnits, true) && strtoupper(trim((string)($submitted['unit'] ?? ''))) !== 'OTHER')) {
+                Session::flash('error', 'General supply lines require an item name and a valid unit.');
+                Response::back();
+                return;
+            }
+            $items[] = [
+                'type' => $type, 'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
+                'unit' => $unit, 'weight' => null, 'unit_price' => $unitPrice,
+                'line_total' => round($quantity * $unitPrice, 2), 'roll_number' => null,
+                'color' => null, 'design_name' => null, 'design_count' => null,
+            ];
+        }
+
+        if (!$items) {
+            Session::flash('error', 'Add at least one valid purchase item.');
+            Response::back();
+            return;
+        }
+
+        $documentUrl = null;
+        if (!empty($_FILES['document']['name'])) {
+            $file = $_FILES['document'];
+            $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if ($file['error'] !== UPLOAD_ERR_OK || !in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'pdf'], true) || $file['size'] > 5 * 1024 * 1024) {
+                Session::flash('error', 'Invoice must be a JPG, PNG, WEBP, or PDF file up to 5 MB.');
+                Response::back();
+                return;
+            }
+            $documentUrl = CloudinaryService::upload($file, 'grm_inventory/production/purchases', 'auto');
+            if (!$documentUrl) {
+                Session::flash('error', 'Invoice upload failed. Please try again.');
+                Response::back();
+                return;
+            }
+        }
+
+        $totalAmount = array_sum(array_column($items, 'line_total'));
+        $invoiceNumber = trim((string)($_POST['invoice_number'] ?? ''));
+        $notes = trim((string)($_POST['notes'] ?? ''));
+        $userId = (int)(Session::get('user_id') ?? 0);
+
+        try {
+            Database::beginTransaction();
+            $temporaryNumber = 'TMP-PP-' . bin2hex(random_bytes(12));
+            Database::execute(
+                "INSERT INTO production_purchases
+                    (purchase_number, seller_id, purchase_date, invoice_number, document_url, notes, total_amount, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [$temporaryNumber, $sellerId, $purchaseDate, $invoiceNumber !== '' ? $invoiceNumber : null,
+                    $documentUrl, $notes !== '' ? $notes : null, $totalAmount, $userId ?: null]
+            );
+            $purchaseId = (int)Database::lastInsertId();
+            $purchaseNumber = 'PP-' . date('Y', strtotime($purchaseDate)) . '-' . sprintf('%06d', $purchaseId);
+            Database::execute(
+                "UPDATE production_purchases SET purchase_number = ? WHERE id = ?",
+                [$purchaseNumber, $purchaseId]
+            );
+
+            foreach ($items as $item) {
+                $sellerRollId = null;
+                if ($item['type'] === 'FABRIC_ROLL') {
+                    $sequence = ProductionService::getNextFabricRollSequence((int)$item['quantity'], $purchaseDate);
+                    $rollQrCode = $item['quantity'] > 1
+                        ? $sequence['start_code'] . '-' . $sequence['end_code']
+                        : $sequence['start_code'];
+                    Database::execute(
+                        "INSERT INTO seller_rolls
+                            (seller_id, roll_number, color, design_name, design_count, quantity, weight, price,
+                             material_type, start_seq, end_seq, start_code, end_code, qr_code)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [$sellerId, $item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
+                            $item['quantity'], $item['weight'], $item['unit_price'], $item['item_name'],
+                            $sequence['start_seq'], $sequence['end_seq'], $sequence['start_code'], $sequence['end_code'], $rollQrCode]
+                    );
+                    $sellerRollId = (int)Database::lastInsertId();
+                }
+
+                Database::execute(
+                    "INSERT INTO production_purchase_items
+                        (purchase_id, item_type, item_name, quantity, unit, weight_kg, unit_price, total_price,
+                         roll_number, color, design_name, design_count, seller_roll_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [$purchaseId, $item['type'], $item['item_name'], $item['quantity'], $item['unit'], $item['weight'],
+                        $item['unit_price'], $item['line_total'], $item['roll_number'], $item['color'],
+                        $item['design_name'], $item['design_count'], $sellerRollId]
+                );
+            }
+
+            $rollTotals = Database::fetchOne(
+                "SELECT COUNT(*) AS roll_count, COALESCE(SUM(quantity), 0) AS roll_qty,
+                        COALESCE(SUM(weight), 0) AS roll_weight, COALESCE(SUM(price), 0) AS roll_price,
+                        COUNT(DISTINCT NULLIF(color, '')) AS color_count,
+                        COUNT(DISTINCT NULLIF(design_name, '')) AS design_count,
+                        GROUP_CONCAT(DISTINCT NULLIF(color, '') SEPARATOR ', ') AS colors
+                 FROM seller_rolls WHERE seller_id = ?",
+                [$sellerId]
+            );
+            Database::execute(
+                "UPDATE sellers SET roll_count = ?, color_count = ?, design_count = ?,
+                    color_design_count = ?, roll_weight = ?, roll_price = ?, colors = ?, updated_at = NOW()
+                 WHERE id = ?",
+                [(int)$rollTotals['roll_count'], (int)$rollTotals['color_count'], (int)$rollTotals['design_count'],
+                    (int)$rollTotals['color_count'] + (int)$rollTotals['design_count'], $rollTotals['roll_weight'],
+                    $rollTotals['roll_price'], $rollTotals['colors'], $sellerId]
+            );
+            Database::commit();
+
+            AuditService::log('production', 'CREATE', 'production_purchases', $purchaseId, null, [
+                'purchase_number' => $purchaseNumber,
+                'seller_id' => $sellerId,
+                'total_amount' => $totalAmount,
+                'item_count' => count($items),
+            ]);
+            Session::flash('success', "Purchase {$purchaseNumber} recorded successfully.");
+            Response::redirect(url('production/purchases'));
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
+            error_log('Production purchase could not be saved: ' . $e->getMessage());
+            Session::flash('error', 'Purchase could not be saved. Please review the entries and try again.');
+            Response::back();
+        }
     }
 
     public function deleteSellerRoll(string $id): void {
@@ -1852,8 +2216,6 @@ class ProductionController {
     private function buildStickersForRolls(array $seller, array $rolls): array {
         $stickers = [];
         $supplierName = mb_strtoupper(trim($seller['company'] ?: ($seller['name'] ?? 'GRM FABRIC')));
-        $materialType = mb_strtoupper(trim($seller['material_type'] ?? 'STANDARD FABRIC'));
-
         foreach ($rolls as &$r) {
             $qty = max(1, (int)($r['quantity'] ?? 1));
             
@@ -1881,6 +2243,7 @@ class ProductionController {
             $rollNum = $r['roll_number'] ?: 'ROLL';
             $color = mb_strtoupper(trim($r['color'] ?? ''));
             $design = mb_strtoupper(trim($r['design_name'] ?? ''));
+            $materialType = mb_strtoupper(trim($r['material_type'] ?? $seller['material_type'] ?? 'STANDARD FABRIC'));
             $weight = (float)($r['weight'] ?? 0);
             $price = (float)($r['price'] ?? 0);
             $photo = !empty($r['photo_url']) ? $r['photo_url'] : ($seller['roll_photo'] ?? null);

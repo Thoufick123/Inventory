@@ -1,0 +1,89 @@
+<div class="page-header mb-4 d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-bag-check me-2 text-primary"></i>Production Purchases</h2>
+        <span class="text-muted">Record fabric roll inward and general garment supplies from registered suppliers.</span>
+    </div>
+    <?php if (hasPermission('sellers', 'create')): ?>
+        <a href="<?= url('production/purchases/create') ?>" class="btn btn-primary"><i class="bi bi-plus-circle me-1"></i>Record Purchase</a>
+    <?php endif; ?>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small text-uppercase">Purchase Records</div>
+            <div class="fs-3 fw-bold"><?= number_format(count($purchases)) ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small text-uppercase">Purchase Value</div>
+            <div class="fs-3 fw-bold text-success">₹<?= number_format((float)$totalPurchaseValue, 2) ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small text-uppercase">General Supply Items</div>
+            <div class="fs-3 fw-bold text-primary"><?= number_format(count($supplyStock)) ?></div>
+        </div></div>
+    </div>
+</div>
+
+<div class="card border shadow-sm mb-4">
+    <div class="card-header bg-white"><h5 class="mb-0 fw-bold"><i class="bi bi-receipt me-2 text-primary"></i>Purchase History</h5></div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th>Purchase # / Date</th><th>Supplier</th><th>Items</th><th class="text-end">Total</th><th>Invoice</th></tr></thead>
+            <tbody>
+            <?php if (empty($purchases)): ?>
+                <tr><td colspan="5" class="text-center text-muted py-5">No purchases recorded yet.</td></tr>
+            <?php else: foreach ($purchases as $purchase): ?>
+                <tr>
+                    <td><strong class="font-monospace"><?= e($purchase['purchase_number']) ?></strong><small class="d-block text-muted"><?= e(formatDate($purchase['purchase_date'])) ?></small></td>
+                    <td><?= e($purchase['company'] ?: $purchase['seller_name']) ?><small class="d-block text-muted"><?= e($purchase['seller_name']) ?></small></td>
+                    <td>
+                        <?php foreach ($purchase['items'] as $item): ?>
+                            <div class="small">
+                                <?php if ($item['item_type'] === 'FABRIC_ROLL'): ?>
+                                    <span class="badge bg-primary-subtle text-primary">Fabric roll</span>
+                                    <?= e($item['roll_number']) ?> · RQ <?= number_format((float)$item['quantity']) ?> · <?= number_format((float)$item['weight_kg'], 2) ?> kg
+                                    <?php if (!empty($item['start_code'])): ?><span class="font-monospace text-muted"><?= e($item['start_code']) ?>–<?= e($item['end_code']) ?></span><?php endif; ?>
+                                    <?php if (!empty($item['seller_roll_id'])): ?>
+                                        <a href="<?= url('production/sellers/roll-labels/' . $item['seller_roll_id']) ?>" target="_blank" rel="noopener" class="text-nowrap"><i class="bi bi-qr-code me-1"></i>Labels</a>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <span class="badge bg-secondary-subtle text-secondary">Supply</span>
+                                    <?= e($item['item_name']) ?> · <?= number_format((float)$item['quantity'], 3) ?> <?= e($item['unit']) ?>
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    </td>
+                    <td class="text-end fw-bold">₹<?= number_format((float)$purchase['total_amount'], 2) ?></td>
+                    <td>
+                        <?php if (!empty($purchase['invoice_number'])): ?><span class="small d-block mb-1"><?= e($purchase['invoice_number']) ?></span><?php endif; ?>
+                        <?php if (!empty($purchase['document_url'])): ?>
+                            <a class="btn btn-sm btn-outline-secondary" href="<?= uploadUrl($purchase['document_url']) ?>" target="_blank" rel="noopener"><i class="bi bi-file-earmark-text me-1"></i>View</a>
+                        <?php else: ?><span class="text-muted">—</span><?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card border shadow-sm">
+    <div class="card-header bg-white"><h5 class="mb-0 fw-bold"><i class="bi bi-box-seam me-2 text-success"></i>General Supplies Purchased</h5><small class="text-muted">Totals received from recorded purchases; usage deductions are not included.</small></div>
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th>Item</th><th>Unit</th><th class="text-end">Total Purchased</th><th class="text-end">Purchase Lines</th></tr></thead>
+            <tbody>
+            <?php if (empty($supplyStock)): ?>
+                <tr><td colspan="4" class="text-center text-muted py-4">No general supplies purchased yet.</td></tr>
+            <?php else: foreach ($supplyStock as $stock): ?>
+                <tr><td><?= e($stock['item_name']) ?></td><td><?= e($stock['unit']) ?></td><td class="text-end fw-semibold"><?= number_format((float)$stock['total_quantity'], 3) ?></td><td class="text-end"><?= number_format((int)$stock['purchase_lines']) ?></td></tr>
+            <?php endforeach; endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
