@@ -2321,14 +2321,6 @@ $hasSeriesGenerated = !empty($generatedItems) && !empty($generatedItems[0]['is_s
                 <span id="btnInwardSubmitIcon"></span>
             </form>
             <?php endif; ?>
-            <?php if (!$isViewingExisting): ?>
-            <div class="d-flex justify-content-end align-items-center gap-2 mt-3 pt-3 border-top no-print">
-                <small class="text-muted me-auto"><i class="bi bi-info-circle me-1"></i>Select QR sticker(s) above, then inward them into warehouse stock.</small>
-                <button type="button" class="btn btn-success fw-bold shadow-sm" id="btnBottomInwardSelected" onclick="confirmStickeredInwardAction(event)" disabled title="Select QR sticker(s) first to inward them into warehouse stock">
-                    <i class="bi bi-box-arrow-in-down me-1"></i> Inward Selected QR
-                </button>
-            </div>
-            <?php endif; ?>
         <?php endif; ?>
     </div>
 </div>
@@ -3528,7 +3520,6 @@ function syncInwardButtonWithSelection() {
     const tagsInput = document.getElementById('inwardTagCodesInput');
     const btn = document.getElementById('btnConfirmInwardSubmit');
     const quickBtn = document.getElementById('btnQuickInwardSelected');
-    const bottomBtn = document.getElementById('btnBottomInwardSelected');
     const icon = document.getElementById('btnInwardSubmitIcon');
     const form = document.getElementById('formConfirmInward');
 
@@ -3543,7 +3534,6 @@ function syncInwardButtonWithSelection() {
         }
         if (icon) icon.className = 'bi bi-check-circle-fill fs-4';
         if (quickBtn) quickBtn.disabled = true;
-        if (bottomBtn) bottomBtn.disabled = true;
         return;
     }
 
@@ -3565,13 +3555,12 @@ function syncInwardButtonWithSelection() {
     const pickedAvailable = availableItems.filter(entry => selectedStickerIndices.has(entry.index));
     const hasSelection = pickedAvailable.length > 0;
     const canSubmit = hasSelection && Boolean(form);
-    [quickBtn, bottomBtn].forEach(button => {
-        if (!button) return;
-        button.disabled = !canSubmit;
-        button.classList.toggle('btn-outline-success', !canSubmit);
-        button.classList.toggle('btn-success', canSubmit);
-        if (button === quickBtn) button.classList.toggle('text-white', canSubmit);
-    });
+    if (quickBtn) {
+        quickBtn.disabled = !canSubmit;
+        quickBtn.classList.toggle('btn-outline-success', !canSubmit);
+        quickBtn.classList.toggle('btn-success', canSubmit);
+        quickBtn.classList.toggle('text-white', canSubmit);
+    }
 
     if (availableItems.length === 0) {
         if (btnText) btnText.textContent = 'No active QR stickers remain on this page';
@@ -3584,7 +3573,6 @@ function syncInwardButtonWithSelection() {
         }
         if (icon) icon.className = 'bi bi-check-circle-fill fs-4';
         if (quickBtn) quickBtn.disabled = true;
-        if (bottomBtn) bottomBtn.disabled = true;
         return;
     }
 
