@@ -1936,13 +1936,38 @@ class ProductionController {
     // =========================================================================
 
     private function getDamageReasonOptions(): array {
-        return Database::fetchAll(
+        $legacyReasons = [
+            'Fabric Stain / Oil Dirt',
+            'Weaving / Knitting Defect',
+            'Color Bleed / Shade Variation',
+            'Torn / Hole / Cut Fabric',
+            'Moisture / Water Damage',
+            'Needle / Machinery Tear',
+            'Shortage / Misprint Defect',
+            'Other Fabric Damage',
+        ];
+        $savedReasons = Database::fetchAll(
             "SELECT reason AS damage_reason FROM roll_damage_reasons
              UNION
              SELECT DISTINCT TRIM(damage_reason) AS damage_reason
              FROM roll_damages
              WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
              ORDER BY damage_reason ASC"
+        );
+
+        $reasonsByNormalizedName = [];
+        foreach (array_merge($legacyReasons, array_column($savedReasons, 'damage_reason')) as $reason) {
+            $reason = trim((string)$reason);
+            if ($reason !== '') {
+                $reasonsByNormalizedName[mb_strtolower($reason)] = $reason;
+            }
+        }
+
+        $reasons = array_values($reasonsByNormalizedName);
+        natcasesort($reasons);
+        return array_map(
+            static fn(string $reason): array => ['damage_reason' => $reason],
+            array_values($reasons)
         );
     }
 
