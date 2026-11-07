@@ -110,6 +110,7 @@ if (!empty($authUser['shop_name'])) {
                         || hasPermission('inventory', 'view')
                         || hasPermission('batches', 'view')
                         || hasPermission('outward', 'view')
+                        || hasPermission('production_inward', 'view')
                         || hasPermission('warehouse_rework', 'view');
                     ?>
                     <?php if ($canViewProduction): ?>
@@ -164,6 +165,9 @@ if (!empty($authUser['shop_name'])) {
                             <?php endif; ?>
                             <?php if (hasPermission('inventory', 'view')): ?>
                             <li><a href="<?= url('production/inventory') ?>" class="<?= ($activeMenu ?? '') === 'prod-inventory' ? 'active' : '' ?>">Inventory</a></li>
+                            <?php endif; ?>
+                            <?php if (hasPermission('production_inward', 'view')): ?>
+                            <li><a href="<?= url('production/inward') ?>" class="<?= ($activeMenu ?? '') === 'prod-inward' ? 'active' : '' ?>">Inward / GRN</a></li>
                             <?php endif; ?>
                             <?php if (hasPermission('batches', 'view')): ?>
                             <li><a href="<?= url('production/batches') ?>" class="<?= ($activeMenu ?? '') === 'batches' ? 'active' : '' ?>">Batches</a></li>

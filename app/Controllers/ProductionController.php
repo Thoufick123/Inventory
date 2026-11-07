@@ -9,6 +9,7 @@ require_once BASE_PATH . '/app/Services/ProductionService.php';
 require_once BASE_PATH . '/app/Services/AuditService.php';
 require_once BASE_PATH . '/app/Services/CloudinaryService.php';
 require_once BASE_PATH . '/app/Services/SettingsService.php';
+require_once BASE_PATH . '/app/Services/ProductionInwardService.php';
 require_once BASE_PATH . '/app/Models/QCBatch.php';
 require_once BASE_PATH . '/app/Models/QCItem.php';
 require_once BASE_PATH . '/app/Models/LabelBatch.php';
@@ -8433,6 +8434,107 @@ class ProductionController {
         }
     }
 
+    public function productionInwardIndex(): void {
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === null && function_exists('isSuperAdmin') && !isSuperAdmin()) {
+            Response::redirect(url('production/dashboard'), 'error', 'Assign this account to a production unit before opening Production Inward.');
+            return;
+        }
+        $unitId = $scopedUnitId ?? (!empty($_GET['unit_id']) ? (int)$_GET['unit_id'] : null);
+        $units = $scopedUnitId
+            ? Database::fetchAll('SELECT id, name, code FROM production_units WHERE id = ?', [$scopedUnitId])
+            : Database::fetchAll('SELECT id, name, code FROM production_units WHERE is_active = 1 ORDER BY name');
+        $unit = null;
+        if ($unitId !== null) {
+            foreach ($units as $candidate) {
+                if ((int)$candidate['id'] === $unitId) {
+                    $unit = $candidate;
+                    break;
+                }
+            }
+            if (!$unit) {
+                $unitId = null;
+            }
+        }
+
+        $search = trim((string)($_GET['search'] ?? ''));
+        $receipts = $unitId ? ProductionInwardService::getReceipts($unitId, $search) : [];
+        $unitStock = $unitId ? ProductionInwardService::getUnitStock($unitId) : [];
+        $stats = [
+            'receipt_count' => count($receipts),
+            'received_quantity' => array_sum(array_map(static fn(array $receipt): int => (int)$receipt['total_quantity'], $receipts)),
+            'available_quantity' => array_sum(array_map(static fn(array $item): float => (float)$item['quantity'], $unitStock)),
+        ];
+
+        Response::view('production.inward.index', [
+            'pageTitle' => 'Production Inward / GRN',
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-inward',
+            'units' => $units,
+            'unitId' => $unitId,
+            'scopedUnitId' => $scopedUnitId,
+            'locations' => ProductionInwardService::getLocations(),
+            'receipts' => $receipts,
+            'unitStock' => $unitStock,
+            'stats' => $stats,
+            'search' => $search,
+            'canReceive' => hasPermission('production_inward', 'receive'),
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Inward / GRN'],
+            ],
+        ]);
+    }
+
+    public function productionInwardLookup(): void {
+        try {
+            $result = ProductionInwardService::lookup(
+                strtoupper(trim((string)($_GET['source_type'] ?? ''))),
+                (int)($_GET['source_id'] ?? 0),
+                trim((string)($_GET['code'] ?? ''))
+            );
+            Response::json(['success' => true, 'result' => $result]);
+        } catch (\Throwable $e) {
+            Response::json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function receiveProductionInward(): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::redirect(url('production/inward'));
+            return;
+        }
+
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === null && function_exists('isSuperAdmin') && !isSuperAdmin()) {
+            Session::flash('error', 'Assign this account to a production unit before receiving stock.');
+            Response::redirect(url('production/inward'));
+            return;
+        }
+        $destinationUnitId = $scopedUnitId ?? (int)($_POST['destination_unit_id'] ?? 0);
+        $items = json_decode((string)($_POST['items_json'] ?? '[]'), true);
+        if (!is_array($items)) {
+            $items = [];
+        }
+
+        try {
+            $grnNumber = ProductionInwardService::receive(
+                strtoupper(trim((string)($_POST['source_type'] ?? ''))),
+                (int)($_POST['source_id'] ?? 0),
+                $destinationUnitId,
+                trim((string)($_POST['batch_number'] ?? '')) ?: null,
+                $items,
+                trim((string)($_POST['notes'] ?? '')),
+                (int)(Session::get('user_id') ?? 0)
+            );
+            Session::flash('success', "Receipt {$grnNumber} was posted to Production Inventory.");
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+        }
+        Response::redirect(url('production/inward') . ($scopedUnitId ? '' : '?unit_id=' . $destinationUnitId));
+    }
+
     // =========================================================================
     // PRODUCTION INVENTORY (POST-QC PASSED PRODUCTS)
     // =========================================================================
@@ -8447,6 +8549,8 @@ class ProductionController {
     public function productionInventory(): void {
         $search = trim($_GET['search'] ?? '');
         $categoryFilter = !empty($_GET['category_id']) ? (int)$_GET['category_id'] : null;
+        $inventoryUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        $transferredStock = ProductionInwardService::getStockAcrossUnits($inventoryUnitId);
 
         $sql = "SELECT qi.*, 
                        qb.program_id, 
@@ -8707,6 +8811,7 @@ class ProductionController {
             'activeMenu'     => 'prod-inventory',
             'batches'        => array_values($batches),
             'stats'          => $stats,
+            'transferredStock' => $transferredStock,
             'categories'     => $categories,
             'search'         => $search,
             'categoryFilter' => $categoryFilter,

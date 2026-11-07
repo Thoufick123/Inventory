@@ -180,6 +180,10 @@ $definitions = array_merge($definitions, [
     // Production Labels
     ['module' => 'labels', 'action' => 'delete', 'desc' => 'Delete Garment Label Batch'],
 
+    // Production Inward / GRN
+    ['module' => 'production_inward', 'action' => 'view', 'desc' => 'View production-unit inward receipts and stock'],
+    ['module' => 'production_inward', 'action' => 'receive', 'desc' => 'Receive products into a production unit'],
+
     // Production Rework from Warehouse
     ['module' => 'warehouse_rework', 'action' => 'view', 'desc' => 'View Warehouse Rework Requests and History'],
     ['module' => 'warehouse_rework', 'action' => 'create', 'desc' => 'Receive and Log damaged goods from warehouse for rework'],

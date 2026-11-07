@@ -320,6 +320,9 @@ class Router {
         // PRODUCTION ROUTES
         // ==========================================
         $this->get('production/dashboard', 'ProductionController', 'dashboard', ['AuthMiddleware', ['PermissionMiddleware', 'production', 'view']]);
+        $this->get('production/inward', 'ProductionController', 'productionInwardIndex', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
+        $this->post('production/inward/receive', 'ProductionController', 'receiveProductionInward', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
+        $this->get('api/production/inward/lookup', 'ProductionController', 'productionInwardLookup', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
         
         // Production Sellers
         $this->get('production/sellers', 'ProductionController', 'sellerList', ['AuthMiddleware', ['PermissionMiddleware', 'sellers', 'view']]);
