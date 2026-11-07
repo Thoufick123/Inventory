@@ -111,6 +111,8 @@ if (!empty($authUser['shop_name'])) {
                         || hasPermission('batches', 'view')
                         || hasPermission('outward', 'view')
                         || hasPermission('production_inward', 'view')
+                        || hasPermission('production_billing', 'view')
+                        || hasPermission('production_billing_returns', 'view')
                         || hasPermission('warehouse_rework', 'view');
                     ?>
                     <?php if ($canViewProduction): ?>
@@ -132,6 +134,9 @@ if (!empty($authUser['shop_name'])) {
                             <?php endif; ?>
                             <?php if (hasPermission('production_billing', 'view')): ?>
                             <li><a href="<?= url('production/billing') ?>" class="<?= ($activeMenu ?? '') === 'prod-billing' ? 'active' : '' ?>">Billing</a></li>
+                            <?php endif; ?>
+                            <?php if (hasPermission('production_billing_returns', 'view')): ?>
+                            <li><a href="<?= url('production/billing/returns') ?>" class="<?= ($activeMenu ?? '') === 'prod-billing-returns' ? 'active' : '' ?>">Billing Returns &amp; Exchanges</a></li>
                             <?php endif; ?>
                             <?php if (hasPermission('damages', 'view')): ?>
                             <li><a href="<?= url('production/damages') ?>" class="<?= ($activeMenu ?? '') === 'prod-damages' ? 'active' : '' ?>">Damages</a></li>

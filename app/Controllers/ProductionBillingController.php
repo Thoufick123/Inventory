@@ -1,7 +1,106 @@
 <?php
 
+require_once BASE_PATH . '/app/Services/ProductionBillingReturnsService.php';
+
 class ProductionBillingController
 {
+    public function returnsIndex(): void
+    {
+        $tab = in_array($_GET['tab'] ?? 'all', ['all', 'returns', 'exchanges'], true) ? $_GET['tab'] : 'all';
+        Response::view('production.billing.returns', [
+            'pageTitle' => 'Production Billing Returns & Exchanges',
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-billing-returns',
+            'summary' => ProductionBillingReturnsService::getSummary(),
+            'recentReturns' => ProductionBillingReturnsService::getHistory($tab),
+            'currentTab' => $tab,
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Billing', 'url' => url('production/billing')],
+                ['label' => 'Returns & Exchanges'],
+            ],
+        ]);
+    }
+
+    public function returnsLookup(): void
+    {
+        $query = trim((string)($_GET['query'] ?? ''));
+        if ($query === '') {
+            Response::json(['success' => false, 'message' => 'Enter a Production Bill number or customer phone.'], 400);
+            return;
+        }
+        try {
+            $data = ProductionBillingReturnsService::lookupBill($query);
+            if (!$data) {
+                Response::json(['success' => false, 'message' => 'No Production Bill matched that number or phone.'], 404);
+                return;
+            }
+            Response::json(['success' => true, 'data' => $data]);
+        } catch (\Throwable $e) {
+            Response::json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    public function processReturn(): void
+    {
+        $payload = $_POST;
+        $rawInput = file_get_contents('php://input');
+        if ($rawInput !== '') {
+            $jsonPayload = json_decode($rawInput, true);
+            if (is_array($jsonPayload)) {
+                $payload = array_merge($payload, $jsonPayload);
+            }
+        }
+        $csrfToken = $payload['_csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
+        if (!CSRF::validate($csrfToken)) {
+            Response::json(['success' => false, 'message' => 'Security token expired or invalid form submission.'], 403);
+            return;
+        }
+
+        try {
+            $result = ProductionBillingReturnsService::process($payload, (int)(Session::userId() ?? 0));
+            Response::json([
+                'success' => true,
+                'message' => 'Production return ' . $result['return_number'] . ' processed.',
+                'return_id' => $result['return_id'],
+                'return_number' => $result['return_number'],
+                'invoice_url' => url('production/billing/returns/print/' . $result['return_id']),
+            ]);
+        } catch (\Throwable $e) {
+            Response::json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    public function viewReturn(string $id): void
+    {
+        $data = ProductionBillingReturnsService::getDetails((int)$id);
+        if (!$data) {
+            Response::redirect(url('production/billing/returns'), 'error', 'Production return was not found.');
+            return;
+        }
+        Response::view('production.billing.return_view', [
+            'pageTitle' => 'Production Return ' . $data['return']['return_number'],
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-billing-returns',
+            'return' => $data['return'],
+            'returnItems' => $data['items'],
+        ]);
+    }
+
+    public function printReturn(string $id): void
+    {
+        $data = ProductionBillingReturnsService::getDetails((int)$id);
+        if (!$data) {
+            Response::redirect(url('production/billing/returns'), 'error', 'Production return was not found.');
+            return;
+        }
+        Response::viewOnly('production.billing.return_invoice', [
+            'return' => $data['return'],
+            'returnItems' => $data['items'],
+            'sellerCompany' => SettingsService::getGroup('company'),
+        ]);
+    }
+
     public function billList(): void
     {
         $bills = Database::fetchAll(
@@ -29,6 +128,10 @@ class ProductionBillingController
         $bill = $this->findBill((int)$id);
         if (!$bill) {
             Response::redirect('production/billing', 'error', 'Bill not found.');
+            return;
+        }
+        if ($this->billHasReturns((int)$id)) {
+            Response::redirect(url('production/billing/view/' . (int)$id), 'error', 'A bill with processed returns or exchanges cannot be edited.');
             return;
         }
 
@@ -120,12 +223,20 @@ class ProductionBillingController
             Response::redirect('production/billing', 'error', 'Bill not found.');
             return;
         }
+        if ($this->billHasReturns($billId)) {
+            Response::redirect(url('production/billing/view/' . $billId), 'error', 'A bill with processed returns or exchanges cannot be edited.');
+            return;
+        }
         $this->persistBill($billId);
     }
 
     public function deleteBill(string $id): void
     {
         $billId = (int)$id;
+        if ($this->billHasReturns($billId)) {
+            Response::redirect(url('production/billing/view/' . $billId), 'error', 'A bill with processed returns or exchanges cannot be deleted.');
+            return;
+        }
         try {
             Database::execute("DELETE FROM production_bills WHERE id = ?", [$billId]);
             Response::redirect('production/billing', 'success', 'Production bill deleted.');
@@ -152,6 +263,11 @@ class ProductionBillingController
         return $id > 0
             ? Database::fetchOne("SELECT * FROM production_bills WHERE id = ?", [$id])
             : null;
+    }
+
+    private function billHasReturns(int $billId): bool
+    {
+        return (bool)Database::fetchOne('SELECT id FROM production_bill_returns WHERE bill_id = ? LIMIT 1', [$billId]);
     }
 
     private function loadBill(int $id): ?array
@@ -222,8 +338,8 @@ class ProductionBillingController
         }
 
         $soldRows = $excludeBillId > 0
-            ? Database::fetchAll("SELECT tag_code FROM production_bill_item_tags WHERE bill_id <> ?", [$excludeBillId])
-            : Database::fetchAll("SELECT tag_code FROM production_bill_item_tags");
+            ? Database::fetchAll("SELECT tag_code FROM production_bill_item_tags WHERE status IN ('BILLED', 'DAMAGED') AND bill_id <> ?", [$excludeBillId])
+            : Database::fetchAll("SELECT tag_code FROM production_bill_item_tags WHERE status IN ('BILLED', 'DAMAGED')");
         $soldTags = array_fill_keys(array_map(
             static fn(array $row): string => strtoupper(trim((string)$row['tag_code'])),
             $soldRows
@@ -574,10 +690,26 @@ class ProductionBillingController
                 );
                 $billItemId = (int)Database::lastInsertId();
                 foreach ($item['tags'] as $tag) {
-                    Database::execute(
-                        "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, qc_item_id, tag_code) VALUES (?, ?, ?, ?)",
-                        [$billId, $billItemId, $stock['qc_item_id'], $tag]
+                    $existingClaim = Database::fetchOne(
+                        'SELECT id, status FROM production_bill_item_tags WHERE tag_code = ? FOR UPDATE',
+                        [$tag]
                     );
+                    if ($existingClaim) {
+                        if ($existingClaim['status'] !== 'RETURNED') {
+                            throw new RuntimeException('A selected QR is already claimed by another bill or marked damaged.');
+                        }
+                        Database::execute(
+                            "UPDATE production_bill_item_tags
+                             SET bill_id = ?, bill_item_id = ?, qc_item_id = ?, status = 'BILLED'
+                             WHERE id = ? AND status = 'RETURNED'",
+                            [$billId, $billItemId, $stock['qc_item_id'], (int)$existingClaim['id']]
+                        );
+                    } else {
+                        Database::execute(
+                            "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, qc_item_id, tag_code, status) VALUES (?, ?, ?, ?, 'BILLED')",
+                            [$billId, $billItemId, $stock['qc_item_id'], $tag]
+                        );
+                    }
                 }
             }
             Database::commit();

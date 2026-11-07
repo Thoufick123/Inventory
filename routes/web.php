@@ -363,6 +363,11 @@ class Router {
         $this->post('production/billing/delete/{id}', 'ProductionBillingController', 'deleteBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'delete']]);
         $this->get('production/billing/print/{id}', 'ProductionBillingController', 'printBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'print']]);
         $this->get('api/production/billing/search', 'ProductionBillingController', 'searchInventory', ['AuthMiddleware']);
+        $this->get('production/billing/returns', 'ProductionBillingController', 'returnsIndex', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'view']]);
+        $this->get('production/billing/returns/lookup', 'ProductionBillingController', 'returnsLookup', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'view']]);
+        $this->post('production/billing/returns/process', 'ProductionBillingController', 'processReturn', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'process']]);
+        $this->get('production/billing/returns/view/{id}', 'ProductionBillingController', 'viewReturn', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'view']]);
+        $this->get('production/billing/returns/print/{id}', 'ProductionBillingController', 'printReturn', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'print']]);
 
         // Production Fabric & Roll Damages
         $this->get('production/damages', 'ProductionController', 'damageList', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'view']]);

@@ -3,9 +3,14 @@
         <h4 class="mb-1 fw-bold">Production Billing</h4>
         <div class="text-muted small">Bills from QC-passed Production Inventory</div>
     </div>
-    <?php if (hasPermission('production_billing', 'create')): ?>
-        <a class="btn btn-primary" href="<?= url('production/billing/create') ?>"><i class="bi bi-plus-lg me-1"></i>Create Bill</a>
-    <?php endif; ?>
+    <div class="d-flex gap-2">
+        <?php if (hasPermission('production_billing_returns', 'view')): ?>
+            <a class="btn btn-outline-primary" href="<?= url('production/billing/returns') ?>"><i class="bi bi-arrow-left-right me-1"></i>Returns &amp; Exchanges</a>
+        <?php endif; ?>
+        <?php if (hasPermission('production_billing', 'create')): ?>
+            <a class="btn btn-primary" href="<?= url('production/billing/create') ?>"><i class="bi bi-plus-lg me-1"></i>Create Bill</a>
+        <?php endif; ?>
+    </div>
 </div>
 
 <div class="card border-0 shadow-sm">

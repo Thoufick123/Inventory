@@ -43,6 +43,10 @@ $definitions = array_merge($definitions, [
     ['module' => 'production_billing', 'action' => 'edit', 'desc' => 'Edit Production Bills'],
     ['module' => 'production_billing', 'action' => 'delete', 'desc' => 'Delete Production Bills'],
     ['module' => 'production_billing', 'action' => 'print', 'desc' => 'Print Production Bills'],
+    ['module' => 'production_billing_returns', 'action' => 'view', 'desc' => 'View Production Billing Returns & Exchanges'],
+    ['module' => 'production_billing_returns', 'action' => 'create', 'desc' => 'Create Production Billing Return or Exchange'],
+    ['module' => 'production_billing_returns', 'action' => 'process', 'desc' => 'Process Production Billing Return or Exchange'],
+    ['module' => 'production_billing_returns', 'action' => 'print', 'desc' => 'Print Production Billing Return or Exchange'],
 
     // WhatsApp Channel Hub
     ['module' => 'whatsapp_orders', 'action' => 'view', 'desc' => 'View WhatsApp B2B Orders and history'],

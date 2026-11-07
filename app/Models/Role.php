@@ -277,6 +277,8 @@ class Role {
                 'department' => 'PRODUCTION',
                 'submodules' => [
                     'production'          => ['name' => 'Dashboard', 'icon' => 'bi-speedometer', 'desc' => 'Plant overview, line throughput, and live tracking', 'department' => 'PRODUCTION'],
+                    'production_billing'  => ['name' => 'Billing', 'icon' => 'bi-receipt', 'desc' => 'Production product billing and tax invoices', 'department' => 'PRODUCTION'],
+                    'production_billing_returns' => ['name' => 'Billing Returns & Exchanges', 'icon' => 'bi-arrow-left-right', 'desc' => 'Production customer returns, exchanges, refunds, and QR restocking', 'department' => 'PRODUCTION'],
                     'sellers'             => ['name' => 'Sellers', 'icon' => 'bi-person-badge', 'desc' => 'Job worker directory, vendor ledgers, and contract rates', 'department' => 'PRODUCTION'],
                     'damages'             => ['name' => 'Damages', 'icon' => 'bi-exclamation-octagon', 'desc' => 'Defective fabric, floor damages, and scrap recovery logs', 'department' => 'PRODUCTION'],
                     'catalog'             => ['name' => 'Catalog', 'icon' => 'bi-journal-bookmark', 'desc' => 'Design catalogs, style codes, and Bill of Materials (BOM)', 'department' => 'PRODUCTION'],
