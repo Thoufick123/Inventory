@@ -40,6 +40,7 @@ class ProductionBillingController
                 'activeMenu' => 'prod-billing-returns',
                 'schemaIssues' => [],
                 'queryFailed' => true,
+                'diagnosticMessage' => function_exists('isSuperAdmin') && isSuperAdmin() ? $e->getMessage() : null,
             ]);
         }
     }

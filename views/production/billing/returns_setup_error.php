@@ -20,6 +20,12 @@
                 </div>
             <?php else: ?>
                 <div class="alert alert-danger">A database query failed while loading this page. The exact exception was written to the application error log.</div>
+                <?php if (!empty($diagnosticMessage)): ?>
+                    <details class="mb-3">
+                        <summary class="text-danger fw-semibold">Super-admin database diagnostic</summary>
+                        <pre class="bg-light border rounded p-3 mt-2 mb-0 text-wrap"><code><?= e($diagnosticMessage) ?></code></pre>
+                    </details>
+                <?php endif; ?>
             <?php endif; ?>
 
             <ol class="mb-4">

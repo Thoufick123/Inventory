@@ -2,13 +2,15 @@
 
 class ProductionBillingReturnsService {
     public static function getSchemaIssues(): array {
-        $requiredTables = [
-            'production_bills',
-            'production_bill_items',
-            'production_bill_item_tags',
-            'production_bill_returns',
-            'production_bill_return_items',
+        $requiredColumns = [
+            'production_bills' => ['id', 'bill_number', 'bill_date', 'buyer_type', 'customer_name', 'customer_phone', 'company_name', 'company_phone', 'total_amount'],
+            'production_bill_items' => ['id', 'bill_id', 'qc_item_id', 'variant_id', 'product_name', 'sku', 'size_name', 'color_name', 'quantity', 'unit_price', 'total_amount'],
+            'production_bill_item_tags' => ['id', 'bill_id', 'bill_item_id', 'qc_item_id', 'tag_code', 'status'],
+            'production_bill_returns' => ['id', 'return_number', 'bill_id', 'action_type', 'reason', 'refund_amount', 'new_amount', 'difference_amount', 'payment_action', 'settlement_mode', 'notes', 'processed_by', 'created_at'],
+            'production_bill_return_items' => ['id', 'return_id', 'original_bill_item_id', 'original_qc_item_id', 'original_variant_id', 'original_tag_code', 'item_condition', 'original_product_name', 'original_sku', 'original_size_name', 'original_color_name', 'original_unit_price', 'replacement_qc_item_id', 'replacement_variant_id', 'replacement_tag_code', 'replacement_product_name', 'replacement_sku', 'replacement_size_name', 'replacement_color_name', 'replacement_unit_price'],
+            'users' => ['id', 'full_name'],
         ];
+        $requiredTables = array_keys($requiredColumns);
         $rows = Database::fetchAll(
             "SELECT TABLE_NAME FROM information_schema.TABLES
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?, ?, ?, ?)",
@@ -19,16 +21,18 @@ class ProductionBillingReturnsService {
         foreach ($requiredTables as $table) {
             if (!isset($existingTables[$table])) {
                 $issues[] = "Missing database table: {$table}";
+                continue;
             }
-        }
-        if (isset($existingTables['production_bill_item_tags'])) {
-            $statusColumn = Database::fetchOne(
+            $columnRows = Database::fetchAll(
                 "SELECT COLUMN_NAME FROM information_schema.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
-                ['production_bill_item_tags', 'status']
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+                [$table]
             );
-            if (!$statusColumn) {
-                $issues[] = 'Missing production_bill_item_tags.status column';
+            $existingColumns = array_fill_keys(array_column($columnRows, 'COLUMN_NAME'), true);
+            foreach ($requiredColumns[$table] as $column) {
+                if (!isset($existingColumns[$column])) {
+                    $issues[] = "Missing database column: {$table}.{$column}";
+                }
             }
         }
         return $issues;
