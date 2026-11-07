@@ -39,13 +39,11 @@ class ProductionBillingReturnsService {
                     COALESCE(pb.customer_name, pb.company_name, 'Production Customer') AS customer_name,
                     COALESCE(pb.customer_phone, pb.company_phone, '') AS customer_phone,
                     u.full_name AS processed_by_name,
-                    COUNT(pri.id) AS item_count
+                    (SELECT COUNT(*) FROM production_bill_return_items pri WHERE pri.return_id = pr.id) AS item_count
              FROM production_bill_returns pr
              JOIN production_bills pb ON pb.id = pr.bill_id
              LEFT JOIN users u ON u.id = pr.processed_by
-             LEFT JOIN production_bill_return_items pri ON pri.return_id = pr.id
              {$where}
-             GROUP BY pr.id
              ORDER BY pr.created_at DESC, pr.id DESC
              LIMIT 200"
         );
@@ -75,12 +73,13 @@ class ProductionBillingReturnsService {
 
         $items = Database::fetchAll(
             "SELECT pbi.*,
-                    COUNT(CASE WHEN tag.status = 'BILLED' THEN 1 END) AS active_tag_count,
-                    GROUP_CONCAT(CASE WHEN tag.status = 'BILLED' THEN tag.tag_code END ORDER BY tag.id SEPARATOR ',') AS active_tags
+                (SELECT COUNT(*) FROM production_bill_item_tags tag
+                 WHERE tag.bill_item_id = pbi.id AND tag.bill_id = pbi.bill_id AND tag.status = 'BILLED') AS active_tag_count,
+                (SELECT GROUP_CONCAT(tag.tag_code ORDER BY tag.id SEPARATOR ',')
+                 FROM production_bill_item_tags tag
+                 WHERE tag.bill_item_id = pbi.id AND tag.bill_id = pbi.bill_id AND tag.status = 'BILLED') AS active_tags
              FROM production_bill_items pbi
-             LEFT JOIN production_bill_item_tags tag ON tag.bill_item_id = pbi.id AND tag.bill_id = pbi.bill_id
              WHERE pbi.bill_id = ?
-             GROUP BY pbi.id
              ORDER BY pbi.id",
             [(int)$bill['id']]
         );
