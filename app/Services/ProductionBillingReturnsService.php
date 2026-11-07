@@ -1,6 +1,39 @@
 <?php
 
 class ProductionBillingReturnsService {
+    public static function getSchemaIssues(): array {
+        $requiredTables = [
+            'production_bills',
+            'production_bill_items',
+            'production_bill_item_tags',
+            'production_bill_returns',
+            'production_bill_return_items',
+        ];
+        $rows = Database::fetchAll(
+            "SELECT TABLE_NAME FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?, ?, ?, ?)",
+            $requiredTables
+        );
+        $existingTables = array_fill_keys(array_column($rows, 'TABLE_NAME'), true);
+        $issues = [];
+        foreach ($requiredTables as $table) {
+            if (!isset($existingTables[$table])) {
+                $issues[] = "Missing database table: {$table}";
+            }
+        }
+        if (isset($existingTables['production_bill_item_tags'])) {
+            $statusColumn = Database::fetchOne(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                ['production_bill_item_tags', 'status']
+            );
+            if (!$statusColumn) {
+                $issues[] = 'Missing production_bill_item_tags.status column';
+            }
+        }
+        return $issues;
+    }
+
     public static function getSummary(): array {
         $summary = Database::fetchOne(
             "SELECT COUNT(*) AS total_transactions,

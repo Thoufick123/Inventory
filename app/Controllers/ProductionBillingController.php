@@ -7,19 +7,41 @@ class ProductionBillingController
     public function returnsIndex(): void
     {
         $tab = in_array($_GET['tab'] ?? 'all', ['all', 'returns', 'exchanges'], true) ? $_GET['tab'] : 'all';
-        Response::view('production.billing.returns', [
-            'pageTitle' => 'Production Billing Returns & Exchanges',
-            'activeModule' => 'production',
-            'activeMenu' => 'prod-billing-returns',
-            'summary' => ProductionBillingReturnsService::getSummary(),
-            'recentReturns' => ProductionBillingReturnsService::getHistory($tab),
-            'currentTab' => $tab,
-            'breadcrumb' => [
-                ['label' => 'Production', 'url' => url('production/dashboard')],
-                ['label' => 'Billing', 'url' => url('production/billing')],
-                ['label' => 'Returns & Exchanges'],
-            ],
-        ]);
+        try {
+            $schemaIssues = ProductionBillingReturnsService::getSchemaIssues();
+            if ($schemaIssues) {
+                Response::view('production.billing.returns_setup_error', [
+                    'pageTitle' => 'Production Returns Setup Required',
+                    'activeModule' => 'production',
+                    'activeMenu' => 'prod-billing-returns',
+                    'schemaIssues' => $schemaIssues,
+                ]);
+                return;
+            }
+
+            Response::view('production.billing.returns', [
+                'pageTitle' => 'Production Billing Returns & Exchanges',
+                'activeModule' => 'production',
+                'activeMenu' => 'prod-billing-returns',
+                'summary' => ProductionBillingReturnsService::getSummary(),
+                'recentReturns' => ProductionBillingReturnsService::getHistory($tab),
+                'currentTab' => $tab,
+                'breadcrumb' => [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Billing', 'url' => url('production/billing')],
+                    ['label' => 'Returns & Exchanges'],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            error_log('Production Billing Returns page failed: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            Response::view('production.billing.returns_setup_error', [
+                'pageTitle' => 'Production Returns Setup Error',
+                'activeModule' => 'production',
+                'activeMenu' => 'prod-billing-returns',
+                'schemaIssues' => [],
+                'queryFailed' => true,
+            ]);
+        }
     }
 
     public function returnsLookup(): void
