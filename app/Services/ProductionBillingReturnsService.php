@@ -39,29 +39,42 @@ class ProductionBillingReturnsService {
     }
 
     public static function getSummary(): array {
-        $summary = Database::fetchOne(
-            "SELECT COUNT(*) AS total_transactions,
-                    SUM(DATE(created_at) = CURDATE()) AS today_transactions,
-                    SUM(action_type = 'RETURN') AS total_returns_count,
-                    SUM(action_type = 'EXCHANGE') AS total_exchanges_count,
-                    COALESCE(SUM(CASE WHEN action_type = 'RETURN' THEN refund_amount ELSE 0 END), 0) AS total_refund_amount
-             FROM production_bill_returns"
-        ) ?: [];
-        $items = Database::fetchOne(
-            "SELECT COUNT(*) AS returned_items,
-                    SUM(item_condition = 'DAMAGED') AS damaged_items
-             FROM production_bill_return_items"
-        ) ?: [];
-        return array_merge([
-            'total_transactions' => 0,
-            'today_transactions' => 0,
-            'total_returns_count' => 0,
-            'total_exchanges_count' => 0,
-            'total_refund_amount' => 0,
-        ], $summary, [
-            'total_items_returned' => (int)($items['returned_items'] ?? 0),
-            'total_damaged_pcs' => (int)($items['damaged_items'] ?? 0),
-        ]);
+        try {
+            $summary = Database::fetchOne(
+                "SELECT COUNT(*) AS total_transactions,
+                        SUM(DATE(created_at) = CURDATE()) AS today_transactions,
+                        SUM(action_type = 'RETURN') AS total_returns_count,
+                        SUM(action_type = 'EXCHANGE') AS total_exchanges_count,
+                        COALESCE(SUM(CASE WHEN action_type = 'RETURN' THEN refund_amount ELSE 0 END), 0) AS total_refund_amount
+                 FROM production_bill_returns"
+            ) ?: [];
+            $items = Database::fetchOne(
+                "SELECT COUNT(*) AS returned_items,
+                        SUM(item_condition = 'DAMAGED') AS damaged_items
+                 FROM production_bill_return_items"
+            ) ?: [];
+            return array_merge([
+                'total_transactions' => 0,
+                'today_transactions' => 0,
+                'total_returns_count' => 0,
+                'total_exchanges_count' => 0,
+                'total_refund_amount' => 0,
+            ], $summary, [
+                'total_items_returned' => (int)($items['returned_items'] ?? 0),
+                'total_damaged_pcs' => (int)($items['damaged_items'] ?? 0),
+            ]);
+        } catch (Throwable $e) {
+            error_log('ProductionBillingReturnsService::getSummary failed: ' . $e->getMessage());
+            return [
+                'total_transactions' => 0,
+                'today_transactions' => 0,
+                'total_returns_count' => 0,
+                'total_exchanges_count' => 0,
+                'total_refund_amount' => 0,
+                'total_items_returned' => 0,
+                'total_damaged_pcs' => 0,
+            ];
+        }
     }
 
     public static function getHistory(string $tab = 'all'): array {
@@ -71,19 +84,25 @@ class ProductionBillingReturnsService {
         } elseif ($tab === 'exchanges') {
             $where = " WHERE pr.action_type = 'EXCHANGE'";
         }
-        return Database::fetchAll(
-            "SELECT pr.*, pb.bill_number, pb.bill_date, pb.buyer_type,
-                    COALESCE(pb.customer_name, pb.company_name, 'Production Customer') AS customer_name,
-                    COALESCE(pb.customer_phone, pb.company_phone, '') AS customer_phone,
-                    u.full_name AS processed_by_name,
-                    (SELECT COUNT(*) FROM production_bill_return_items pri WHERE pri.return_id = pr.id) AS item_count
-             FROM production_bill_returns pr
-             JOIN production_bills pb ON pb.id = pr.bill_id
-             LEFT JOIN users u ON u.id = pr.processed_by
-             {$where}
-             ORDER BY pr.created_at DESC, pr.id DESC
-             LIMIT 200"
-        );
+
+        try {
+            return Database::fetchAll(
+                "SELECT pr.*, pb.bill_number, pb.bill_date, pb.buyer_type,
+                        COALESCE(pb.customer_name, pb.company_name, 'Production Customer') AS customer_name,
+                        COALESCE(pb.customer_phone, pb.company_phone, '') AS customer_phone,
+                        u.full_name AS processed_by_name,
+                        (SELECT COUNT(*) FROM production_bill_return_items pri WHERE pri.return_id = pr.id) AS item_count
+                 FROM production_bill_returns pr
+                 JOIN production_bills pb ON pb.id = pr.bill_id
+                 LEFT JOIN users u ON u.id = pr.processed_by
+                 {$where}
+                 ORDER BY pr.created_at DESC, pr.id DESC
+                 LIMIT 200"
+            );
+        } catch (Throwable $e) {
+            error_log('ProductionBillingReturnsService::getHistory failed: ' . $e->getMessage());
+            return [];
+        }
     }
 
     public static function lookupBill(string $query): ?array {
