@@ -13,7 +13,7 @@ class ProductionBillingReturnsService {
         $requiredTables = array_keys($requiredColumns);
         $rows = Database::fetchAll(
             "SELECT TABLE_NAME FROM information_schema.TABLES
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?, ?, ?, ?)",
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (" . implode(', ', array_fill(0, count($requiredTables), '?')) . ")",
             $requiredTables
         );
         $existingTables = array_fill_keys(array_column($rows, 'TABLE_NAME'), true);

@@ -6,7 +6,10 @@ class ProductionBillingController
 {
     public function returnsIndex(): void
     {
-        $tab = in_array($_GET['tab'] ?? 'all', ['all', 'returns', 'exchanges'], true) ? $_GET['tab'] : 'all';
+        $tab = $_GET['tab'] ?? 'all';
+        if (!is_string($tab) || !in_array($tab, ['all', 'returns', 'exchanges'], true)) {
+            $tab = 'all';
+        }
         try {
             $schemaIssues = ProductionBillingReturnsService::getSchemaIssues();
             if ($schemaIssues) {
