@@ -213,7 +213,7 @@ $recentReturns = $recentReturns ?? [];
             });
             const payload = await response.json();
             if (!response.ok || !payload.success) throw new Error(payload.message || 'Return processing failed.');
-            window.location.href = payload.invoice_url;
+            window.location.href = payload.details_url;
         } catch (error) {
             setMessage(error.message, 'danger');
             button.disabled = false;

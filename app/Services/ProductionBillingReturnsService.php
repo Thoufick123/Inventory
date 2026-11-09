@@ -8,6 +8,7 @@ class ProductionBillingReturnsService {
             'production_bill_item_tags' => ['id', 'bill_id', 'bill_item_id', 'qc_item_id', 'tag_code', 'status'],
             'production_bill_returns' => ['id', 'return_number', 'bill_id', 'action_type', 'reason', 'refund_amount', 'new_amount', 'difference_amount', 'payment_action', 'settlement_mode', 'notes', 'processed_by', 'created_at'],
             'production_bill_return_items' => ['id', 'return_id', 'original_bill_item_id', 'original_qc_item_id', 'original_variant_id', 'original_tag_code', 'item_condition', 'original_product_name', 'original_sku', 'original_size_name', 'original_color_name', 'original_unit_price', 'replacement_qc_item_id', 'replacement_variant_id', 'replacement_tag_code', 'replacement_product_name', 'replacement_sku', 'replacement_size_name', 'replacement_color_name', 'replacement_unit_price'],
+            'production_return_inventory' => ['id', 'return_id', 'return_item_id', 'qc_batch_id', 'qc_item_id', 'new_tag_code', 'status'],
             'users' => ['id', 'full_name'],
         ];
         $requiredTables = array_keys($requiredColumns);
@@ -173,7 +174,11 @@ class ProductionBillingReturnsService {
             return null;
         }
         $items = Database::fetchAll(
-            "SELECT * FROM production_bill_return_items WHERE return_id = ? ORDER BY id",
+            "SELECT pri.*, r.id AS returned_inventory_id, r.new_tag_code AS returned_inventory_tag,
+                    r.status AS returned_inventory_status
+             FROM production_bill_return_items pri
+             LEFT JOIN production_return_inventory r ON r.return_item_id = pri.id
+             WHERE pri.return_id = ? ORDER BY pri.id",
             [$returnId]
         );
         return ['return' => $return, 'items' => $items];
@@ -218,10 +223,14 @@ class ProductionBillingReturnsService {
                 $seenOriginal[strtoupper($tagCode)] = true;
                 $tag = Database::fetchOne(
                     "SELECT t.*, bi.product_name, bi.sku, bi.size_name, bi.color_name, bi.unit_price,
-                            bi.total_amount, bi.quantity, pv.id AS variant_id
+                            bi.total_amount, bi.quantity, pv.id AS variant_id,
+                            qi.qc_batch_id, pp.production_unit_id
                      FROM production_bill_item_tags t
                      JOIN production_bill_items bi ON bi.id = t.bill_item_id
                      LEFT JOIN product_variants pv ON pv.id = bi.variant_id
+                     JOIN qc_items qi ON qi.id = t.qc_item_id
+                     JOIN qc_batches qb ON qb.id = qi.qc_batch_id
+                     JOIN production_programs pp ON pp.id = qb.program_id
                      WHERE t.bill_id = ? AND t.tag_code = ? AND t.status = 'BILLED'
                      ORDER BY t.id DESC LIMIT 1 FOR UPDATE",
                     [$billId, $tagCode]
@@ -310,10 +319,19 @@ class ProductionBillingReturnsService {
                         $replacement['size_name'] ?? null, $replacement['color_name'] ?? null,
                         $entry['replacement_total'] ?? 0]
                 );
+                $returnItemId = (int)Database::lastInsertId();
+                if ($entry['condition'] === 'GOOD') {
+                    self::createReturnedInventoryItem($returnId, $returnItemId, $tag, $userId);
+                }
 
                 Database::execute(
                     "UPDATE production_bill_item_tags SET status = ? WHERE id = ? AND status = 'BILLED'",
                     [$entry['condition'] === 'GOOD' ? 'RETURNED' : 'DAMAGED', (int)$tag['id']]
+                );
+                Database::execute(
+                    "UPDATE production_return_inventory SET status = 'RETIRED', updated_at = NOW()
+                     WHERE new_tag_code = ? AND status IN ('AVAILABLE', 'BILLED')",
+                    [$tag['tag_code']]
                 );
                 if ($replacement) {
                     $replacementClaim = Database::fetchOne(
@@ -357,9 +375,51 @@ class ProductionBillingReturnsService {
         }
     }
 
+    private static function createReturnedInventoryItem(int $returnId, int $returnItemId, array $originalTag, int $userId): string
+    {
+        do {
+            $newTag = 'RTN' . date('ymd') . strtoupper(bin2hex(random_bytes(3)));
+            $exists = Database::fetchOne(
+                "SELECT new_tag_code FROM production_return_inventory WHERE new_tag_code = ?
+                 UNION ALL
+                 SELECT tag_code AS new_tag_code FROM production_bill_item_tags WHERE tag_code = ?
+                 UNION ALL
+                 SELECT code AS new_tag_code FROM production_deleted_label_codes WHERE code = ?
+                 LIMIT 1",
+                [$newTag, $newTag, $newTag]
+            );
+        } while ($exists);
+
+        Database::execute(
+            "INSERT INTO production_return_inventory
+                (return_id, return_item_id, production_unit_id, qc_batch_id, qc_item_id, variant_id,
+                 original_tag_code, new_tag_code, product_name, sku, size_name, color_name, unit_value,
+                 status, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE', ?)",
+            [
+                $returnId,
+                $returnItemId,
+                !empty($originalTag['production_unit_id']) ? (int)$originalTag['production_unit_id'] : null,
+                (int)$originalTag['qc_batch_id'],
+                (int)$originalTag['qc_item_id'],
+                !empty($originalTag['variant_id']) ? (int)$originalTag['variant_id'] : null,
+                $originalTag['tag_code'],
+                $newTag,
+                $originalTag['product_name'],
+                $originalTag['sku'],
+                $originalTag['size_name'],
+                $originalTag['color_name'],
+                (float)$originalTag['unit_price'],
+                $userId ?: null,
+            ]
+        );
+
+        return $newTag;
+    }
+
     private static function findAvailablePiece(string $tagCode): ?array {
         $activeClaim = Database::fetchOne(
-            "SELECT id FROM production_bill_item_tags WHERE tag_code = ? AND status IN ('BILLED','DAMAGED') LIMIT 1",
+            "SELECT id FROM production_bill_item_tags WHERE tag_code = ? AND status IN ('BILLED','DAMAGED','RETURNED') LIMIT 1",
             [$tagCode]
         );
         if ($activeClaim) {

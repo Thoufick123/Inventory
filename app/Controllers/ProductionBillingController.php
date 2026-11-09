@@ -91,6 +91,7 @@ class ProductionBillingController
                 'return_id' => $result['return_id'],
                 'return_number' => $result['return_number'],
                 'invoice_url' => url('production/billing/returns/print/' . $result['return_id']),
+                'details_url' => url('production/billing/returns/view/' . $result['return_id']),
             ]);
         } catch (\Throwable $e) {
             Response::json(['success' => false, 'message' => $e->getMessage()], 400);
@@ -716,12 +717,16 @@ class ProductionBillingController
                 );
                 $billItemId = (int)Database::lastInsertId();
                 foreach ($item['tags'] as $tag) {
+                    $returnedInventory = Database::fetchOne(
+                        "SELECT id FROM production_return_inventory WHERE new_tag_code = ? AND status = 'AVAILABLE' FOR UPDATE",
+                        [$tag]
+                    );
                     $existingClaim = Database::fetchOne(
                         'SELECT id, status FROM production_bill_item_tags WHERE tag_code = ? FOR UPDATE',
                         [$tag]
                     );
                     if ($existingClaim) {
-                        if ($existingClaim['status'] !== 'RETURNED') {
+                        if ($existingClaim['status'] !== 'RETURNED' || !$returnedInventory) {
                             throw new RuntimeException('A selected QR is already claimed by another bill or marked damaged.');
                         }
                         Database::execute(
@@ -734,6 +739,13 @@ class ProductionBillingController
                         Database::execute(
                             "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, qc_item_id, tag_code, status) VALUES (?, ?, ?, ?, 'BILLED')",
                             [$billId, $billItemId, $stock['qc_item_id'], $tag]
+                        );
+                    }
+                    if ($returnedInventory) {
+                        Database::execute(
+                            "UPDATE production_return_inventory SET status = 'BILLED', updated_at = NOW()
+                             WHERE id = ? AND status = 'AVAILABLE'",
+                            [(int)$returnedInventory['id']]
                         );
                     }
                 }

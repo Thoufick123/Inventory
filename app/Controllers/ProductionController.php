@@ -8651,14 +8651,22 @@ class ProductionController {
         ) as $damageRow) {
             $damagedCountsByQCItem[(int)$damageRow['qc_item_id']] = (int)$damageRow['damaged_count'];
         }
+        $returnedUnitClause = $inventoryUnitId ? ' AND production_unit_id = ' . (int)$inventoryUnitId : '';
+        $returnedCountsByQCItem = [];
+        foreach (Database::fetchAll(
+            "SELECT qc_item_id, COUNT(*) AS returned_count
+             FROM production_return_inventory
+             WHERE status = 'AVAILABLE'{$returnedUnitClause}
+             GROUP BY qc_item_id"
+        ) as $returnedRow) {
+            $returnedCountsByQCItem[(int)$returnedRow['qc_item_id']] = (int)$returnedRow['returned_count'];
+        }
 
         $deletedCodeRows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
         $deletedCodes = array_column($deletedCodeRows, 'code');
         $deletedCountsByBatch = [];
-        if (!empty($deletedCodes)) {
-            foreach (array_unique(array_map(static fn(array $item): int => (int)$item['qc_batch_id'], $items)) as $qcBatchId) {
-                $deletedCountsByBatch[$qcBatchId] = ProductionService::getDeletedQCPieceCounts($qcBatchId, $deletedCodes);
-            }
+        foreach (array_unique(array_map(static fn(array $item): int => (int)$item['qc_batch_id'], $items)) as $qcBatchId) {
+            $deletedCountsByBatch[$qcBatchId] = ProductionService::getUnavailableQCPieceCounts($qcBatchId, $deletedCodes);
         }
 
         // Fetch all outward dispatches to link with batches/programs
@@ -8727,7 +8735,8 @@ class ProductionController {
             $price = (float)(($it['discount_price'] ?? 0) > 0 ? $it['discount_price'] : ($it['base_price'] ?? 0));
             $deletedQty = (int)($deletedCountsByBatch[(int)$batchId][(int)$it['id']] ?? 0);
             $damagedQty = (int)($damagedCountsByQCItem[(int)$it['id']] ?? 0);
-            $inventoryPassedQty = max(0, $passedQty - $deletedQty - $damagedQty);
+            $returnedQty = (int)($returnedCountsByQCItem[(int)$it['id']] ?? 0);
+            $inventoryPassedQty = max(0, $passedQty - $deletedQty - $damagedQty) + $returnedQty;
             $batches[$batchId]['total_passed_pieces'] += $passedQty;
             $batches[$batchId]['total_rework_pieces'] += $reworkQty;
             $batches[$batchId]['total_rejected_pieces'] += $rejectedQty;
@@ -9039,6 +9048,7 @@ class ProductionController {
                 true
             );
         }
+        $billedTagsByItem = ProductionService::getUnavailableQCPieceTags($id);
         $unavailableDamageTags = ProductionInventoryDamage::getUnavailableTags($id);
 
         // Build piece-by-piece records
@@ -9047,6 +9057,8 @@ class ProductionController {
         $eligiblePieceIndex = 0;
         $batchPieceSeq = 1;
         $totalPieces = 0;
+        $totalPassedPieces = 0;
+        $totalBilledPieces = 0;
         $totalDamagedPieces = 0;
         $totalValue  = 0.0;
 
@@ -9096,6 +9108,12 @@ class ProductionController {
                     continue;
                 }
 
+                $totalPassedPieces++;
+                if (isset($billedTagsByItem[(int)$it['id']][strtoupper(trim($pieceTagCode))])) {
+                    $totalBilledPieces++;
+                    continue;
+                }
+
                 $totalPieces++;
                 $totalValue += $price;
                 $isDamaged = isset($unavailableDamageTags[strtoupper(trim($pieceTagCode))]);
@@ -9139,6 +9157,56 @@ class ProductionController {
             }
         }
 
+        $returnedInventoryRows = Database::fetchAll(
+            "SELECT * FROM production_return_inventory
+             WHERE qc_batch_id = ? AND status = 'AVAILABLE' ORDER BY id ASC",
+            [$id]
+        );
+        foreach ($returnedInventoryRows as $returnedItem) {
+            $itemId = (int)$returnedItem['qc_item_id'];
+            $tagCode = trim((string)$returnedItem['new_tag_code']);
+            $normalizedTag = strtoupper($tagCode);
+            if ($tagCode === '' || isset($billedTagsByItem[$itemId][$normalizedTag])) {
+                continue;
+            }
+            $totalPieces++;
+            $totalValue += (float)$returnedItem['unit_value'];
+            $isDamaged = isset($unavailableDamageTags[$normalizedTag]);
+            if ($isDamaged) {
+                $totalDamagedPieces++;
+            } else {
+                $eligiblePieceIndex++;
+            }
+            $isDispatched = !$isDamaged && ($eligiblePieceIndex <= $totalOutwardPieces);
+            $pieceItems[] = [
+                'piece_no' => $globalPieceIndex++,
+                'piece_seq' => 1,
+                'passed_in_group' => 1,
+                'qc_item_id' => $itemId,
+                'qc_batch_id' => $id,
+                'product_id' => $returnedItem['variant_id'] ?? null,
+                'product_name' => $returnedItem['product_name'],
+                'product_sku' => $returnedItem['sku'] ?? '',
+                'sku' => $returnedItem['sku'] ?? '',
+                'product_image' => null,
+                'category_name' => 'Returned item',
+                'size_name' => $returnedItem['size_name'] ?? 'Std',
+                'color_name' => $returnedItem['color_name'] ?? 'Std',
+                'tag_code' => $tagCode,
+                'base_price' => (float)$returnedItem['unit_value'],
+                'discount_price' => (float)$returnedItem['unit_value'],
+                'program_id' => $programId,
+                'program_number' => $first['program_number'] ?? 'N/A',
+                'inspector_name' => $first['inspector_name'] ?? 'Returns',
+                'batch_created_at' => $returnedItem['created_at'] ?? null,
+                'is_dispatched' => $isDispatched,
+                'is_damaged' => $isDamaged,
+                'is_returned_stock' => true,
+                'can_delete' => false,
+                'outward_info' => $isDispatched && !empty($outwards) ? ($outwards[0]['outward_number'] ?? 'OUTWARDED') : null,
+            ];
+        }
+
         $effectiveOutwardPieces = min(max(0, $totalPieces - $totalDamagedPieces), $totalOutwardPieces);
         $remainingPieces = max(0, $totalPieces - $effectiveOutwardPieces - $totalDamagedPieces);
         $avgPiecePrice = $totalPieces > 0 ? ($totalValue / $totalPieces) : 0;
@@ -9156,6 +9224,8 @@ class ProductionController {
             'totalReworkPieces'   => $totalReworkPieces,
             'totalRejectedPieces' => $totalRejectedPieces,
             'totalPieces'         => $totalPieces,
+            'totalPassedPieces'  => $totalPassedPieces,
+            'totalBilledPieces'  => $totalBilledPieces,
             'totalDamagedPieces'  => $totalDamagedPieces,
             'totalValue'          => $totalValue,
             'totalOutwardPieces'  => $effectiveOutwardPieces,

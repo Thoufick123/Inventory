@@ -154,8 +154,9 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
             <div class="card-body p-3 d-flex align-items-center justify-content-between">
                 <div>
                     <span class="text-uppercase text-muted fw-semibold small d-block">Total QC Passed</span>
-                    <h3 class="fw-bold text-dark mb-0 mt-1"><?= number_format($totalPieces) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
+                    <h3 class="fw-bold text-dark mb-0 mt-1"><?= number_format($totalPassedPieces ?? $totalPieces) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
                     <small class="text-muted d-block mt-1"><?= count($rawItems) ?> product variants</small>
+                    <?php if (!empty($totalBilledPieces)): ?><small class="text-primary d-block mt-1"><?= number_format($totalBilledPieces) ?> billed and removed from available stickers</small><?php endif; ?>
                     <?php if (!empty($totalDamagedPieces)): ?><small class="text-danger d-block mt-1"><?= number_format($totalDamagedPieces) ?> quarantined for damage</small><?php endif; ?>
                     <div class="d-flex flex-wrap gap-1 mt-2">
                         <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Rework: <?= number_format($totalReworkPieces) ?></span>

@@ -823,6 +823,7 @@ class ProductionService {
             static fn(array $row): string => strtoupper(trim((string)$row['code'])),
             $deletedRows
         ), true);
+        $unavailableTagsByItem = self::getUnavailableQCPieceTags($qcBatchId);
         try {
             $unavailableDamageTags = ProductionInventoryDamage::getUnavailableTags($qcBatchId);
         } catch (\Throwable $e) {
@@ -843,6 +844,7 @@ class ProductionService {
                 $normalizedTag = strtoupper($tag);
                 if (empty($assignedTagsByVariant[$variantId][$normalizedTag])
                     && empty($deletedTags[$normalizedTag])
+                    && empty($unavailableTagsByItem[$itemId][$normalizedTag])
                     && empty($unavailableDamageTags[$normalizedTag])) {
                     $available[] = $tag;
                 }
@@ -851,19 +853,66 @@ class ProductionService {
             $availableByItem[$itemId] = $available;
         }
 
+        $returnedRows = Database::fetchAll(
+            "SELECT qc_item_id, variant_id, new_tag_code FROM production_return_inventory
+             WHERE qc_batch_id = ? AND status = 'AVAILABLE'",
+            [$qcBatchId]
+        );
+        foreach ($returnedRows as $row) {
+            $itemId = (int)$row['qc_item_id'];
+            $variantId = (int)($row['variant_id'] ?? 0);
+            $tag = trim((string)$row['new_tag_code']);
+            $normalizedTag = strtoupper($tag);
+            if ($tag !== ''
+                && empty($assignedTagsByVariant[$variantId][$normalizedTag])
+                && empty($deletedTags[$normalizedTag])
+                && empty($unavailableDamageTags[$normalizedTag])
+                && empty($unavailableTagsByItem[$itemId][$normalizedTag])) {
+                $availableByItem[$itemId][] = $tag;
+            }
+        }
+
         return $availableByItem;
     }
 
-    public static function getDeletedQCPieceCounts(int $qcBatchId, array $deletedCodes = []): array {
+    public static function getUnavailableQCPieceTags(int $qcBatchId): array {
+        if ($qcBatchId <= 0) {
+            return [];
+        }
+
+        $rows = Database::fetchAll(
+            "SELECT t.qc_item_id, t.tag_code
+             FROM production_bill_item_tags t
+             JOIN qc_items qi ON qi.id = t.qc_item_id
+             WHERE qi.qc_batch_id = ? AND t.status IN ('BILLED', 'DAMAGED', 'RETURNED')",
+            [$qcBatchId]
+        );
+        $tagsByItem = [];
+        foreach ($rows as $row) {
+            $tagsByItem[(int)$row['qc_item_id']][strtoupper(trim((string)$row['tag_code']))] = true;
+        }
+        $returnedRows = Database::fetchAll(
+            "SELECT qc_item_id, new_tag_code FROM production_return_inventory
+             WHERE qc_batch_id = ? AND status IN ('BILLED', 'DAMAGED', 'RETIRED')",
+            [$qcBatchId]
+        );
+        foreach ($returnedRows as $row) {
+            $tagsByItem[(int)$row['qc_item_id']][strtoupper(trim((string)$row['new_tag_code']))] = true;
+        }
+        return $tagsByItem;
+    }
+
+    public static function getUnavailableQCPieceCounts(int $qcBatchId, array $excludedCodes = []): array {
         if ($qcBatchId <= 0) {
             return [];
         }
 
         $approvedByItem = self::getApprovedQCPieceTags($qcBatchId);
-        $deletedTags = array_fill_keys(array_map(
+        $unavailableTags = array_fill_keys(array_map(
             static fn($code): string => strtoupper(trim((string)$code)),
-            $deletedCodes
+            $excludedCodes
         ), true);
+        $billedTagsByItem = self::getUnavailableQCPieceTags($qcBatchId);
         $deletedCounts = [];
 
         foreach (QCBatch::getItems($qcBatchId) as $item) {
@@ -872,11 +921,16 @@ class ProductionService {
 
             $deletedCounts[$itemId] = count(array_filter(
                 $tags,
-                static fn(string $tag): bool => isset($deletedTags[strtoupper($tag)])
+                static fn(string $tag): bool => isset($unavailableTags[strtoupper($tag)])
+                    || isset($billedTagsByItem[$itemId][strtoupper(trim($tag))])
             ));
         }
 
         return $deletedCounts;
+    }
+
+    public static function getDeletedQCPieceCounts(int $qcBatchId, array $deletedCodes = []): array {
+        return self::getUnavailableQCPieceCounts($qcBatchId, $deletedCodes);
     }
 
     /**
