@@ -22,7 +22,7 @@ class Role {
         'PRODUCTION' => [
             'production', 'sellers', 'damages', 'catalog', 'programs', 'cutting', 'wastage',
             'stitching', 'stitching_wastage', 'production_expenses', 'labels', 'qc', 'inventory',
-            'batches', 'outward', 'warehouse_rework', 'reports_production'
+            'batches', 'outward', 'production_cash', 'warehouse_rework', 'reports_production'
         ],
         'WAREHOUSE'  => [
             'warehouse', 'inward', 'stock', 'wh_sellers', 'wh_catalog', 'wh_labels', 'purchases', 'purchases_returns', 'allocation',

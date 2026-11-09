@@ -16,13 +16,17 @@ class ProductionOutward {
                     pp.program_number,
                     COALESCE(p.name, pp.name) as product_name, p.code as product_code,
                     w.id as warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
-                    u.full_name as created_by_name
+                    u.full_name as created_by_name,
+                    ud.full_name as dispatched_by_name,
+                    ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
              JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN users u ON po.created_by = u.id
+             LEFT JOIN users ud ON po.dispatched_by = ud.id
+             LEFT JOIN users ur ON po.received_by = ur.id
              WHERE po.id = ?",
             [$id]
         );
@@ -38,13 +42,17 @@ class ProductionOutward {
                     pp.program_number,
                     COALESCE(p.name, pp.name) as product_name, p.code as product_code,
                     w.id as warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
-                    u.full_name as created_by_name
+                    u.full_name as created_by_name,
+                    ud.full_name as dispatched_by_name,
+                    ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
              JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN users u ON po.created_by = u.id
+             LEFT JOIN users ud ON po.dispatched_by = ud.id
+             LEFT JOIN users ur ON po.received_by = ur.id
              WHERE po.production_batch_id = ?
              ORDER BY po.id DESC LIMIT 1",
             [$batchId]
@@ -61,13 +69,17 @@ class ProductionOutward {
                     pp.program_number,
                     COALESCE(p.name, pp.name) as product_name, p.code as product_code,
                     w.id as warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
-                    u.full_name as created_by_name
+                    u.full_name as created_by_name,
+                    ud.full_name as dispatched_by_name,
+                    ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
              JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN users u ON po.created_by = u.id
+             LEFT JOIN users ud ON po.dispatched_by = ud.id
+             LEFT JOIN users ur ON po.received_by = ur.id
              WHERE po.outward_number = ?",
             [$outwardNumber]
         );
@@ -82,13 +94,17 @@ class ProductionOutward {
                        pp.program_number,
                        COALESCE(p.name, pp.name) as product_name,
                        w.name as warehouse_name,
-                       u.full_name as created_by_name
+                       u.full_name as created_by_name,
+                       ud.full_name as dispatched_by_name,
+                       ur.full_name as received_by_name
                 FROM production_outwards po
                 JOIN production_batches pb ON po.production_batch_id = pb.id
                 JOIN production_programs pp ON pb.program_id = pp.id
                 LEFT JOIN products p ON pp.product_id = p.id
                 JOIN warehouses w ON pb.destination_warehouse_id = w.id
                 LEFT JOIN users u ON po.created_by = u.id
+                LEFT JOIN users ud ON po.dispatched_by = ud.id
+                LEFT JOIN users ur ON po.received_by = ur.id
                 WHERE 1=1";
         $params = [];
 
@@ -102,10 +118,15 @@ class ProductionOutward {
             $params[] = (int)$filters['warehouse_id'];
         }
 
+        if (!empty($filters['status'])) {
+            $sql .= " AND po.status = ?";
+            $params[] = $filters['status'];
+        }
+
         if (!empty($filters['search'])) {
-            $sql .= " AND (po.outward_number LIKE ? OR pb.batch_number LIKE ? OR po.vehicle_number LIKE ? OR w.name LIKE ?)";
+            $sql .= " AND (po.outward_number LIKE ? OR pb.batch_number LIKE ? OR po.vehicle_number LIKE ? OR po.driver_name LIKE ? OR po.transporter_name LIKE ? OR po.lr_number LIKE ? OR w.name LIKE ? OR pp.program_number LIKE ?)";
             $search = '%' . $filters['search'] . '%';
-            $params = array_merge($params, [$search, $search, $search, $search]);
+            $params = array_merge($params, array_fill(0, 8, $search));
         }
 
         $sql .= " ORDER BY po.created_at DESC";
@@ -148,8 +169,8 @@ class ProductionOutward {
 
         Database::execute(
             "INSERT INTO production_outwards 
-             (production_batch_id, production_unit_id, warehouse_id, outward_number, quantity, total_boxes, total_quantity, dispatch_date, vehicle_number, driver_name, transporter_name, lr_number, notes, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (production_batch_id, production_unit_id, warehouse_id, outward_number, quantity, total_boxes, total_quantity, dispatch_date, vehicle_number, driver_name, driver_contact, transporter_name, lr_number, notes, created_by, dispatched_by, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISPATCHED')",
             [
                 $data['production_batch_id'],
                 !empty($data['production_unit_id']) ? (int)$data['production_unit_id'] : null,
@@ -161,10 +182,12 @@ class ProductionOutward {
                 $data['dispatch_date'] ?? date('Y-m-d H:i:s'),
                 $data['vehicle_number'] ?? null,
                 $data['driver_name'] ?? null,
+                $data['driver_contact'] ?? null,
                 $data['transporter_name'] ?? null,
                 $data['lr_number'] ?? null,
                 $data['notes'] ?? null,
                 $data['created_by'] ?? null,
+                $data['dispatched_by'] ?? ($data['created_by'] ?? null),
             ]
         );
         return (int)Database::lastInsertId();

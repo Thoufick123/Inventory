@@ -513,6 +513,12 @@ class WarehouseService {
                  WHERE id = ?",
                 [(int)$totalAccepted, (int)$totalDamaged, (int)$totalMissing, $batchId]
             );
+            Database::execute(
+                "UPDATE production_outwards
+                 SET status = ?, received_date = NOW(), received_by = ?, updated_at = NOW()
+                 WHERE production_batch_id = ?",
+                [!empty($discrepancyReport) ? 'DISCREPANCY' : 'RECEIVED', $userId, $batchId]
+            );
 
             // Formulate audit log summary
             $auditNotes = $notes ?? 'Production Inward GRN Verified';

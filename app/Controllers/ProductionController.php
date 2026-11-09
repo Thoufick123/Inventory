@@ -7270,13 +7270,26 @@ class ProductionController {
 
     public function outwardList(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        $search = $_GET['search'] ?? '';
+        $search = trim((string)($_GET['search'] ?? ''));
+        $status = trim((string)($_GET['status'] ?? ''));
+        $status = in_array($status, ['DISPATCHED', 'RECEIVED', 'DISCREPANCY'], true) ? $status : '';
+        $warehouseId = (int)($_GET['warehouse_id'] ?? 0);
         $outwards = ProductionOutward::getAll([
             'search'             => $search,
             'production_unit_id' => $scopedUnitId,
+            'warehouse_id'       => $warehouseId,
+            'status'             => $status,
         ]);
 
         $unitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
+        $warehouseClause = $warehouseId > 0 ? ' AND pb.destination_warehouse_id = ' . $warehouseId : '';
+        $searchClause = '';
+        $batchParams = [];
+        if ($search !== '') {
+            $searchClause = " AND (pb.batch_number LIKE ? OR pp.program_number LIKE ? OR p.name LIKE ? OR w.name LIKE ?)";
+            $searchTerm = '%' . $search . '%';
+            $batchParams = array_fill(0, 4, $searchTerm);
+        }
         $approvedBatches = Database::fetchAll(
             "SELECT pb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name, w.name as warehouse_name
              FROM production_batches pb
@@ -7284,9 +7297,11 @@ class ProductionController {
              LEFT JOIN products p ON pp.product_id = p.id
              JOIN warehouses w ON pb.destination_warehouse_id = w.id
              WHERE pb.status = 'APPROVED'
-               AND pb.id NOT IN (SELECT production_batch_id FROM production_outwards WHERE production_batch_id IS NOT NULL)$unitClause
-             ORDER BY pb.created_at DESC"
+               AND pb.id NOT IN (SELECT production_batch_id FROM production_outwards WHERE production_batch_id IS NOT NULL)$unitClause$warehouseClause$searchClause
+             ORDER BY pb.created_at DESC",
+            $batchParams
         );
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
 
         Response::view('production.outward.index', [
             'pageTitle'       => 'Production Outward & Dispatch',
@@ -7294,6 +7309,9 @@ class ProductionController {
             'activeMenu'      => 'outward',
             'outwards'        => $outwards,
             'approvedBatches' => $approvedBatches,
+            'warehouses'      => $warehouses,
+            'warehouseId'     => $warehouseId,
+            'currentStatus'   => $status,
             'search'          => $search,
             'scopedUnitId'    => $scopedUnitId,
             'breadcrumb'      => [
@@ -7307,6 +7325,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
         $validator = Validator::make($_POST, [
             'production_batch_id' => 'required|numeric',
@@ -7320,6 +7339,19 @@ class ProductionController {
         }
 
         $batchId = (int)$_POST['production_batch_id'];
+        $vehicleNumber = strtoupper(trim((string)($_POST['vehicle_number'] ?? '')));
+        $driverName = trim((string)($_POST['driver_name'] ?? ''));
+        $driverContact = preg_replace('/[^0-9]/', '', (string)($_POST['driver_contact'] ?? ''));
+        $transporterName = trim((string)($_POST['transporter_name'] ?? ''));
+        $totalBoxes = (int)($_POST['total_boxes'] ?? 0);
+        $dispatchInput = trim((string)($_POST['dispatch_date'] ?? ''));
+        $dispatchTimestamp = $dispatchInput !== '' ? strtotime($dispatchInput) : false;
+        if ($vehicleNumber === '' || $driverName === '' || strlen($driverContact) !== 10 || $transporterName === '' || $totalBoxes < 1 || $dispatchTimestamp === false) {
+            Session::flash('error', 'Enter vehicle, driver name, valid 10-digit driver contact, transporter, at least one carton, and a valid dispatch date.');
+            Response::back();
+            return;
+        }
+        $dispatchDate = date('Y-m-d H:i:s', $dispatchTimestamp);
         $existingOutward = Database::fetchOne(
             "SELECT id, outward_number FROM production_outwards WHERE production_batch_id = ?",
             [$batchId]
@@ -7336,8 +7368,13 @@ class ProductionController {
             $userId = Session::userId();
             $outwardId = ProductionService::createOutward([
                 'production_batch_id' => $batchId,
-                'dispatch_date'       => !empty($_POST['dispatch_date']) ? $_POST['dispatch_date'] : date('Y-m-d H:i:s'),
-                'vehicle_number'      => trim($_POST['vehicle_number']),
+                'dispatch_date'       => $dispatchDate,
+                'vehicle_number'      => $vehicleNumber,
+                'driver_name'         => $driverName,
+                'driver_contact'      => $driverContact,
+                'transporter_name'    => $transporterName,
+                'lr_number'           => trim((string)($_POST['lr_number'] ?? '')),
+                'total_boxes'         => $totalBoxes,
                 'notes'               => trim($_POST['notes'] ?? ''),
             ], $userId);
 
@@ -8603,6 +8640,18 @@ class ProductionController {
 
         $items = Database::fetchAll($sql, $params);
 
+        $damageUnitClause = $inventoryUnitId ? ' AND pp.production_unit_id = ' . (int)$inventoryUnitId : '';
+        $damagedCountsByQCItem = [];
+        foreach (Database::fetchAll(
+            "SELECT d.qc_item_id, COUNT(*) AS damaged_count
+             FROM production_inventory_damages d
+             JOIN production_programs pp ON pp.id = d.program_id
+             WHERE d.status NOT IN ('REPAIRED', 'RESTOCKED'){$damageUnitClause}
+             GROUP BY d.qc_item_id"
+        ) as $damageRow) {
+            $damagedCountsByQCItem[(int)$damageRow['qc_item_id']] = (int)$damageRow['damaged_count'];
+        }
+
         $deletedCodeRows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
         $deletedCodes = array_column($deletedCodeRows, 'code');
         $deletedCountsByBatch = [];
@@ -8677,7 +8726,8 @@ class ProductionController {
             $rejectedQty = (int)($it['rejected_qty'] ?? 0);
             $price = (float)(($it['discount_price'] ?? 0) > 0 ? $it['discount_price'] : ($it['base_price'] ?? 0));
             $deletedQty = (int)($deletedCountsByBatch[(int)$batchId][(int)$it['id']] ?? 0);
-            $inventoryPassedQty = max(0, $passedQty - $deletedQty);
+            $damagedQty = (int)($damagedCountsByQCItem[(int)$it['id']] ?? 0);
+            $inventoryPassedQty = max(0, $passedQty - $deletedQty - $damagedQty);
             $batches[$batchId]['total_passed_pieces'] += $passedQty;
             $batches[$batchId]['total_rework_pieces'] += $reworkQty;
             $batches[$batchId]['total_rejected_pieces'] += $rejectedQty;
@@ -8989,12 +9039,15 @@ class ProductionController {
                 true
             );
         }
+        $unavailableDamageTags = ProductionInventoryDamage::getUnavailableTags($id);
 
         // Build piece-by-piece records
         $pieceItems = [];
         $globalPieceIndex = 1;
+        $eligiblePieceIndex = 0;
         $batchPieceSeq = 1;
         $totalPieces = 0;
+        $totalDamagedPieces = 0;
         $totalValue  = 0.0;
 
         foreach ($items as $it) {
@@ -9045,7 +9098,13 @@ class ProductionController {
 
                 $totalPieces++;
                 $totalValue += $price;
-                $isDispatched = ($pieceNo <= $totalOutwardPieces);
+                $isDamaged = isset($unavailableDamageTags[strtoupper(trim($pieceTagCode))]);
+                if ($isDamaged) {
+                    $totalDamagedPieces++;
+                } else {
+                    $eligiblePieceIndex++;
+                }
+                $isDispatched = !$isDamaged && ($eligiblePieceIndex <= $totalOutwardPieces);
                 $pieceOutwardInfo = null;
                 if ($isDispatched && !empty($outwards)) {
                     $pieceOutwardInfo = $outwards[0]['outward_number'] ?? 'OUTWARDED';
@@ -9073,14 +9132,15 @@ class ProductionController {
                     'inspector_name'  => $it['inspector_name'] ?? 'Inspector',
                     'batch_created_at'=> $it['batch_created_at'] ?? null,
                     'is_dispatched'   => $isDispatched,
+                    'is_damaged'      => $isDamaged,
                     'can_delete'      => !$isDispatched && isset($availableCodesByItem[(int)$it['id']][strtoupper($pieceTagCode)]),
                     'outward_info'    => $pieceOutwardInfo,
                 ];
             }
         }
 
-        $effectiveOutwardPieces = min($totalPieces, $totalOutwardPieces);
-        $remainingPieces = max(0, $totalPieces - $effectiveOutwardPieces);
+        $effectiveOutwardPieces = min(max(0, $totalPieces - $totalDamagedPieces), $totalOutwardPieces);
+        $remainingPieces = max(0, $totalPieces - $effectiveOutwardPieces - $totalDamagedPieces);
         $avgPiecePrice = $totalPieces > 0 ? ($totalValue / $totalPieces) : 0;
         $remainingValue = max(0.0, $remainingPieces * $avgPiecePrice);
 
@@ -9096,6 +9156,7 @@ class ProductionController {
             'totalReworkPieces'   => $totalReworkPieces,
             'totalRejectedPieces' => $totalRejectedPieces,
             'totalPieces'         => $totalPieces,
+            'totalDamagedPieces'  => $totalDamagedPieces,
             'totalValue'          => $totalValue,
             'totalOutwardPieces'  => $effectiveOutwardPieces,
             'remainingPieces'     => $remainingPieces,

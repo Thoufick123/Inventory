@@ -10,6 +10,17 @@
     <?php endif; ?>
 </div>
 
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <form method="GET" action="<?= url('production/outward') ?>" class="row g-3 align-items-end">
+            <div class="col-lg-5"><label class="form-label small fw-semibold">Search outward, batch, vehicle, transporter</label><input type="search" name="search" class="form-control" value="<?= e($search) ?>" placeholder="Outward #, batch #, program, vehicle, LR"></div>
+            <div class="col-lg-3"><label class="form-label small fw-semibold">Destination Warehouse</label><select name="warehouse_id" class="form-select"><option value="">All warehouses</option><?php foreach ($warehouses as $warehouse): ?><option value="<?= (int)$warehouse['id'] ?>" <?= (int)$warehouseId === (int)$warehouse['id'] ? 'selected' : '' ?>><?= e($warehouse['name']) ?><?= !empty($warehouse['code']) ? ' (' . e($warehouse['code']) . ')' : '' ?></option><?php endforeach; ?></select></div>
+            <div class="col-lg-2"><label class="form-label small fw-semibold">Status</label><select name="status" class="form-select"><option value="">All statuses</option><?php foreach (['DISPATCHED', 'RECEIVED', 'DISCREPANCY'] as $statusOption): ?><option value="<?= e($statusOption) ?>" <?= $currentStatus === $statusOption ? 'selected' : '' ?>><?= e($statusOption) ?></option><?php endforeach; ?></select></div>
+            <div class="col-lg-2 d-flex gap-2"><button class="btn btn-primary flex-grow-1" type="submit"><i class="bi bi-funnel me-1"></i>Filter</button><a class="btn btn-outline-secondary" href="<?= url('production/outward') ?>" title="Clear filters"><i class="bi bi-x-lg"></i></a></div>
+        </form>
+    </div>
+</div>
+
 <!-- Approved Batches Container (One-by-One Listing with Dispatch Now Buttons) -->
 <?php if (!empty($approvedBatches) && hasPermission('outward', 'create')): ?>
     <div class="card border-primary shadow-sm mb-4">
@@ -133,10 +144,14 @@
                                     ($o['product_name'] ?? '') . ' ' . 
                                     ($o['warehouse_name'] ?? '') . ' ' . 
                                     ($o['vehicle_number'] ?? '') . ' ' . 
+                                    ($o['driver_name'] ?? '') . ' ' .
+                                    ($o['driver_contact'] ?? '') . ' ' .
+                                    ($o['transporter_name'] ?? '') . ' ' .
+                                    ($o['lr_number'] ?? '') . ' ' .
+                                    ($o['status'] ?? '') . ' ' .
                                     ($o['created_by_name'] ?? '') . ' ' . 
                                     ($o['total_qty'] ?? '') . ' ' . 
-                                    ($o['box_count'] ?? '') . ' ' . 
-                                    'dispatched'
+                                    ($o['box_count'] ?? '')
                                 );
                             ?>
                             <tr class="outward-row" data-search-text="<?= e($searchData) ?>">
@@ -150,7 +165,11 @@
                                 <td class="text-success fw-bold"><?= number_format($o['total_qty']) ?> pcs (<?= $o['box_count'] ?> <?= $o['box_count'] == 1 ? 'box' : 'boxes' ?>)</td>
                                 <td><span class="badge bg-dark font-monospace"><?= e($o['vehicle_number'] ?: 'Direct Handover') ?></span></td>
                                 <td><?= formatDateTime($o['dispatch_date']) ?></td>
-                                <td><span class="badge bg-success px-2 py-1"><i class="bi bi-check-all me-1"></i>DISPATCHED</span></td>
+                                <td>
+                                    <?php $outwardStatus = $o['status'] ?? 'DISPATCHED'; ?>
+                                    <span class="badge <?= $outwardStatus === 'RECEIVED' ? 'bg-success' : ($outwardStatus === 'DISCREPANCY' ? 'bg-warning text-dark' : 'bg-primary') ?> px-2 py-1"><i class="bi <?= $outwardStatus === 'RECEIVED' ? 'bi-check-all' : ($outwardStatus === 'DISCREPANCY' ? 'bi-exclamation-triangle' : 'bi-truck') ?> me-1"></i><?= e($outwardStatus) ?></span>
+                                    <?php if (!empty($o['received_date'])): ?><small class="d-block text-muted mt-1">Received <?= e(formatDateTime($o['received_date'])) ?></small><?php endif; ?>
+                                </td>
                                 <td class="text-end">
                                     <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" onclick="viewOutwardDispatchDetails(<?= $o['id'] ?>)" title="View Outward & Product Breakdown">
                                         <i class="bi bi-eye me-1"></i> View
@@ -227,8 +246,13 @@
                             <div class="p-3 bg-light rounded-3 border h-100">
                                 <div class="small fw-bold text-muted text-uppercase mb-2"><i class="bi bi-truck me-1 text-primary"></i> Transport &amp; Vehicle</div>
                                 <div class="mb-1"><strong>Vehicle / Courier #:</strong> <span class="badge bg-dark font-monospace" id="vodVehicleNumber">—</span></div>
+                                <div class="mb-1"><strong>Driver:</strong> <span class="text-dark" id="vodDriverName">—</span></div>
+                                <div class="mb-1"><strong>Driver Contact:</strong> <span class="text-dark" id="vodDriverContact">—</span></div>
+                                <div class="mb-1"><strong>Transporter:</strong> <span class="text-dark" id="vodTransporter">—</span></div>
+                                <div class="mb-1"><strong>LR / Tracking:</strong> <span class="text-dark" id="vodLRNumber">—</span></div>
                                 <div class="mb-1"><strong>Dispatch Date:</strong> <span class="text-dark" id="vodDispatchDate">—</span></div>
                                 <div class="mb-1"><strong>Dispatched By:</strong> <span class="text-dark" id="vodDispatchedBy">—</span></div>
+                                <div class="mb-1"><strong>Received By:</strong> <span class="text-dark" id="vodReceivedBy">—</span></div>
                                 <div><strong>Total Dispatched:</strong> <span class="text-success fw-bold" id="vodTotalQty">—</span></div>
                             </div>
                         </div>
@@ -290,6 +314,7 @@
                     <div class="mb-3">
                         <label class="form-label fw-semibold required">Select Approved Batch <span class="text-danger">*</span></label>
                         <select name="production_batch_id" id="modal_batch_id" class="form-select fw-medium" required onchange="updateModalBatchSummary(this.value)">
+                            <option value="">-- Select approved batch --</option>
                             <?php foreach ($approvedBatches as $ab): ?>
                                 <option value="<?= $ab['id'] ?>" 
                                         data-batch-number="<?= e($ab['batch_number']) ?>"
@@ -308,6 +333,18 @@
                         <input type="text" name="vehicle_number" id="vehicle_number" class="form-control text-uppercase fw-semibold" placeholder="e.g. TN-38-AB-1234 or Courier Reference" required>
                         <div class="form-text small text-muted">Vehicle plate number or courier consignment tracking number.</div>
                     </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6"><label class="form-label fw-semibold">Driver Name <span class="text-danger">*</span></label><input type="text" name="driver_name" class="form-control" required></div>
+                        <div class="col-md-6"><label class="form-label fw-semibold">Driver Contact <span class="text-danger">*</span></label><input type="text" name="driver_contact" class="form-control" maxlength="10" inputmode="numeric" pattern="[0-9]{10}" required></div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6"><label class="form-label fw-semibold">Transporter / Logistics <span class="text-danger">*</span></label><input type="text" name="transporter_name" class="form-control" required></div>
+                        <div class="col-md-6"><label class="form-label fw-semibold">Total Boxes / Cartons <span class="text-danger">*</span></label><input type="number" id="outward_total_boxes" name="total_boxes" class="form-control" value="1" min="1" required></div>
+                    </div>
+
+                    <div class="mb-3"><label class="form-label fw-semibold">LR / Docket / Tracking Number</label><input type="text" name="lr_number" class="form-control" placeholder="Optional courier or lorry receipt reference"></div>
 
                     <div class="mb-3">
                         <label class="form-label fw-semibold">Dispatch Date &amp; Time</label>
@@ -341,8 +378,9 @@ function openDispatchModal(batchData) {
     if (batchData && batchData.id) {
         if (selectEl) selectEl.value = batchData.id;
         updateModalBatchSummary(batchData.id);
-    } else if (selectEl && selectEl.value) {
-        updateModalBatchSummary(selectEl.value);
+    } else if (selectEl) {
+        selectEl.value = '';
+        updateModalBatchSummary('');
     }
 
     const modal = new bootstrap.Modal(modalEl);
@@ -362,6 +400,13 @@ function updateModalBatchSummary(batchId) {
     if (batch) {
         titleEl.innerHTML = `<i class="bi bi-box-seam me-1 text-primary"></i> ${batch.batch_number} — ${batch.product_name}`;
         detailsEl.innerHTML = `<strong>Destination:</strong> ${batch.warehouse_name} &nbsp;|&nbsp; <strong>Quantity:</strong> <span class="text-success fw-bold">${parseInt(batch.total_qty).toLocaleString()} pcs</span> (${batch.box_count} ${batch.box_count == 1 ? 'box' : 'boxes'})`;
+        const boxInput = document.getElementById('outward_total_boxes');
+        if (boxInput) boxInput.value = Math.max(1, parseInt(batch.box_count || 1));
+    } else {
+        titleEl.textContent = 'Select a batch below';
+        detailsEl.textContent = '-';
+        const boxInput = document.getElementById('outward_total_boxes');
+        if (boxInput) boxInput.value = 1;
     }
 }
 
@@ -422,8 +467,12 @@ function viewOutwardDispatchDetails(outwardId) {
             const outward = data.outward || {};
             const batch = data.batch || {};
             const items = data.items || [];
+            const outwardStatus = outward.status || 'DISPATCHED';
 
             document.getElementById('vodOutwardNumber').textContent = outward.outward_number || ('Outward #' + outward.id);
+            const statusBadge = document.getElementById('vodStatusBadge');
+            statusBadge.textContent = outwardStatus;
+            statusBadge.className = `badge px-3 py-2 fs-7 ${outwardStatus === 'RECEIVED' ? 'bg-success' : (outwardStatus === 'DISCREPANCY' ? 'bg-warning text-dark' : 'bg-primary')}`;
             document.getElementById('vodBatchNumber').textContent = batch.batch_number || outward.batch_number || '—';
             document.getElementById('vodProductName').textContent = batch.product_name || outward.product_name || 'Finished Product';
             document.getElementById('vodProgramNumber').textContent = batch.program_number || outward.program_number || '—';
@@ -434,8 +483,13 @@ function viewOutwardDispatchDetails(outwardId) {
             document.getElementById('vodTotalQty').textContent = totalQty.toLocaleString() + ' pcs (' + boxCount + ' ' + (boxCount === 1 ? 'box' : 'boxes') + ')';
 
             document.getElementById('vodVehicleNumber').textContent = outward.vehicle_number || 'Direct Handover';
+            document.getElementById('vodDriverName').textContent = outward.driver_name || '—';
+            document.getElementById('vodDriverContact').textContent = outward.driver_contact || '—';
+            document.getElementById('vodTransporter').textContent = outward.transporter_name || '—';
+            document.getElementById('vodLRNumber').textContent = outward.lr_number || '—';
             document.getElementById('vodDispatchDate').textContent = outward.dispatch_date || '—';
-            document.getElementById('vodDispatchedBy').textContent = outward.created_by_name || 'Staff';
+            document.getElementById('vodDispatchedBy').textContent = outward.dispatched_by_name || outward.created_by_name || 'Staff';
+            document.getElementById('vodReceivedBy').textContent = outward.received_by_name || (outward.received_date ? outward.received_date : 'Not received');
 
             // Notes
             const notes = outward.notes || '';

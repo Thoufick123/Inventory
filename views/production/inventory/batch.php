@@ -156,6 +156,7 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                     <span class="text-uppercase text-muted fw-semibold small d-block">Total QC Passed</span>
                     <h3 class="fw-bold text-dark mb-0 mt-1"><?= number_format($totalPieces) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
                     <small class="text-muted d-block mt-1"><?= count($rawItems) ?> product variants</small>
+                    <?php if (!empty($totalDamagedPieces)): ?><small class="text-danger d-block mt-1"><?= number_format($totalDamagedPieces) ?> quarantined for damage</small><?php endif; ?>
                     <div class="d-flex flex-wrap gap-1 mt-2">
                         <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Rework: <?= number_format($totalReworkPieces) ?></span>
                         <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Rejected: <?= number_format($totalRejectedPieces) ?></span>
@@ -507,7 +508,10 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                                     <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1 d-block mb-1">
                                         <i class="bi bi-patch-check me-1"></i>QC PASSED
                                     </span>
-                                    <?php if (!empty($it['is_dispatched'])): ?>
+                                    <?php if (!empty($it['is_damaged'])): ?>
+                                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1 d-block mb-1"><i class="bi bi-shield-exclamation me-1"></i>DAMAGE QUARANTINE</span>
+                                        <small class="text-danger d-block" style="font-size: 11px;"><a class="text-danger" href="<?= url('production/inventory-damages?search=' . urlencode($it['tag_code'])) ?>">Open damage case</a></small>
+                                    <?php elseif (!empty($it['is_dispatched'])): ?>
                                         <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1 d-block mb-1">
                                             <i class="bi bi-truck me-1"></i>DISPATCHED
                                         </span>
@@ -526,7 +530,7 @@ $batchDate = new DateTime($batchInfo['batch_created_at'] ?? 'now');
                                                 Actions
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                                <?php if (empty($it['is_dispatched'])): ?>
+                                                <?php if (empty($it['is_dispatched']) && empty($it['is_damaged'])): ?>
                                                 <li>
                                                     <a class="dropdown-item text-success" href="<?= url('production/batches/create?qc_batch_id=' . $it['qc_batch_id']) ?>">
                                                         <i class="bi bi-box-seam me-2"></i>Pack into Box Batch

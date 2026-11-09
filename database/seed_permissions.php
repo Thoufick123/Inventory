@@ -188,6 +188,12 @@ $definitions = array_merge($definitions, [
     ['module' => 'production_inward', 'action' => 'view', 'desc' => 'View production-unit inward receipts and stock'],
     ['module' => 'production_inward', 'action' => 'receive', 'desc' => 'Receive products into a production unit'],
 
+    // Production Unit Cash Flow
+    ['module' => 'production_cash', 'action' => 'view', 'desc' => 'View production-unit cash flow and shift records'],
+    ['module' => 'production_cash', 'action' => 'create', 'desc' => 'Open shifts and record production cash movements'],
+    ['module' => 'production_cash', 'action' => 'close_shift', 'desc' => 'Close and reconcile a production cash shift'],
+    ['module' => 'production_cash', 'action' => 'voucher', 'desc' => 'View and print production cash vouchers'],
+
     // Production Rework from Warehouse
     ['module' => 'warehouse_rework', 'action' => 'view', 'desc' => 'View Warehouse Rework Requests and History'],
     ['module' => 'warehouse_rework', 'action' => 'create', 'desc' => 'Receive and Log damaged goods from warehouse for rework'],

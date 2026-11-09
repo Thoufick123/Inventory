@@ -105,6 +105,7 @@ if (!empty($authUser['shop_name'])) {
                         || hasPermission('stitching', 'view')
                         || hasPermission('stitching_wastage', 'view')
                         || hasPermission('production_expenses', 'view')
+                        || hasPermission('production_cash', 'view')
                         || hasPermission('labels', 'view')
                         || hasPermission('qc', 'view')
                         || hasPermission('inventory', 'view')
@@ -139,7 +140,8 @@ if (!empty($authUser['shop_name'])) {
                             <li><a href="<?= url('production/billing/returns') ?>" class="<?= ($activeMenu ?? '') === 'prod-billing-returns' ? 'active' : '' ?>">Billing Returns &amp; Exchanges</a></li>
                             <?php endif; ?>
                             <?php if (hasPermission('damages', 'view')): ?>
-                            <li><a href="<?= url('production/damages') ?>" class="<?= ($activeMenu ?? '') === 'prod-damages' ? 'active' : '' ?>">Damages</a></li>
+                            <li><a href="<?= url('production/damages') ?>" class="<?= ($activeMenu ?? '') === 'prod-damages' ? 'active' : '' ?>">Fabric Roll Damage</a></li>
+                            <li><a href="<?= url('production/inventory-damages') ?>" class="<?= ($activeMenu ?? '') === 'prod-inventory-damages' ? 'active' : '' ?>">Finished Goods Damage</a></li>
                             <?php endif; ?>
                             <?php if (hasPermission('catalog', 'view')): ?>
                             <li><a href="<?= url('production/catalog') ?>" class="<?= ($activeMenu ?? '') === 'prod-catalog' ? 'active' : '' ?>">Catalog</a></li>
@@ -161,6 +163,9 @@ if (!empty($authUser['shop_name'])) {
                             <?php endif; ?>
                             <?php if (hasPermission('production_expenses', 'view')): ?>
                             <li><a href="<?= url('production/expenses') ?>" class="<?= ($activeMenu ?? '') === 'production-expenses' ? 'active' : '' ?>">Expenses &amp; Assets</a></li>
+                            <?php endif; ?>
+                            <?php if (hasPermission('production_cash', 'view')): ?>
+                            <li><a href="<?= url('production/cash') ?>" class="<?= ($activeMenu ?? '') === 'production-cash' ? 'active' : '' ?>">Cash &amp; Cash Flow</a></li>
                             <?php endif; ?>
                             <?php if (hasPermission('labels', 'view')): ?>
                             <li><a href="<?= url('production/labels') ?>" class="<?= ($activeMenu ?? '') === 'labels' ? 'active' : '' ?>">Labels</a></li>

@@ -73,6 +73,9 @@ An enterprise-grade, end-to-end apparel manufacturing, central warehousing, mult
        php database/migrations/create_production_billing.php
        php database/migrations/create_production_inwards.php
        php database/migrations/create_production_billing_returns.php
+      php database/migrations/create_production_inventory_damages.php
+      php database/migrations/add_production_outward_receipt_fields.php
+      php database/migrations/create_production_cash_flow_tables.php
        php database/seed_permissions.php
      ```
    - Hostinger Git deployment updates application files, but does not update the production database. After deploying a release that adds a migration, run that migration against the Hostinger database using Hostinger's PHP terminal/SSH before using the affected feature. Then assign any new permissions to the intended roles/staff in the application.

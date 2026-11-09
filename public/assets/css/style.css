@@ -178,7 +178,8 @@ body {
 }
 
 .submenu.show {
-    max-height: 600px;
+    max-height: none;
+    overflow: visible;
 }
 
 .submenu li a {

@@ -379,6 +379,14 @@ class Router {
         $this->post('production/damages/resolve/{id}', 'ProductionController', 'resolveDamage', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'edit']]);
         $this->post('production/damages/delete/{id}', 'ProductionController', 'deleteDamage', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'delete']]);
 
+        // Production Finished Goods Damage & Rework
+        $this->get('production/inventory-damages', 'ProductionInventoryDamageController', 'index', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'view']]);
+        $this->get('production/inventory-damages/create', 'ProductionInventoryDamageController', 'create', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'create']]);
+        $this->post('production/inventory-damages/store', 'ProductionInventoryDamageController', 'store', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'create']]);
+        $this->get('api/production/inventory-damages/scan', 'ProductionInventoryDamageController', 'lookup', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'create']]);
+        $this->get('production/inventory-damages/view/{id}', 'ProductionInventoryDamageController', 'view', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'view']]);
+        $this->post('production/inventory-damages/update-status/{id}', 'ProductionInventoryDamageController', 'updateStatus', ['AuthMiddleware', ['PermissionMiddleware', 'damages', 'edit']]);
+
         // Production Catalog
         $this->get('production/catalog', 'ProductionController', 'catalogList', ['AuthMiddleware', ['PermissionMiddleware', 'catalog', 'view']]);
         $this->get('production/catalog/create', 'ProductionController', 'createCatalog', ['AuthMiddleware', ['PermissionMiddleware', 'catalog', 'create']]);
@@ -440,6 +448,16 @@ class Router {
         $this->get('production/expenses/receipt/{id}', 'ProductionController', 'expenseReceipt', ['AuthMiddleware', ['PermissionMiddleware', 'production_expenses', 'view']]);
         $this->post('api/production/expenses/quick-add-item', 'ProductionController', 'ajaxQuickAddExpenseItem', ['AuthMiddleware']);
         $this->get('api/production/expenses/items', 'ProductionController', 'ajaxGetExpenseItems', ['AuthMiddleware']);
+
+        // Production Unit Cash Flow
+        $this->get('production/cash', 'ProductionCashController', 'index', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'view']]);
+        $this->post('production/cash/open', 'ProductionCashController', 'openRegister', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'create']]);
+        $this->post('production/cash/close', 'ProductionCashController', 'closeRegister', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'close_shift']]);
+        $this->post('production/cash/expense', 'ProductionCashController', 'storeExpense', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'create']]);
+        $this->post('production/cash/cash-in', 'ProductionCashController', 'storeCashIn', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'create']]);
+        $this->post('production/cash/bank-deposit', 'ProductionCashController', 'storeBankDeposit', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'create']]);
+        $this->get('production/cash/shift-receipt/{id}', 'ProductionCashController', 'shiftReceipt', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'voucher']]);
+        $this->get('production/cash/expense-voucher/{id}', 'ProductionCashController', 'expenseVoucher', ['AuthMiddleware', ['PermissionMiddleware', 'production_cash', 'voucher']]);
 
         // Label
         $this->get('production/labels', 'ProductionController', 'labelList', ['AuthMiddleware', ['PermissionMiddleware', 'labels', 'view']]);

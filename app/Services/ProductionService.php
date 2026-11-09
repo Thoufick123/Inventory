@@ -823,6 +823,12 @@ class ProductionService {
             static fn(array $row): string => strtoupper(trim((string)$row['code'])),
             $deletedRows
         ), true);
+        try {
+            $unavailableDamageTags = ProductionInventoryDamage::getUnavailableTags($qcBatchId);
+        } catch (\Throwable $e) {
+            error_log('Unable to load Production inventory damage tags: ' . $e->getMessage());
+            $unavailableDamageTags = [];
+        }
 
         $availableByItem = [];
         foreach ($approvedByItem as $itemId => $itemData) {
@@ -834,7 +840,10 @@ class ProductionService {
                     $legacySkip--;
                     continue;
                 }
-                if (empty($assignedTagsByVariant[$variantId][strtoupper($tag)]) && empty($deletedTags[strtoupper($tag)])) {
+                $normalizedTag = strtoupper($tag);
+                if (empty($assignedTagsByVariant[$variantId][$normalizedTag])
+                    && empty($deletedTags[$normalizedTag])
+                    && empty($unavailableDamageTags[$normalizedTag])) {
                     $available[] = $tag;
                 }
             }
@@ -1018,6 +1027,16 @@ class ProductionService {
             if (!$batch) {
                 throw new Exception("Production batch not found.");
             }
+            $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+            if ($scopedUnitId !== null) {
+                $batchUnit = Database::fetchOne(
+                    "SELECT production_unit_id FROM production_programs WHERE id = ?",
+                    [(int)$batch['program_id']]
+                );
+                if ((int)($batchUnit['production_unit_id'] ?? 0) !== (int)$scopedUnitId) {
+                    throw new Exception('You cannot dispatch a batch assigned to another production unit.');
+                }
+            }
             if ($batch['status'] === 'DISPATCHED' || $batch['status'] === 'RECEIVED') {
                 throw new Exception("Batch {$batch['batch_number']} has already been dispatched and cannot be dispatched again.");
             }
@@ -1035,6 +1054,7 @@ class ProductionService {
                 $outwardData['outward_number'] = self::generateSequenceNumber('production_outwards', 'outward_number', 'OUT');
             }
             $outwardData['created_by'] = $userId;
+            $outwardData['dispatched_by'] = $userId;
 
             $outwardId = ProductionOutward::create($outwardData);
 
