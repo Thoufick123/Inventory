@@ -61,6 +61,8 @@ class ShopService {
      * Get Dashboard Summary Statistics for a Shop with rich revenue analytics & chart datasets.
      */
     public static function getDashboardStats(int $shopId): array {
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = (int)currentConcernId();
         $today = date('Y-m-d');
         
         // Today's Sales
@@ -89,8 +91,8 @@ class ShopService {
         $lowStockCount = (int)(Database::fetchOne(
             "SELECT COUNT(sb.id) as cnt
              FROM stock_balances sb
-             WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.stock_state = 'AVAILABLE' AND sb.quantity <= ?",
-            [$shopId, $minStock]
+             WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.concern_id = ? AND sb.stock_state = 'AVAILABLE' AND sb.quantity <= ?",
+            [$shopId, $concernId, $minStock]
         )['cnt'] ?? 0);
 
         // Returns today count
@@ -359,8 +361,8 @@ class ShopService {
         $lowStockCount = (int)(Database::fetchOne(
             "SELECT COUNT(sb.id) as cnt
              FROM stock_balances sb
-             WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.stock_state = 'AVAILABLE' AND sb.quantity <= ?",
-            [$shopId, $minStock]
+             WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.concern_id = ? AND sb.stock_state = 'AVAILABLE' AND sb.quantity <= ?",
+            [$shopId, (int)currentConcernId(), $minStock]
         )['cnt'] ?? 0);
 
         // Returns in period
@@ -598,9 +600,9 @@ class ShopService {
             $pb = Database::fetchOne(
                 "SELECT pb.cost_per_piece FROM production_batch_items pbi 
                  JOIN production_batches pb ON pbi.production_batch_id = pb.id 
-                 WHERE pbi.variant_id = ? AND pb.cost_per_piece > 0 
+                 WHERE pbi.variant_id = ? AND pb.concern_id = ? AND pb.cost_per_piece > 0
                  ORDER BY pbi.id DESC LIMIT 1",
-                [$varId]
+                [$varId, (int)currentConcernId()]
             );
             if ($pb && (float)$pb['cost_per_piece'] > 0) {
                 $batchCost = (float)$pb['cost_per_piece'];
@@ -689,8 +691,8 @@ class ShopService {
                         "SELECT pbi.variant_id 
                          FROM production_batch_items pbi 
                          JOIN production_batches pb ON pbi.production_batch_id = pb.id 
-                         WHERE pb.batch_number = ? LIMIT 1", 
-                        [$json['batch_number']]
+                         WHERE pb.batch_number = ? AND pb.concern_id = ? LIMIT 1",
+                        [$json['batch_number'], (int)currentConcernId()]
                     );
                     if ($batchItem && !empty($batchItem['variant_id'])) {
                         $vRow = Database::fetchOne("SELECT sku FROM product_variants WHERE id = ?", [$batchItem['variant_id']]);
@@ -801,9 +803,9 @@ class ShopService {
                 "SELECT pbi.variant_id 
                  FROM production_batch_items pbi
                  JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                 WHERE pb.batch_number = ?
+                 WHERE pb.batch_number = ? AND pb.concern_id = ?
                  ORDER BY pbi.id DESC LIMIT 1",
-                [$cand]
+                [$cand, (int)currentConcernId()]
             );
             if ($batchItem && !empty($batchItem['variant_id'])) {
                 $variant = Database::fetchOne(
@@ -1407,6 +1409,8 @@ class ShopService {
      * Get Shop Stock Inventory list with full product & variant details, advanced filters, and sorting.
      */
     public static function getShopInventory(int $shopId, array $filters = []): array {
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = (int)currentConcernId();
         $sql = "SELECT sb.*, 
                        pv.sku, pv.qr_code, pv.mrp, pv.selling_price, pv.purchase_price, pv.production_cost, 
                        pv.weight as variant_weight, pv.image_url as variant_image,
@@ -1427,11 +1431,11 @@ class ShopService {
                        COALESCE(wssc.name, subsubcat.name) as sub_subcategory_name,
                        b.name as brand_name, sel.name as seller_name,
                        sb.quantity as available_quantity,
-                       (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'SHOP' AND location_id = sb.location_id AND stock_state = 'DAMAGED') as damaged_quantity,
+                       (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'SHOP' AND location_id = sb.location_id AND concern_id = {$concernId} AND stock_state = 'DAMAGED') as damaged_quantity,
                        (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales sl ON si.sale_id = sl.id WHERE si.variant_id = sb.variant_id AND sl.shop_id = sb.location_id AND sl.sale_type = 'SHOP' AND sl.status != 'CANCELLED') as sold_quantity,
                        (SELECT COALESCE(SUM(wri.returned_qty), 0) FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wri.variant_id = sb.variant_id AND wr.source_type = 'SHOP' AND wr.source_id = sb.location_id) as returned_quantity,
                        (SELECT COALESCE(SUM(ri.quantity), 0) FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id WHERE ri.variant_id = sb.variant_id AND (r.source_type = 'SHOP' OR s.shop_id = sb.location_id) AND r.return_type = 'EXCHANGE') as exchanged_quantity,
-                       (SELECT wa.allocation_number FROM allocation_items ai JOIN warehouse_allocations wa ON ai.allocation_id = wa.id WHERE ai.variant_id = sb.variant_id AND (wa.shop_id = sb.location_id OR (wa.destination_type = 'SHOP' AND wa.destination_id = sb.location_id)) ORDER BY wa.id DESC LIMIT 1) as latest_allocation_number
+                       (SELECT wa.allocation_number FROM allocation_items ai JOIN warehouse_allocations wa ON ai.allocation_id = wa.id WHERE ai.variant_id = sb.variant_id AND wa.concern_id = {$concernId} AND (wa.shop_id = sb.location_id OR (wa.destination_type = 'SHOP' AND wa.destination_id = sb.location_id)) ORDER BY wa.id DESC LIMIT 1) as latest_allocation_number
                 FROM stock_balances sb
                 JOIN product_variants pv ON sb.variant_id = pv.id
                 JOIN products p ON pv.product_id = p.id
@@ -1446,9 +1450,9 @@ class ShopService {
                 LEFT JOIN sellers sel ON p.seller_id = sel.id
                 LEFT JOIN sizes s ON pv.size_id = s.id
                 LEFT JOIN colors c ON pv.color_id = c.id
-                WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.stock_state = 'AVAILABLE'";
+                WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.concern_id = ? AND sb.stock_state = 'AVAILABLE'";
 
-        $params = [$shopId];
+        $params = [$shopId, $concernId];
 
         if (!empty($filters['search'])) {
             $sql .= " AND (p.name LIKE ? OR pv.sku LIKE ? OR pv.qr_code LIKE ? OR p.code LIKE ? OR COALESCE(wc.name, cat.name) LIKE ? OR s.name LIKE ? OR c.name LIKE ?)";
@@ -1479,7 +1483,7 @@ class ShopService {
             } elseif ($status === 'out_of_stock') {
                 $sql .= " AND sb.quantity <= 0";
             } elseif ($status === 'damaged') {
-                $sql .= " AND (sb.variant_id IN (SELECT variant_id FROM stock_balances WHERE location_type = 'SHOP' AND location_id = ? AND stock_state = 'DAMAGED' AND quantity > 0) OR sb.variant_id IN (SELECT variant_id FROM shop_damages WHERE shop_id = ? AND status != 'RESTOCKED'))";
+                $sql .= " AND (sb.variant_id IN (SELECT variant_id FROM stock_balances WHERE location_type = 'SHOP' AND location_id = ? AND concern_id = {$concernId} AND stock_state = 'DAMAGED' AND quantity > 0) OR sb.variant_id IN (SELECT variant_id FROM shop_damages WHERE shop_id = ? AND status != 'RESTOCKED'))";
                 $params[] = $shopId;
                 $params[] = $shopId;
             } elseif ($status === 'returned') {
@@ -1700,6 +1704,8 @@ class ShopService {
      * Get Complete Single Product Variant Details for Shop Inventory.
      */
     public static function getShopInventoryItem(int $shopId, int $variantId): ?array {
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = (int)currentConcernId();
         $sql = "SELECT sb.*, 
                        pv.sku, pv.qr_code, pv.mrp, pv.selling_price, pv.purchase_price, pv.production_cost, 
                        pv.weight as variant_weight, pv.image_url as variant_image,
@@ -1716,7 +1722,7 @@ class ShopService {
                        COALESCE(wssc.name, subsubcat.name) as sub_subcategory_name,
                        b.name as brand_name, sel.name as seller_name,
                        sb.quantity as available_quantity,
-                       (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'SHOP' AND location_id = sb.location_id AND stock_state = 'DAMAGED') as damaged_quantity,
+                       (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'SHOP' AND location_id = sb.location_id AND concern_id = {$concernId} AND stock_state = 'DAMAGED') as damaged_quantity,
                        (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales sl ON si.sale_id = sl.id WHERE si.variant_id = sb.variant_id AND sl.shop_id = sb.location_id AND sl.sale_type = 'SHOP' AND sl.status != 'CANCELLED') as sold_quantity,
                        (SELECT COALESCE(SUM(wri.returned_qty), 0) FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wri.variant_id = sb.variant_id AND wr.source_type = 'SHOP' AND wr.source_id = sb.location_id) as returned_quantity,
                        (SELECT COALESCE(SUM(ri.quantity), 0) FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id WHERE ri.variant_id = sb.variant_id AND (r.source_type = 'SHOP' OR s.shop_id = sb.location_id) AND r.return_type = 'EXCHANGE') as exchanged_quantity
@@ -1734,13 +1740,13 @@ class ShopService {
                 LEFT JOIN sellers sel ON p.seller_id = sel.id
                 LEFT JOIN sizes s ON pv.size_id = s.id
                 LEFT JOIN colors c ON pv.color_id = c.id
-                WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.variant_id = ? AND sb.stock_state = 'AVAILABLE'";
+                WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.variant_id = ? AND sb.concern_id = ? AND sb.stock_state = 'AVAILABLE'";
 
-        $item = Database::fetchOne($sql, [$shopId, $variantId]);
+        $item = Database::fetchOne($sql, [$shopId, $variantId, $concernId]);
         if (!$item) {
             // Fallback query if stock balance is zero or not yet initialized
             $fallbackSql = "SELECT pv.*, pv.id as variant_id, 0 as quantity, 0 as available_quantity,
-                                   (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND stock_state = 'DAMAGED') as damaged_quantity,
+                                   (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND concern_id = {$concernId} AND stock_state = 'DAMAGED') as damaged_quantity,
                                    0 as sold_quantity, 0 as returned_quantity, 0 as exchanged_quantity,
                                    pv.weight as variant_weight, pv.image_url as variant_image,
                                    p.id as product_id, p.name as product_name, p.code as product_code, p.image_url as product_image,
@@ -1780,18 +1786,21 @@ class ShopService {
                 "SELECT st.*, u.full_name as user_name
                  FROM stock_transactions st
                  LEFT JOIN users u ON st.user_id = u.id
-                 WHERE st.location_type = 'SHOP' AND st.location_id = ? AND st.variant_id = ?
+                 WHERE st.location_type = 'SHOP' AND st.location_id = ? AND st.variant_id = ? AND st.concern_id = ?
                  ORDER BY st.id DESC LIMIT 15",
-                [$shopId, $variantId]
+                [$shopId, $variantId, $concernId]
             );
 
             // Fetch warehouse balances for this variant
+            $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+            $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
             $item['warehouse_balances'] = Database::fetchAll(
                 "SELECT sb.*, w.name as warehouse_name
                  FROM stock_balances sb
-                 JOIN warehouses w ON sb.location_id = w.id
-                 WHERE sb.location_type = 'WAREHOUSE' AND sb.variant_id = ? AND sb.stock_state = 'AVAILABLE'",
-                [$variantId]
+                 JOIN warehouses w ON sb.location_id = w.id AND w.concern_id = ?
+                 WHERE sb.location_type = 'WAREHOUSE' AND sb.variant_id = ? AND sb.concern_id = ?
+                   AND sb.location_id IN ({$warehouseList}) AND sb.stock_state = 'AVAILABLE'",
+                [$concernId, $variantId, $concernId]
             );
 
             // Fetch Inward Allocations and saved piece QR tags for this variant at this shop
@@ -1799,13 +1808,13 @@ class ShopService {
                 "SELECT ai.*, wa.allocation_number, wa.created_at as alloc_date, wa.status as alloc_status,
                         ao.outward_number, ao.dispatched_at
                  FROM allocation_items ai
-                 JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
+                 JOIN warehouse_allocations wa ON ai.allocation_id = wa.id AND wa.concern_id = ?
                  LEFT JOIN allocation_outwards ao ON ao.allocation_id = wa.id
                  WHERE ai.variant_id = ? 
                    AND (wa.shop_id = ? OR (wa.destination_type = 'SHOP' AND wa.destination_id = ?)
-                        OR wa.id IN (SELECT reference_id FROM stock_transactions WHERE variant_id = ? AND location_type = 'SHOP' AND location_id = ? AND reference_type = 'warehouse_allocations'))
+                        OR wa.id IN (SELECT reference_id FROM stock_transactions WHERE variant_id = ? AND location_type = 'SHOP' AND location_id = ? AND concern_id = ? AND reference_type = 'warehouse_allocations'))
                  ORDER BY wa.id DESC",
-                [$variantId, $shopId, $shopId, $variantId, $shopId]
+                [$concernId, $variantId, $shopId, $shopId, $variantId, $shopId, $concernId]
             );
 
             $damageRecords = Database::fetchAll(
@@ -2314,6 +2323,8 @@ class ShopService {
     public static function lookupInvoice(string $query, int $shopId): ?array {
         $query = trim($query);
         if (empty($query)) return null;
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = (int)currentConcernId();
 
         if (str_starts_with($query, '{') && str_ends_with($query, '}')) {
             $json = json_decode($query, true);
@@ -2353,6 +2364,7 @@ class ShopService {
                                   WHERE sb.variant_id = pv.id 
                                     AND sb.location_type = 'SHOP' 
                                     AND sb.location_id = ? 
+                                    AND sb.concern_id = " . (int)currentConcernId() . "
                                     AND sb.stock_state = 'AVAILABLE'), 0) as shop_stock
                  FROM product_variants pv
                  LEFT JOIN sizes sz ON pv.size_id = sz.id

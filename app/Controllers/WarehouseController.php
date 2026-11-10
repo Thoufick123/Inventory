@@ -44,11 +44,14 @@ class WarehouseController {
         }
 
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        $concernId = (int)(function_exists('currentConcernId') ? currentConcernId() : 0);
         $stats = WarehouseService::getDashboardStats($scopedWarehouseId);
 
         // Also fetch Person 2 outbound stats & recent records for full dashboard compatibility
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
-        $whStockClause = $scopedWarehouseId ? " AND location_id = $scopedWarehouseId" : "";
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
+        $whStockClause = " AND location_id IN ($warehouseList) AND concern_id = $concernId";
         $whAllocClause = $scopedWarehouseId ? " AND warehouse_id = $scopedWarehouseId" : "";
         $whOutClause = $scopedWarehouseId ? " AND ao.warehouse_id = $scopedWarehouseId" : "";
         $whRetClause = $scopedWarehouseId ? " AND warehouse_id = $scopedWarehouseId" : "";
@@ -743,21 +746,27 @@ class WarehouseController {
                         return;
                     }
 
-                    Database::execute("UPDATE warehouse_allocations SET status = 'COMPLETED', updated_at = NOW() WHERE id = ?", [$allocId]);
-                    Database::execute("UPDATE allocation_outwards SET status = 'DELIVERED', updated_at = NOW() WHERE allocation_id = ?", [$allocId]);
                     $items = Database::fetchAll("SELECT * FROM allocation_items WHERE allocation_id = ?", [$allocId]);
                     foreach ($items as $item) {
                         $qty = (int)($item['dispatched_qty'] > 0 ? $item['dispatched_qty'] : $item['requested_qty']);
                         AllocationItem::updateQuantities($item['id'], ['received_qty' => $qty]);
                         if ($qty > 0 && !empty($item['variant_id'])) {
-                            Database::execute(
-                                "INSERT INTO stock_balances (variant_id, location_type, location_id, stock_state, quantity, created_at, updated_at)
-                                 VALUES (?, 'CHANNEL', ?, 'AVAILABLE', ?, NOW(), NOW())
-                                 ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity), updated_at = NOW()",
-                                [$item['variant_id'], $stockChannelId, $qty]
+                            StockService::increase(
+                                (int)$item['variant_id'],
+                                'CHANNEL',
+                                $stockChannelId,
+                                'AVAILABLE',
+                                $qty,
+                                'ALLOCATION_RECEIPT',
+                                'warehouse_allocations',
+                                $allocId,
+                                (int)(Session::get('user_id') ?? 0) ?: null,
+                                'Allocation inward receipt'
                             );
                         }
                     }
+                    Database::execute("UPDATE warehouse_allocations SET status = 'COMPLETED', updated_at = NOW() WHERE id = ? AND concern_id = ?", [$allocId, $concernId]);
+                    Database::execute("UPDATE allocation_outwards SET status = 'DELIVERED', updated_at = NOW() WHERE allocation_id = ? AND concern_id = ?", [$allocId, $concernId]);
 
                     Response::jsonSuccess("Allocation #{$allocation['allocation_number']} ({$totalQty} pcs) received and inwarded to {$allocation['channel_name']} successfully!", [
                         'batch'    => [
@@ -930,11 +939,17 @@ class WarehouseController {
 
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $concernId = (int)(function_exists('currentConcernId') ? currentConcernId() : 0);
+        $accessibleWarehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $accessibleWarehouseList = $accessibleWarehouseIds ? implode(',', $accessibleWarehouseIds) : '0';
 
-        if ($scopedWarehouseId) {
+        if ($scopedWarehouseId !== null) {
             $selectedWarehouseId = $scopedWarehouseId;
         } else {
-            $selectedWarehouseId = !empty($warehouseId) ? (int)$warehouseId : ($warehouses[0]['id'] ?? 1);
+            $requestedWarehouseId = !empty($warehouseId) ? (int)$warehouseId : 0;
+            $selectedWarehouseId = in_array($requestedWarehouseId, $accessibleWarehouseIds, true)
+                ? $requestedWarehouseId
+                : (int)($accessibleWarehouseIds[0] ?? 0);
         }
 
         $currentWarehouse = null;
@@ -969,13 +984,15 @@ class WarehouseController {
                 LEFT JOIN colors col ON pv.color_id = col.id
                  LEFT JOIN warehouse_suppliers sel ON p.warehouse_supplier_id = sel.id
                 LEFT JOIN brands b ON p.brand_id = b.id
-                JOIN warehouses w ON sb.location_id = w.id
-                WHERE sb.location_type = 'WAREHOUSE'";
+                JOIN warehouses w ON sb.location_id = w.id AND w.concern_id = sb.concern_id
+                WHERE sb.location_type = 'WAREHOUSE' AND sb.concern_id = {$concernId}";
         $params = [];
 
-        if (!empty($selectedWarehouseId)) {
+        if ($selectedWarehouseId > 0) {
             $sql .= " AND sb.location_id = ?";
             $params[] = $selectedWarehouseId;
+        } else {
+        $sql .= " AND 1 = 0";
         }
 
         if (!empty($stockState)) {
@@ -989,7 +1006,7 @@ class WarehouseController {
         }
 
         if (!empty($search)) {
-            $sql .= " AND (p.name LIKE ? OR pv.sku LIKE ? OR p.code LIKE ? OR sel.name LIKE ? OR b.name LIKE ? OR pv.qr_code LIKE ? OR p.qr_code_prefix LIKE ? OR s.name LIKE ? OR col.name LIKE ? OR p.material LIKE ? OR EXISTS (SELECT 1 FROM stock_transactions st_search WHERE st_search.variant_id = pv.id AND st_search.location_type = 'WAREHOUSE' AND st_search.location_id = sb.location_id AND st_search.notes LIKE ?))";
+            $sql .= " AND (p.name LIKE ? OR pv.sku LIKE ? OR p.code LIKE ? OR sel.name LIKE ? OR b.name LIKE ? OR pv.qr_code LIKE ? OR p.qr_code_prefix LIKE ? OR s.name LIKE ? OR col.name LIKE ? OR p.material LIKE ? OR EXISTS (SELECT 1 FROM stock_transactions st_search WHERE st_search.variant_id = pv.id AND st_search.location_type = 'WAREHOUSE' AND st_search.location_id = sb.location_id AND st_search.concern_id = {$concernId} AND st_search.notes LIKE ?))";
             $s = '%' . $search . '%';
             $params = array_merge($params, [$s, $s, $s, $s, $s, $s, $s, $s, $s, $s, $s]);
         }
@@ -1007,14 +1024,15 @@ class WarehouseController {
                          FROM stock_balances sb
                          JOIN product_variants pv ON sb.variant_id = pv.id
                          JOIN products p ON pv.product_id = p.id
-                         JOIN warehouses w ON sb.location_id = w.id
+                         JOIN warehouses w ON sb.location_id = w.id AND w.concern_id = sb.concern_id
                          LEFT JOIN warehouse_suppliers sel ON p.warehouse_supplier_id = sel.id
                          LEFT JOIN brands b ON p.brand_id = b.id
                          LEFT JOIN sizes s ON pv.size_id = s.id
                          LEFT JOIN colors col ON pv.color_id = col.id
-                         WHERE sb.location_type = 'WAREHOUSE'
+                         WHERE sb.location_type = 'WAREHOUSE' AND sb.concern_id = {$concernId}
+                           AND sb.location_id IN ({$accessibleWarehouseList})
                            AND sb.location_id != ?
-                           AND (p.name LIKE ? OR pv.sku LIKE ? OR p.code LIKE ? OR sel.name LIKE ? OR b.name LIKE ? OR pv.qr_code LIKE ? OR p.qr_code_prefix LIKE ? OR s.name LIKE ? OR col.name LIKE ? OR p.material LIKE ? OR EXISTS (SELECT 1 FROM stock_transactions st_search WHERE st_search.variant_id = pv.id AND st_search.location_type = 'WAREHOUSE' AND st_search.location_id = sb.location_id AND st_search.notes LIKE ?))
+                           AND (p.name LIKE ? OR pv.sku LIKE ? OR p.code LIKE ? OR sel.name LIKE ? OR b.name LIKE ? OR pv.qr_code LIKE ? OR p.qr_code_prefix LIKE ? OR s.name LIKE ? OR col.name LIKE ? OR p.material LIKE ? OR EXISTS (SELECT 1 FROM stock_transactions st_search WHERE st_search.variant_id = pv.id AND st_search.location_type = 'WAREHOUSE' AND st_search.location_id = sb.location_id AND st_search.concern_id = {$concernId} AND st_search.notes LIKE ?))
                          GROUP BY sb.location_id, w.name, w.code, p.id, p.name, p.code, pv.id, pv.sku, p.source_type, sb.stock_state
                          HAVING total_qty > 0
                          ORDER BY w.name ASC, p.name ASC";
@@ -1159,8 +1177,8 @@ class WarehouseController {
                 COALESCE(SUM(CASE WHEN stock_state = 'DAMAGED' THEN quantity ELSE 0 END), 0) as damaged_qty,
                 COUNT(DISTINCT variant_id) as unique_variants
              FROM stock_balances
-             WHERE location_type = 'WAREHOUSE' AND location_id = ?",
-            [$selectedWarehouseId]
+             WHERE location_type = 'WAREHOUSE' AND location_id = ? AND concern_id = ?",
+            [$selectedWarehouseId, $concernId]
         );
 
         $reworkStats = Database::fetchOne(
@@ -1295,16 +1313,6 @@ class WarehouseController {
                 throw new Exception('Please specify an inward quantity greater than 0 for at least one size variant.');
             }
 
-            // Sync products total quantity
-            Database::execute(
-                "UPDATE products SET quantity = COALESCE((
-                    SELECT SUM(sb.quantity) FROM stock_balances sb 
-                    JOIN product_variants pv ON sb.variant_id = pv.id
-                    WHERE pv.product_id = ? AND sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'
-                ), 0) WHERE id = ?",
-                [$productId, $productId]
-            );
-
             AuditService::log('warehouse', 'quick_inward', 'products', $productId, null, [
                 'product_name' => $product['name'],
                 'warehouse_id' => $warehouseId,
@@ -1371,6 +1379,12 @@ class WarehouseController {
 
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $selectedWarehouseId = !empty($_GET['warehouse_id']) ? (int)$_GET['warehouse_id'] : ($scopedWarehouseId ? (int)$scopedWarehouseId : null);
+        $accessibleWarehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if ($selectedWarehouseId && !in_array($selectedWarehouseId, $accessibleWarehouseIds, true)) {
+            Session::flash('error', 'Warehouse is not available in the active concern.');
+            Response::redirect(url('warehouse/stock'));
+            return;
+        }
         $selectedWarehouse = null;
         if ($selectedWarehouseId) {
             $selectedWarehouse = Warehouse::find($selectedWarehouseId);
@@ -1380,14 +1394,15 @@ class WarehouseController {
         }
 
         // Fetch balances across all warehouses (or scoped warehouse if user has hard restriction)
-        $whBalanceClause = $scopedWarehouseId ? " AND sb.location_id = " . (int)$scopedWarehouseId : "";
+        $accessibleWarehouseList = $accessibleWarehouseIds ? implode(',', $accessibleWarehouseIds) : '0';
+        $whBalanceClause = " AND sb.location_id IN ({$accessibleWarehouseList})";
         $balances = Database::fetchAll(
             "SELECT sb.*, w.name as warehouse_name, w.code as warehouse_code
              FROM stock_balances sb
-             JOIN warehouses w ON sb.location_id = w.id
-             WHERE sb.variant_id = ? AND sb.location_type = 'WAREHOUSE'$whBalanceClause
+             JOIN warehouses w ON sb.location_id = w.id AND w.concern_id = sb.concern_id
+             WHERE sb.variant_id = ? AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = ?$whBalanceClause
              ORDER BY w.name ASC, sb.stock_state ASC",
-            [$variantId]
+            [$variantId, (int)currentConcernId()]
         );
 
         $txFilters = ['limit' => 50];
@@ -2586,11 +2601,7 @@ class WarehouseController {
         $quantity = max(1, min(500, (int)($_POST['quantity'] ?? 1)));
 
         // Verify available stock in selected warehouse (strict check against missing stock)
-        $avail = Database::fetchOne(
-            "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'",
-            [$variantId, $warehouseId]
-        );
-        $maxAvailable = (int)($avail['quantity'] ?? 0);
+        $maxAvailable = (int)StockService::getAvailable($variantId, 'WAREHOUSE', $warehouseId);
 
         if ($maxAvailable <= 0) {
             Session::flash('error', 'Cannot re-generate QR codes: No available received stock for this variant in the selected warehouse. Missing or short items cannot be re-generated.');
@@ -2660,6 +2671,8 @@ class WarehouseController {
         }
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variants = Database::fetchAll(
             "SELECT pv.*, p.name as product_name, p.code as product_code,
                     COALESCE(wc.name, cat.name) as category_name,
@@ -3029,6 +3042,18 @@ class WarehouseController {
 
         $rawCode = trim($_REQUEST['code'] ?? $_REQUEST['query'] ?? $_REQUEST['search'] ?? '');
         $warehouseId = (int)($_REQUEST['warehouse_id'] ?? 0);
+        $accessibleWarehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if ($warehouseId > 0 && !in_array($warehouseId, $accessibleWarehouseIds, true)) {
+            Response::jsonError('Warehouse is not available in the active concern.', [], 403);
+            return;
+        }
+        $accessibleWarehouseList = $accessibleWarehouseIds ? implode(',', $accessibleWarehouseIds) : '0';
+        $damageStockLocationClause = " AND location_id IN ({$accessibleWarehouseList})";
+        $damageStockLocationAliasClause = " AND available_sb.location_id IN ({$accessibleWarehouseList})";
+        if ($warehouseId > 0) {
+            $damageStockLocationClause .= " AND location_id = {$warehouseId}";
+            $damageStockLocationAliasClause .= " AND available_sb.location_id = {$warehouseId}";
+        }
 
         if (empty($rawCode)) {
             echo json_encode(['success' => false, 'message' => 'No scan code or SKU provided.']);
@@ -3171,7 +3196,7 @@ class WarehouseController {
                      LEFT JOIN categories cat ON p.category_id = cat.id
                      LEFT JOIN subcategories subcat ON p.subcategory_id = subcat.id
                      LEFT JOIN sub_subcategories subsubcat ON p.sub_subcategory_id = subsubcat.id
-                     LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
+                     LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$accessibleWarehouseList}) " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
                      WHERE st.notes LIKE ? OR st.notes LIKE ?
                      ORDER BY sb.quantity DESC, st.id DESC
                      LIMIT 1",
@@ -3203,7 +3228,7 @@ class WarehouseController {
                      LEFT JOIN categories cat ON p.category_id = cat.id
                      LEFT JOIN subcategories subcat ON p.subcategory_id = subcat.id
                      LEFT JOIN sub_subcategories subsubcat ON p.sub_subcategory_id = subsubcat.id
-                     LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
+                     LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$accessibleWarehouseList}) " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
                      WHERE pi.batch_lot_no LIKE ? OR pi.notes LIKE ?
                      ORDER BY sb.quantity DESC, pi.id DESC
                      LIMIT 1",
@@ -3330,11 +3355,8 @@ class WarehouseController {
 
         // Resolve individual tags within a configured series range before trying fuzzy product matching.
         if (!$variant && preg_match('/^(.*?)(\d+)$/', trim($extractedTag), $scannedSeriesTag)) {
-            $rangeStockLocationClause = $warehouseId > 0 ? ' AND available_sb.location_id = ?' : '';
+            $rangeStockLocationClause = $damageStockLocationAliasClause;
             $rangeParams = [];
-            if ($warehouseId > 0) {
-                $rangeParams[] = $warehouseId;
-            }
             $rangeVariants = Database::fetchAll(
                 "SELECT pv.*,
                         p.id AS product_id, p.name AS product_name, p.code AS product_code, p.image_url AS product_image,
@@ -3362,6 +3384,7 @@ class WarehouseController {
                        SELECT 1 FROM stock_balances available_sb
                        WHERE available_sb.variant_id = pv.id
                          AND available_sb.location_type = 'WAREHOUSE'
+                         AND available_sb.concern_id = " . (int)currentConcernId() . "
                          AND available_sb.stock_state = 'AVAILABLE'
                          AND available_sb.quantity > 0{$rangeStockLocationClause}
                    )
@@ -3420,7 +3443,7 @@ class WarehouseController {
                         LEFT JOIN categories cat ON p.category_id = cat.id
                         LEFT JOIN subcategories subcat ON p.subcategory_id = subcat.id
                         LEFT JOIN sub_subcategories subsubcat ON p.sub_subcategory_id = subsubcat.id
-                        LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
+                        LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$accessibleWarehouseList}) " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
                         WHERE pv.is_active = 1
                         ORDER BY wh_stock DESC, pv.id ASC
                     ");
@@ -3530,7 +3553,7 @@ class WarehouseController {
                         SELECT SUM(sb.quantity)
                         FROM stock_balances sb
                         WHERE sb.variant_id = pv.id
-                          AND sb.location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . "
+                          AND sb.location_type = 'WAREHOUSE' " . $damageStockLocationClause . "
                           AND sb.stock_state = 'AVAILABLE'
                     ), 0) as available_stock
              FROM product_variants pv
@@ -3550,7 +3573,7 @@ class WarehouseController {
                     WHERE available_sb.variant_id = pv.id
                       AND available_sb.location_type = 'WAREHOUSE'
                       AND available_sb.stock_state = 'AVAILABLE'
-                      AND available_sb.quantity > 0 " . ($warehouseId > 0 ? "AND available_sb.location_id = {$warehouseId}" : "") . "
+                      AND available_sb.quantity > 0 " . $damageStockLocationAliasClause . "
                )
              ORDER BY available_stock DESC, pv.id ASC
              LIMIT 10",
@@ -3648,11 +3671,15 @@ class WarehouseController {
                         COALESCE(SUM(CASE WHEN stock_state = 'DAMAGED' THEN quantity ELSE 0 END), 0) as damaged_qty,
                         COALESCE(SUM(CASE WHEN stock_state = 'RESERVED' THEN quantity ELSE 0 END), 0) as reserved_qty
                      FROM stock_balances
-                     WHERE variant_id = ? AND location_type = 'WAREHOUSE'";
-        $stockParams = [$variant['id']];
+                     WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND concern_id = ?";
+        $stockParams = [$variant['id'], (int)currentConcernId()];
         if ($warehouseId > 0) {
+            StockService::assertLocationBelongsToActiveConcern('WAREHOUSE', $warehouseId);
             $stockSql .= " AND location_id = ?";
             $stockParams[] = $warehouseId;
+        } else {
+            $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+            $stockSql .= " AND location_id IN (" . ($warehouseIds ? implode(',', $warehouseIds) : '0') . ")";
         }
         $stock = Database::fetchOne($stockSql, $stockParams);
 
@@ -3843,10 +3870,12 @@ class WarehouseController {
             return null;
         }
 
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $stockSql = "SELECT COALESCE(SUM(quantity), 0) as available_qty
                      FROM stock_balances
                      WHERE variant_id = ? AND location_type = 'WAREHOUSE'
-                       AND stock_state = 'AVAILABLE'";
+                       AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList}) AND stock_state = 'AVAILABLE'";
         $stockParams = [(int)$outwardTag['variant_id']];
         if ($warehouseId > 0) {
             $stockSql .= " AND location_id = ?";
@@ -3998,10 +4027,7 @@ class WarehouseController {
 
                 // Handle stock balance changes if moving to RESTOCKED/REPAIRED or WRITTEN_OFF
                 if (in_array($newStatus, ['RESTOCKED', 'REPAIRED'], true) && $variantId > 0 && $warehouseId > 0) {
-                    $currDamagedBalance = (float)(Database::fetchOne(
-                        "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'DAMAGED'",
-                        [$variantId, $warehouseId]
-                    )['quantity'] ?? 0);
+                    $currDamagedBalance = StockService::getBalance($variantId, 'WAREHOUSE', $warehouseId, 'DAMAGED');
                     if ($currDamagedBalance > 0) {
                         $dec = min((float)$selectedCount, $currDamagedBalance);
                         StockService::decrease(
@@ -4018,10 +4044,7 @@ class WarehouseController {
                         notes: "Restocked {$selectedCount} picked pcs from Damage Case #{$damage['damage_number']} [Status: {$newStatus}]"
                     );
                 } elseif (in_array($newStatus, ['WRITTEN_OFF', 'DISPOSED', 'SCRAPPED'], true) && $variantId > 0 && $warehouseId > 0) {
-                    $currDamagedBalance = (float)(Database::fetchOne(
-                        "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'DAMAGED'",
-                        [$variantId, $warehouseId]
-                    )['quantity'] ?? 0);
+                    $currDamagedBalance = StockService::getBalance($variantId, 'WAREHOUSE', $warehouseId, 'DAMAGED');
                     if ($currDamagedBalance > 0) {
                         $dec = min((float)$selectedCount, $currDamagedBalance);
                         StockService::decrease(
@@ -4150,10 +4173,7 @@ class WarehouseController {
             // 1. Transitioning from Damaged/Quarantine -> Restocked / Repaired (Increase Available, Decrease Damaged)
             if (!$isOldRestocked && $isNewRestocked && $variantId > 0 && $warehouseId > 0 && $qty > 0) {
                 // Decrease from DAMAGED balance if available
-                $currDamagedBalance = (float)(Database::fetchOne(
-                    "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'DAMAGED'",
-                    [$variantId, $warehouseId]
-                )['quantity'] ?? 0);
+                $currDamagedBalance = StockService::getBalance($variantId, 'WAREHOUSE', $warehouseId, 'DAMAGED');
 
                 if ($currDamagedBalance > 0) {
                     $decreaseDamagedQty = min($qty, $currDamagedBalance);
@@ -4188,10 +4208,7 @@ class WarehouseController {
             // 2. Transitioning from Restocked / Repaired back to Damaged / Logged (Decrease Available, Increase Damaged)
             elseif ($isOldRestocked && !$isNewRestocked && $variantId > 0 && $warehouseId > 0 && $qty > 0) {
                 // Decrease from AVAILABLE balance if available
-                $currAvailBalance = (float)(Database::fetchOne(
-                    "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                    [$variantId, $warehouseId]
-                )['quantity'] ?? 0);
+                $currAvailBalance = StockService::getAvailable($variantId, 'WAREHOUSE', $warehouseId);
 
                 if ($currAvailBalance > 0) {
                     $decreaseAvailQty = min($qty, $currAvailBalance);
@@ -4225,10 +4242,7 @@ class WarehouseController {
             }
             // 3. Transitioning to WRITTEN_OFF from a damaged quarantine state
             elseif (!$isOldRestocked && in_array($newStatus, ['WRITTEN_OFF', 'DISPOSED', 'SCRAPPED'], true) && $variantId > 0 && $warehouseId > 0 && $qty > 0) {
-                $currDamagedBalance = (float)(Database::fetchOne(
-                    "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'DAMAGED'",
-                    [$variantId, $warehouseId]
-                )['quantity'] ?? 0);
+                $currDamagedBalance = StockService::getBalance($variantId, 'WAREHOUSE', $warehouseId, 'DAMAGED');
 
                 if ($currDamagedBalance > 0) {
                     $decreaseDamagedQty = min($qty, $currDamagedBalance);
@@ -4499,6 +4513,8 @@ class WarehouseController {
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $customers = Database::fetchAll("SELECT * FROM customers WHERE is_active = 1 ORDER BY name ASC");
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.qr_code, pv.qr_type, pv.series_start_code, pv.series_end_code, pv.pack_quantity,
                     pv.selling_price, pv.mrp, p.name as product_name, p.code as product_code, p.qr_code_prefix,
@@ -4521,6 +4537,9 @@ class WarehouseController {
                  SELECT variant_id, SUM(quantity) as total_avail 
                  FROM stock_balances 
                  WHERE stock_state = 'AVAILABLE' AND location_type = 'WAREHOUSE'
+                   AND concern_id = " . (int)currentConcernId() . "
+                   AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList})
+                   AND concern_id = " . (int)currentConcernId() . "
                  GROUP BY variant_id
              ) sb ON pv.id = sb.variant_id
              WHERE pv.is_active = 1
@@ -4790,6 +4809,8 @@ class WarehouseController {
         $items = PurchaseOrder::getItems($poId);
         $customers = Database::fetchAll("SELECT * FROM customers WHERE is_active = 1 ORDER BY name ASC");
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.qr_code, pv.qr_type, pv.series_start_code, pv.series_end_code, pv.pack_quantity,
                     pv.selling_price, pv.mrp, p.name as product_name, p.code as product_code, p.qr_code_prefix,
@@ -4812,6 +4833,8 @@ class WarehouseController {
                  SELECT variant_id, SUM(quantity) as total_avail 
                  FROM stock_balances 
                  WHERE stock_state = 'AVAILABLE' AND location_type = 'WAREHOUSE'
+                   AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList})
+                   AND concern_id = " . (int)currentConcernId() . "
                  GROUP BY variant_id
              ) sb ON pv.id = sb.variant_id
              WHERE pv.is_active = 1
@@ -5433,7 +5456,7 @@ class WarehouseController {
                         $placeholders = implode(',', array_fill(0, count($matchedProdIds), '?'));
                         $variant = Database::fetchOne(
                             $baseVariantSql . "
-                             LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'
+                             LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'AVAILABLE'
                              WHERE pv.product_id IN ($placeholders) AND pv.is_active = 1
                              ORDER BY COALESCE(sb.quantity, 0) DESC, pv.id ASC
                              LIMIT 1",
@@ -5450,7 +5473,7 @@ class WarehouseController {
                 if (strlen($c) < 2) continue;
                 $variant = Database::fetchOne(
                     $baseVariantSql . "
-                     LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'
+                     LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'AVAILABLE'
                      WHERE (pv.sku LIKE ? OR p.name LIKE ? OR p.code LIKE ? OR col.name LIKE ?) AND pv.is_active = 1
                      ORDER BY COALESCE(sb.quantity, 0) DESC, pv.id ASC
                      LIMIT 1",
@@ -5481,19 +5504,14 @@ class WarehouseController {
 
         $warehouseId = (int)($_REQUEST['warehouse_id'] ?? 0);
         if ($warehouseId > 0) {
-            $avail = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                [$variant['id'], $warehouseId]
-            );
+            $availableStock = StockService::getAvailable((int)$variant['id'], 'WAREHOUSE', $warehouseId);
         } else {
-            $avail = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'",
-                [$variant['id']]
-            );
+            $availableStock = 0.0;
+            foreach (getScopedWarehouses() as $warehouse) {
+                $availableStock += StockService::getAvailable((int)$variant['id'], 'WAREHOUSE', (int)$warehouse['id']);
+            }
         }
-        $availableStock = (int)($avail['qty'] ?? 0);
+        $availableStock = (int)$availableStock;
 
         // 1. Warehouse Available Stock Check
         if ($availableStock <= 0 && !$isAdjustmentScan) {
@@ -5910,11 +5928,17 @@ class WarehouseController {
         }
         header('Content-Type: application/json');
         $warehouseId = (int)($_REQUEST['warehouse_id'] ?? 0);
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if ($warehouseId > 0) {
+            StockService::assertLocationBelongsToActiveConcern('WAREHOUSE', $warehouseId);
+            $warehouseIds = [$warehouseId];
+        }
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         if ($warehouseId > 0) {
             $stock = Database::fetchAll(
                 "SELECT variant_id, COALESCE(SUM(quantity), 0) as available_stock 
                  FROM stock_balances 
-                 WHERE location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'
+                 WHERE location_type = 'WAREHOUSE' AND location_id = ? AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'
                  GROUP BY variant_id",
                 [$warehouseId]
             );
@@ -5922,7 +5946,8 @@ class WarehouseController {
             $stock = Database::fetchAll(
                 "SELECT variant_id, COALESCE(SUM(quantity), 0) as available_stock 
                  FROM stock_balances 
-                 WHERE location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'
+                 WHERE location_type = 'WAREHOUSE' AND concern_id = " . (int)currentConcernId() . "
+                   AND location_id IN ({$warehouseList}) AND stock_state = 'AVAILABLE'
                  GROUP BY variant_id"
             );
         }
@@ -6396,6 +6421,8 @@ class WarehouseController {
         $subSubcategories = Database::fetchAll("SELECT id, subcategory_id, name FROM sub_subcategories WHERE is_active = 1 ORDER BY name ASC");
         $salesChannels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels() : [];
 
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $defaultWhId = $scopedWarehouseId !== null ? $scopedWarehouseId : (!empty($warehouses) ? (int)$warehouses[0]['id'] : 0);
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.qr_code as barcode, pv.mrp, pv.selling_price, pv.purchase_price,
@@ -6411,7 +6438,7 @@ class WarehouseController {
                     p.id as product_id, p.name as product_name, p.category_id, p.subcategory_id, p.sub_subcategory_id,
                     sz.name as size_name, c.name as color_name,
                     COALESCE(wc.name, cat.name) as category_name, subcat.name as subcategory_name, subsub.name as sub_subcategory_name,
-                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' " . ($defaultWhId > 0 ? "AND location_id = {$defaultWhId}" : "") . " AND stock_state = 'AVAILABLE'), 0) as total_warehouse_stock
+                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList}) " . ($defaultWhId > 0 ? "AND location_id = {$defaultWhId}" : "") . " AND stock_state = 'AVAILABLE'), 0) as total_warehouse_stock
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
@@ -6531,12 +6558,7 @@ class WarehouseController {
         }
 
         foreach ($requestedPerVariant as $vIdInt => $totalReqQty) {
-            $avail = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                [$vIdInt, $warehouseId]
-            );
-            $availableStock = (float)($avail['qty'] ?? 0);
+            $availableStock = StockService::getAvailable($vIdInt, 'WAREHOUSE', (int)$warehouseId);
 
             if ($totalReqQty > $availableStock) {
                 $variant = Database::fetchOne("SELECT sku FROM product_variants WHERE id = ?", [$vIdInt]);
@@ -6620,12 +6642,14 @@ class WarehouseController {
                             || !empty($vCheck['is_comp'])
                         ));
 
-                        $availStockRow = Database::fetchOne(
-                            "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                             WHERE variant_id = ? AND location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND location_id = {$warehouseId}" : "") . " AND stock_state = 'AVAILABLE'",
-                            [(int)$vId]
-                        );
-                        $availQty = (float)($availStockRow['qty'] ?? 0);
+                        $availQty = $warehouseId > 0
+                            ? StockService::getAvailable((int)$vId, 'WAREHOUSE', (int)$warehouseId)
+                            : 0.0;
+                        if ($warehouseId <= 0) {
+                            foreach (getScopedWarehouses() as $warehouse) {
+                                $availQty += StockService::getAvailable((int)$vId, 'WAREHOUSE', (int)$warehouse['id']);
+                            }
+                        }
                         $rowReqQty = (float)($requestedQty[$idx] ?? 0);
 
                         if ($isMasterOrComp && $availQty >= $rowReqQty) {
@@ -6688,6 +6712,18 @@ class WarehouseController {
 
     public function ajaxVariantStockHierarchy(): void {
         $warehouseId = (int)($_REQUEST['warehouse_id'] ?? 0);
+        $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($scopedWarehouseId === 0) {
+            Response::json(['success' => false, 'message' => 'No warehouse is assigned to this staff account.'], 403);
+            return;
+        }
+        if ($scopedWarehouseId !== null) {
+            $warehouseId = $scopedWarehouseId;
+        } elseif ($warehouseId > 0) {
+            StockService::assertLocationBelongsToActiveConcern('WAREHOUSE', $warehouseId);
+        }
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variantId   = (int)($_REQUEST['variant_id'] ?? 0);
         $categoryId  = (int)($_REQUEST['category_id'] ?? 0);
 
@@ -6715,31 +6751,17 @@ class WarehouseController {
             }
 
             if ($warehouseId > 0) {
-                $avail = Database::fetchOne(
-                    "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                     WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                    [$variantId, $warehouseId]
-                );
-                $res = Database::fetchOne(
-                    "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                     WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'RESERVED'",
-                    [$variantId, $warehouseId]
-                );
+                $availableStock = StockService::getAvailable($variantId, 'WAREHOUSE', $warehouseId);
+                $reservedStock = StockService::getBalance($variantId, 'WAREHOUSE', $warehouseId, 'RESERVED');
             } else {
-                $avail = Database::fetchOne(
-                    "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                     WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'",
-                    [$variantId]
-                );
-                $res = Database::fetchOne(
-                    "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                     WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'RESERVED'",
-                    [$variantId]
-                );
+                $availableStock = 0.0;
+                $reservedStock = 0.0;
+                foreach (getScopedWarehouses() as $warehouse) {
+                    $scopedId = (int)$warehouse['id'];
+                    $availableStock += StockService::getAvailable($variantId, 'WAREHOUSE', $scopedId);
+                    $reservedStock += StockService::getBalance($variantId, 'WAREHOUSE', $scopedId, 'RESERVED');
+                }
             }
-
-            $availableStock = (float)($avail['qty'] ?? 0);
-            $reservedStock  = (float)($res['qty'] ?? 0);
             $totalStock     = $availableStock + $reservedStock;
 
             $qrPieces = $this->generateVariantQrPieces($variant, (int)$availableStock, $warehouseId > 0 ? $warehouseId : null);
@@ -6780,8 +6802,8 @@ class WarehouseController {
                            p.name as product_name, p.category_id, p.subcategory_id, p.sub_subcategory_id,
                            c.name as color_name, sz.name as size_name,
                            cat.name as category_name, subcat.name as subcategory_name, subsub.name as sub_subcategory_name,
-                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'), 0) as available_stock,
-                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'RESERVED'), 0) as reserved_stock
+                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND location_id = ? AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'), 0) as available_stock,
+                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND location_id = ? AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'RESERVED'), 0) as reserved_stock
                     FROM product_variants pv
                     JOIN products p ON pv.product_id = p.id
                     LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
@@ -6805,8 +6827,8 @@ class WarehouseController {
                            p.name as product_name, p.category_id, p.subcategory_id, p.sub_subcategory_id,
                            c.name as color_name, sz.name as size_name,
                            cat.name as category_name, subcat.name as subcategory_name, subsub.name as sub_subcategory_name,
-                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'), 0) as available_stock,
-                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND stock_state = 'RESERVED'), 0) as reserved_stock
+                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList}) AND stock_state = 'AVAILABLE'), 0) as available_stock,
+                           COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList}) AND stock_state = 'RESERVED'), 0) as reserved_stock
                     FROM product_variants pv
                     JOIN products p ON pv.product_id = p.id
                     LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
@@ -7002,6 +7024,12 @@ class WarehouseController {
 
         $rawCode = trim($_REQUEST['code'] ?? $_REQUEST['query'] ?? $_REQUEST['search'] ?? '');
         $warehouseId = (int)($_REQUEST['warehouse_id'] ?? 0);
+        $accessibleWarehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if ($warehouseId > 0 && !in_array($warehouseId, $accessibleWarehouseIds, true)) {
+            Response::json(['success' => false, 'message' => 'Warehouse is not available in the active concern.'], 403);
+            return;
+        }
+        $accessibleWarehouseList = $accessibleWarehouseIds ? implode(',', $accessibleWarehouseIds) : '0';
 
         if (empty($rawCode)) {
             echo json_encode(['success' => false, 'message' => 'No scan code or SKU provided.']);
@@ -7163,12 +7191,14 @@ class WarehouseController {
                 ));
 
                 if ($isMasterOrComp) {
-                    $availStockRow = Database::fetchOne(
-                        "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                         WHERE variant_id = ? AND location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND location_id = {$warehouseId}" : "") . " AND stock_state = 'AVAILABLE'",
-                        [$alreadyAlloc['variant_id']]
-                    );
-                    $remStock = (float)($availStockRow['qty'] ?? 0);
+                    $remStock = $warehouseId > 0
+                        ? StockService::getAvailable((int)$alreadyAlloc['variant_id'], 'WAREHOUSE', (int)$warehouseId)
+                        : 0.0;
+                    if ($warehouseId <= 0) {
+                        foreach (getScopedWarehouses() as $warehouse) {
+                            $remStock += StockService::getAvailable((int)$alreadyAlloc['variant_id'], 'WAREHOUSE', (int)$warehouse['id']);
+                        }
+                    }
                     if ($remStock > 0) {
                         // Master pack has remaining stock in the warehouse! Allow scan to proceed for splitting/allocating
                         continue;
@@ -7553,7 +7583,7 @@ class WarehouseController {
                         LEFT JOIN categories cat ON p.category_id = cat.id
                         LEFT JOIN subcategories subcat ON p.subcategory_id = subcat.id
                         LEFT JOIN sub_subcategories subsubcat ON p.sub_subcategory_id = subsubcat.id
-                        LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
+                        LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$accessibleWarehouseList}) " . ($warehouseId > 0 ? "AND sb.location_id = {$warehouseId}" : "") . " AND sb.stock_state = 'AVAILABLE'
                         WHERE pv.is_active = 1
                         ORDER BY wh_stock DESC, pv.id ASC
                     ");
@@ -7694,33 +7724,16 @@ class WarehouseController {
             }
         }
 
-        // Fetch Live Stock Balances in this warehouse
-        if ($warehouseId > 0) {
-            $avail = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                [$variant['id'], $warehouseId]
-            );
-            $res = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'RESERVED'",
-                [$variant['id'], $warehouseId]
-            );
-        } else {
-            $avail = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'",
-                [$variant['id']]
-            );
-            $res = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as qty FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'RESERVED'",
-                [$variant['id']]
-            );
+        $availableStock = 0.0;
+        $reservedStock = 0.0;
+        $targetWarehouses = $warehouseId > 0
+            ? [['id' => $warehouseId]]
+            : getScopedWarehouses();
+        foreach ($targetWarehouses as $warehouse) {
+            $scopedId = (int)$warehouse['id'];
+            $availableStock += StockService::getAvailable((int)$variant['id'], 'WAREHOUSE', $scopedId);
+            $reservedStock += StockService::getBalance((int)$variant['id'], 'WAREHOUSE', $scopedId, 'RESERVED');
         }
-
-        $availableStock = (float)($avail['qty'] ?? 0);
-        $reservedStock  = (float)($res['qty'] ?? 0);
         $totalStock     = $availableStock + $reservedStock;
 
         if ($warehouseId > 0 && $availableStock <= 0) {
@@ -8925,6 +8938,8 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
+                          AND sb.concern_id = " . (int)currentConcernId() . "
                     ), 0) as available_qty
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -8965,6 +8980,7 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . "
                     ), 0) as available_qty
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -9154,6 +9170,8 @@ class WarehouseController {
             return;
         }
         $id = (int)$id;
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $items = [];
 
         if ($type === 'stock') {
@@ -9169,6 +9187,8 @@ class WarehouseController {
                             WHERE sb.variant_id = pv.id
                               AND sb.stock_state = 'AVAILABLE'
                               AND sb.location_type = 'WAREHOUSE'
+                              AND sb.concern_id = " . (int)currentConcernId() . "
+                              AND sb.location_id IN ({$warehouseList})
                         ), 0) as available_qty
                  FROM product_variants pv
                  JOIN products p ON pv.product_id = p.id
@@ -9578,15 +9598,11 @@ class WarehouseController {
             );
 
             // Fetch new real-time available stock balance
-            $newBalance = Database::fetchOne(
-                "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                [$variantId, $warehouseId]
-            )['quantity'] ?? $quantity;
-
-            $totalWarehouseStock = Database::fetchOne(
-                "SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'",
-                [$variantId]
-            )['total'] ?? $newBalance;
+            $newBalance = StockService::getAvailable($variantId, 'WAREHOUSE', $warehouseId);
+            $totalWarehouseStock = 0.0;
+            foreach (getScopedWarehouses() as $scopedWarehouse) {
+                $totalWarehouseStock += StockService::getAvailable($variantId, 'WAREHOUSE', (int)$scopedWarehouse['id']);
+            }
 
             AuditService::log('warehouse', 'inward', 'stock_balances', $variantId, null, [
                 'action'       => 'THIRD_PARTY_STICKERED_INWARD',
@@ -10238,6 +10254,8 @@ class WarehouseController {
         $categoryId = !empty($_GET['category_id']) ? (int)$_GET['category_id'] : null;
         $sellerId = !empty($_GET['seller_id']) ? (int)$_GET['seller_id'] : null;
         $sourceType = trim($_GET['source_type'] ?? '');
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         $sql = "SELECT p.*, c.name as category_name, sc.name as subcategory_name, ssc.name as sub_subcategory_name, b.name as brand_name,
                        s.name as seller_name, s.company as seller_company,
@@ -10270,6 +10288,8 @@ class WarehouseController {
                         SELECT variant_id, SUM(quantity) as wh_stock
                         FROM stock_balances
                         WHERE stock_state = 'AVAILABLE' AND location_type = 'WAREHOUSE'
+                          AND concern_id = " . (int)currentConcernId() . "
+                          AND location_id IN ({$warehouseList})
                         GROUP BY variant_id
                     ) sb_sum ON sb_sum.variant_id = pv.id
                     WHERE pv.is_active = 1
@@ -10314,17 +10334,24 @@ class WarehouseController {
         );
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         $productIds = array_column($products, 'id');
         $variantsByProduct = [];
         if (!empty($productIds)) {
             $placeholders = implode(',', array_fill(0, count($productIds), '?'));
-            $whStockClause = $scopedWarehouseId ? " AND sb.location_id = " . (int)$scopedWarehouseId : "";
+            $whStockClause = " AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})";
+            if ($scopedWarehouseId === 0) {
+                $whStockClause .= " AND 1 = 0";
+            } elseif ($scopedWarehouseId !== null) {
+                $whStockClause .= " AND sb.location_id = " . (int)$scopedWarehouseId;
+            }
             $allVariants = Database::fetchAll(
                 "SELECT pv.*, s.name as size_name, s.code as size_code, col.name as color_name, col.hex_code as color_hex,
                         COALESCE((
                             SELECT SUM(sb.quantity) FROM stock_balances sb 
-                            WHERE sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE' {$whStockClause}
+                            WHERE sb.variant_id = pv.id AND sb.location_type = 'WAREHOUSE'                                                         AND sb.stock_state = 'AVAILABLE' {$whStockClause}
                         ), 0) as current_stock
                  FROM product_variants pv
                  LEFT JOIN sizes s ON pv.size_id = s.id
@@ -11363,11 +11390,6 @@ class WarehouseController {
             }
         }
 
-        // Sync total quantity on products table
-        if ($totalCreditedStock > 0) {
-            Database::execute("UPDATE products SET quantity = ? WHERE id = ?", [$totalCreditedStock, $productId]);
-        }
-
         AuditService::log('warehouse', 'create', 'products', (int)$productId, null, ['name' => $name, 'code' => $code, 'variants' => $variantCount, 'source_type' => $sourceType, 'initial_stock' => $totalCreditedStock]);
 
             Database::commit();
@@ -11420,6 +11442,10 @@ class WarehouseController {
             Response::redirect(url('warehouse/catalog'));
             return;
         }
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
+        $shopIds = array_map('intval', array_column(getScopedShops(), 'id'));
+        $shopList = $shopIds ? implode(',', $shopIds) : '0';
 
         $variants = Database::fetchAll(
             "SELECT pv.*, s.name as size_name, s.code as size_code, col.name as color_name, col.hex_code as color_hex,
@@ -11429,6 +11455,8 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . "
+                          AND sb.location_id IN ({$warehouseList})
                     ), 0) as warehouse_stock,
                     COALESCE((
                         SELECT SUM(sb.quantity)
@@ -11436,6 +11464,8 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'SHOP'
+                          AND sb.concern_id = " . (int)currentConcernId() . "
+                          AND sb.location_id IN ({$shopList})
                     ), 0) as shop_stock
              FROM product_variants pv
              LEFT JOIN sizes s ON pv.size_id = s.id
@@ -11518,6 +11548,8 @@ class WarehouseController {
         $sizes = Database::fetchAll("SELECT * FROM sizes WHERE is_active = 1 ORDER BY sort_order ASC, id ASC");
         $colors = Database::fetchAll("SELECT * FROM colors WHERE is_active = 1 ORDER BY name ASC");
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         // If category short codes are not saved on product, auto-derive from category records
         if (empty($product['category_code']) && $catId) {
@@ -11546,6 +11578,8 @@ class WarehouseController {
                         SELECT SUM(sb.quantity)
                         FROM stock_balances sb
                         WHERE sb.variant_id = pv.id AND sb.stock_state = 'AVAILABLE' AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . "
+                          AND sb.location_id IN ({$warehouseList})
                     ), 0) as current_stock,
                     wc.name  as category_name,
                     wsc.name as subcategory_name,
@@ -11704,7 +11738,7 @@ class WarehouseController {
             Database::beginTransaction();
 
             Database::execute(
-                "UPDATE products SET name = ?, code = ?, catalog_code = ?, category_id = ?, warehouse_category_id = ?, subcategory_id = ?, warehouse_subcategory_id = ?, sub_subcategory_id = ?, warehouse_sub_subcategory_id = ?, category_code = ?, subcategory_code = ?, sub_subcategory_code = ?, qr_code_prefix = ?, brand_id = ?, seller_id = ?, warehouse_supplier_id = ?, source_type = ?, is_complementary = ?, material = ?, description = ?, hsn_code = ?, gst_percentage = ?, quantity = ?, weight = ?, mfg_date = ?, expiry_date = ?, min_stock = ?, max_stock = ?, image_url = ?, cloudinary_public_id = ?, updated_at = NOW()
+                "UPDATE products SET name = ?, code = ?, catalog_code = ?, category_id = ?, warehouse_category_id = ?, subcategory_id = ?, warehouse_subcategory_id = ?, sub_subcategory_id = ?, warehouse_sub_subcategory_id = ?, category_code = ?, subcategory_code = ?, sub_subcategory_code = ?, qr_code_prefix = ?, brand_id = ?, seller_id = ?, warehouse_supplier_id = ?, source_type = ?, is_complementary = ?, material = ?, description = ?, hsn_code = ?, gst_percentage = ?, weight = ?, mfg_date = ?, expiry_date = ?, min_stock = ?, max_stock = ?, image_url = ?, cloudinary_public_id = ?, updated_at = NOW()
                  WHERE id = ?",
                 [
                     $name,
@@ -11729,7 +11763,6 @@ class WarehouseController {
                     $description,
                     $hsnCode,
                     $gstPercentage,
-                    $quantity,
                     $weight,
                     $mfgDate,
                     $expiryDate,
@@ -11823,10 +11856,7 @@ class WarehouseController {
                 // Adjust live warehouse inventory upon catalog update
                 if ($initialWarehouseId > 0 && $variantQty !== null) {
                     try {
-                        $curStock = (int)(Database::fetchOne(
-                            "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                            [$variantId, $initialWarehouseId]
-                        )['quantity'] ?? 0);
+                        $curStock = (int)StockService::getAvailable($variantId, 'WAREHOUSE', $initialWarehouseId);
                         $diff = $variantQty - $curStock;
                         if ($diff > 0) {
                             StockService::increase(
@@ -12074,6 +12104,8 @@ class WarehouseController {
         }
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.qr_code, pv.selling_price, pv.mrp, pv.purchase_price, pv.production_cost,
                     COALESCE(pv.purchase_price, pv.production_cost, 0) as cost_price,
@@ -12085,6 +12117,8 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . "
+                          AND sb.location_id IN ({$warehouseList})
                     ), 0) as available_stock
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -12543,6 +12577,9 @@ class WarehouseController {
             Response::redirect(url('warehouse/sellers'));
             return;
         }
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         // Get linked purchase orders from this seller
         $orders = Database::fetchAll(
@@ -12550,13 +12587,14 @@ class WarehouseController {
                     COALESCE(pi_count.total_items, 0) as total_items,
                     COALESCE(pi_count.total_qty, 0) as total_qty
              FROM purchase_orders po
-             JOIN warehouses w ON po.warehouse_id = w.id
+             JOIN warehouses w ON po.warehouse_id = w.id AND w.concern_id = " . (int)currentConcernId() . "
              LEFT JOIN (
                  SELECT purchase_order_id, COUNT(*) as total_items, SUM(quantity) as total_qty
                  FROM purchase_items
                  GROUP BY purchase_order_id
              ) pi_count ON po.id = pi_count.purchase_order_id
              WHERE (po.warehouse_supplier_id = ? OR po.seller_id = ?)
+               AND po.warehouse_id IN ({$warehouseList})
              ORDER BY po.id DESC",
             [$id, $id]
         );
@@ -12580,6 +12618,7 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
                     ), 0) as current_stock_qty
              FROM purchase_items pi
              JOIN purchase_orders po ON pi.purchase_order_id = po.id
@@ -12642,6 +12681,8 @@ class WarehouseController {
             echo json_encode(['success' => false, 'message' => 'Seller ID required']);
             exit;
         }
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         // Get all brands/products linked to this supplier in the catalog
         $products = Database::fetchAll(
@@ -12662,6 +12703,7 @@ class WarehouseController {
                         SELECT SUM(sb.quantity)
                         FROM stock_balances sb
                         WHERE sb.variant_id = pv.id AND sb.stock_state = 'AVAILABLE' AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
                     ), 0) as warehouse_stock,
                     COALESCE((
                         SELECT SUM(pi.quantity)
@@ -12843,6 +12885,8 @@ class WarehouseController {
             Response::redirect(url('warehouse/sellers'));
             return;
         }
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         // Get all products and variants associated with this supplier
         $products = Database::fetchAll(
@@ -12853,6 +12897,7 @@ class WarehouseController {
                     COALESCE((
                         SELECT SUM(sb.quantity) FROM stock_balances sb 
                         WHERE sb.variant_id = pv.id AND sb.stock_state = 'AVAILABLE' AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
                     ), 0) as current_stock,
                     COALESCE((
                         SELECT SUM(pi.quantity) FROM purchase_items pi
@@ -13024,48 +13069,34 @@ class WarehouseController {
                             throw new RuntimeException('No warehouse is available in the active concern.');
                         }
                         $whId = $scopedWarehouseId;
-                        $currBalanceRow = Database::fetchOne(
-                            "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE' AND concern_id = ?",
-                            [$vId, $whId, currentConcernId()]
-                        );
-                        $currentQty = (float)($currBalanceRow['quantity'] ?? 0);
+                        $currentQty = StockService::getBalance((int)$vId, 'WAREHOUSE', $whId, 'AVAILABLE');
                         if ($targetStock != $currentQty) {
-                            Database::execute(
-                                "INSERT INTO stock_balances (variant_id, location_type, location_id, stock_state, quantity, concern_id, last_updated, created_at)
-                                 VALUES (?, 'WAREHOUSE', ?, 'AVAILABLE', ?, ?, NOW(), NOW())
-                                 ON DUPLICATE KEY UPDATE quantity = VALUES(quantity), last_updated = NOW()",
-                                [$vId, $whId, $targetStock, currentConcernId()]
-                            );
                             $diff = $targetStock - $currentQty;
-                            try {
-                                StockTransaction::create([
-                                    'variant_id'       => $vId,
-                                    'location_type'    => 'WAREHOUSE',
-                                    'location_id'      => $whId,
-                                    'stock_state'      => 'AVAILABLE',
-                                    'transaction_type' => 'SUPPLIER_EDIT_STOCK_UPDATE',
-                                    'quantity'         => $diff,
-                                    'balance_after'    => $targetStock,
-                                    'reference_type'   => 'warehouse_suppliers',
-                                    'reference_id'     => $id,
-                                    'user_id'          => Session::get('user_id') ?? 1,
-                                    'notes'            => "Stock updated from supplier edit (was {$currentQty}, now {$targetStock})"
-                                ]);
-                            } catch (\Throwable $te) {}
-
-                            // Sync master product quantity
-                            $vProd = Database::fetchOne("SELECT product_id FROM product_variants WHERE id = ?", [$vId]);
-                            if ($vProd && !empty($vProd['product_id'])) {
-                                Database::execute(
-                                    "UPDATE products p
-                                     SET p.quantity = (
-                                         SELECT COALESCE(SUM(sb.quantity), 0)
-                                         FROM stock_balances sb
-                                         JOIN product_variants pv ON sb.variant_id = pv.id
-                                         WHERE pv.product_id = p.id AND sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'
-                                     )
-                                     WHERE p.id = ?",
-                                    [$vProd['product_id']]
+                            if ($diff > 0) {
+                                StockService::increase(
+                                    (int)$vId,
+                                    'WAREHOUSE',
+                                    $whId,
+                                    'AVAILABLE',
+                                    $diff,
+                                    'SUPPLIER_EDIT_STOCK_UPDATE',
+                                    'warehouse_suppliers',
+                                    $id,
+                                    (int)(Session::get('user_id') ?? 0) ?: null,
+                                    "Stock updated from supplier edit (was {$currentQty}, now {$targetStock})"
+                                );
+                            } else {
+                                StockService::decrease(
+                                    (int)$vId,
+                                    'WAREHOUSE',
+                                    $whId,
+                                    'AVAILABLE',
+                                    abs($diff),
+                                    'SUPPLIER_EDIT_STOCK_UPDATE',
+                                    'warehouse_suppliers',
+                                    $id,
+                                    (int)(Session::get('user_id') ?? 0) ?: null,
+                                    "Stock updated from supplier edit (was {$currentQty}, now {$targetStock})"
                                 );
                             }
                         }
@@ -13251,6 +13282,8 @@ class WarehouseController {
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $sellers = Database::fetchAll("SELECT * FROM warehouse_suppliers WHERE is_active = 1 ORDER BY name ASC");
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.qr_code, pv.selling_price, pv.mrp, pv.purchase_price, pv.production_cost,
@@ -13263,6 +13296,7 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
                     ), 0) as available_stock
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -13808,11 +13842,14 @@ class WarehouseController {
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $shops = function_exists('getScopedShops') ? getScopedShops() : [];
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.mrp, pv.selling_price, p.name as product_name,
                     COALESCE((
                         SELECT SUM(quantity) FROM stock_balances 
                         WHERE variant_id = pv.id AND stock_state = 'AVAILABLE' AND location_type = 'WAREHOUSE'
+                          AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList})
                     ), 0) as stock_qty
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -14804,6 +14841,8 @@ class WarehouseController {
             return;
         }
 
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $billSetup = Session::get('seller_bill_setup_' . $id) ?? [];
 
         $existingSupplierProducts = Database::fetchAll(
@@ -14830,6 +14869,8 @@ class WarehouseController {
                         WHERE sb.variant_id = pv.id
                           AND sb.stock_state = 'AVAILABLE'
                           AND sb.location_type = 'WAREHOUSE'
+                          AND sb.concern_id = " . (int)currentConcernId() . "
+                          AND sb.location_id IN ({$warehouseList})
                     ), 0) AS available_stock
              FROM products p
              LEFT JOIN product_variants pv ON pv.product_id = p.id AND pv.is_active = 1
@@ -15362,6 +15403,8 @@ class WarehouseController {
                 Response::json(['success' => false, 'message' => 'A valid category is required.'], 400);
                 return;
             }
+            $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+            $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
             $sql = "SELECT p.*, 
                            COALESCE(wc.name, c_old.name, '') as category_name, 
@@ -15391,6 +15434,7 @@ class WarehouseController {
                                SELECT SUM(sb.quantity) FROM stock_balances sb 
                                JOIN product_variants pv ON sb.variant_id = pv.id
                                WHERE pv.product_id = p.id AND sb.stock_state = 'AVAILABLE' AND sb.location_type = 'WAREHOUSE'
+                                 AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
                            ), 0) as live_stock
                     FROM products p
                     LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id

@@ -3886,11 +3886,8 @@ class ProductionController {
     }
 
     public function checkStock(int $variantId): void {
-        $balance = Database::fetchOne(
-            "SELECT COALESCE(SUM(quantity), 0) as total_qty FROM stock_balances WHERE variant_id = ?",
-            [$variantId]
-        );
-        Response::json(['variant_id' => $variantId, 'quantity' => (int)($balance['total_qty'] ?? 0)]);
+        $quantity = StockBalance::getTotalAvailable($variantId);
+        Response::json(['variant_id' => $variantId, 'quantity' => $quantity]);
     }
 
     // =========================================================================

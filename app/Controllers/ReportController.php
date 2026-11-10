@@ -1348,26 +1348,39 @@ class ReportController {
      * Real-time Inventory Summary for Valuation
      */
     private function getInventorySummary(): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [
+                'wh_qty' => 0, 'wh_cost_val' => 0, 'wh_selling_val' => 0,
+                'shop_qty' => 0, 'shop_selling_val' => 0, 'total_stock_qty' => 0,
+                'total_valuation' => 0, 'damaged_qty' => 0,
+            ];
+        }
         $whStock = Database::fetchOne(
             "SELECT COALESCE(SUM(sb.quantity), 0) as total_qty,
                     COALESCE(SUM(sb.quantity * COALESCE(pv.purchase_price, pv.selling_price, 0)), 0) as cost_val,
                     COALESCE(SUM(sb.quantity * COALESCE(pv.selling_price, pv.mrp, 0)), 0) as selling_val
              FROM stock_balances sb
              JOIN product_variants pv ON sb.variant_id = pv.id
-             WHERE sb.stock_state = 'AVAILABLE' AND sb.location_type = 'WAREHOUSE'"
+             JOIN warehouses w ON w.id = sb.location_id AND w.concern_id = sb.concern_id
+             WHERE sb.stock_state = 'AVAILABLE' AND sb.location_type = 'WAREHOUSE' AND sb.concern_id = ?",
+            [$concernId]
         );
         $shopStock = Database::fetchOne(
             "SELECT COALESCE(SUM(sb.quantity), 0) as total_qty,
                     COALESCE(SUM(sb.quantity * COALESCE(pv.selling_price, pv.mrp, 0)), 0) as selling_val
              FROM stock_balances sb
              JOIN product_variants pv ON sb.variant_id = pv.id
-             WHERE sb.stock_state = 'AVAILABLE' AND sb.location_type = 'SHOP'"
+             JOIN shops sh ON sh.id = sb.location_id AND sh.concern_id = sb.concern_id
+             WHERE sb.stock_state = 'AVAILABLE' AND sb.location_type = 'SHOP' AND sb.concern_id = ?",
+            [$concernId]
         );
         $damagedStock = Database::fetchOne(
             "SELECT COALESCE(SUM(quantity), 0) as total_qty,
                     COALESCE(SUM(quantity * 300), 0) as loss_val
-             FROM stock_balances
-             WHERE stock_state = 'DAMAGED'"
+             FROM stock_balances sb
+             WHERE sb.stock_state = 'DAMAGED' AND sb.concern_id = ?",
+            [$concernId]
         );
 
         return [
@@ -2249,6 +2262,18 @@ class ReportController {
      * Detailed Inventory Valuation Report Builder
      */
     private function getDetailedInventoryReport(string $locationType = 'ALL', string $stockState = 'ALL', int $categoryId = 0): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return ['items' => [], 'totals' => ['total_qty' => 0, 'cost_value' => 0, 'selling_value' => 0]];
+        }
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $shopIds = array_map('intval', array_column(getScopedShops(), 'id'));
+        $productionUnitIds = array_map('intval', array_column(getScopedProductionUnits(), 'id'));
+        $channelIds = array_map('intval', array_column(getScopedSalesChannels(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
+        $shopList = $shopIds ? implode(',', $shopIds) : '0';
+        $productionUnitList = $productionUnitIds ? implode(',', $productionUnitIds) : '0';
+        $channelList = $channelIds ? implode(',', $channelIds) : '0';
         $sql = "SELECT sb.*, pv.sku, pv.mrp, pv.selling_price, pv.purchase_price, pv.production_cost,
                        p.name as product_name, p.code as product_code,
                        sz.name as size_name, col.name as color_name,
@@ -2256,6 +2281,8 @@ class ReportController {
                        CASE 
                            WHEN sb.location_type = 'WAREHOUSE' THEN w.name
                            WHEN sb.location_type = 'SHOP' THEN sh.name
+                           WHEN sb.location_type = 'PRODUCTION_UNIT' THEN pu.name
+                           WHEN sb.location_type = 'CHANNEL' THEN ch.name
                            ELSE 'Production'
                        END as location_name
                 FROM stock_balances sb
@@ -2264,10 +2291,17 @@ class ReportController {
                 LEFT JOIN sizes sz ON pv.size_id = sz.id
                 LEFT JOIN colors col ON pv.color_id = col.id
                 LEFT JOIN categories cat ON p.category_id = cat.id
-                LEFT JOIN warehouses w ON sb.location_type = 'WAREHOUSE' AND sb.location_id = w.id
-                LEFT JOIN shops sh ON sb.location_type = 'SHOP' AND sb.location_id = sh.id
-                WHERE 1=1";
-        $params = [];
+                LEFT JOIN warehouses w ON sb.location_type = 'WAREHOUSE' AND sb.location_id = w.id AND w.concern_id = sb.concern_id
+                LEFT JOIN shops sh ON sb.location_type = 'SHOP' AND sb.location_id = sh.id AND sh.concern_id = sb.concern_id
+                LEFT JOIN production_units pu ON sb.location_type = 'PRODUCTION_UNIT' AND sb.location_id = pu.id AND pu.concern_id = sb.concern_id
+                LEFT JOIN sales_channels ch ON sb.location_type = 'CHANNEL' AND sb.location_id = ch.id AND ch.concern_id = sb.concern_id
+                WHERE sb.concern_id = ?
+                  AND ((sb.location_type = 'WAREHOUSE' AND sb.location_id IN ({$warehouseList}) AND w.id IS NOT NULL)
+                    OR (sb.location_type = 'SHOP' AND sb.location_id IN ({$shopList}) AND sh.id IS NOT NULL)
+                    OR (sb.location_type = 'PRODUCTION_UNIT' AND sb.location_id IN ({$productionUnitList}) AND pu.id IS NOT NULL)
+                    OR (sb.location_type = 'CHANNEL' AND sb.location_id IN ({$channelList}) AND ch.id IS NOT NULL)
+                    OR (sb.location_type = 'OFFICE' AND " . (isSuperAdmin() ? '1=1' : '1=0') . "))";
+        $params = [$concernId];
 
         if ($locationType !== 'ALL') {
             $sql .= " AND sb.location_type = ?";

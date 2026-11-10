@@ -200,7 +200,8 @@ class WebsiteController {
                     COALESCE(SUM(CASE WHEN sb.stock_state = 'AVAILABLE' THEN sb.quantity * COALESCE(NULLIF(pv.selling_price, 0), NULLIF(pv.mrp, 0), 250) ELSE 0 END), 0) as available_value
              FROM stock_balances sb
              LEFT JOIN product_variants pv ON sb.variant_id = pv.id
-             WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)",
+             WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)
+               AND sb.concern_id = " . (int)currentConcernId(),
             $websiteChanIds
         );
 
@@ -878,9 +879,9 @@ class WebsiteController {
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors c ON pv.color_id = c.id
              LEFT JOIN users u ON st.user_id = u.id
-             WHERE st.reference_type = 'warehouse_allocations' AND st.reference_id = ?
+             WHERE st.reference_type = 'warehouse_allocations' AND st.reference_id = ? AND st.concern_id = ?
              ORDER BY st.id ASC",
-            [$allocId]
+            [$allocId, (int)currentConcernId()]
         );
 
         $damages = Database::fetchAll(
@@ -947,11 +948,11 @@ class WebsiteController {
                    c.name as color_name,
                    COALESCE((
                        SELECT SUM(sb.quantity) FROM stock_balances sb 
-                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.stock_state = 'AVAILABLE'
+                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'AVAILABLE'
                    ), 0) as available_quantity,
                    COALESCE((
                        SELECT SUM(sb.quantity) FROM stock_balances sb 
-                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.stock_state = 'DAMAGED'
+                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'DAMAGED'
                    ), 0) as damaged_quantity,
                    COALESCE((
                        SELECT SUM(si.quantity) 
@@ -963,7 +964,7 @@ class WebsiteController {
                        SELECT SUM(ai.received_qty) 
                        FROM allocation_items ai 
                        JOIN warehouse_allocations wa ON ai.allocation_id = wa.id 
-                       WHERE ai.variant_id = pv.id AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WEBSITE')
+                       WHERE wa.concern_id = " . (int)currentConcernId() . " AND ai.variant_id = pv.id AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WEBSITE')
                    ), 0) as total_inward_quantity
             FROM product_variants pv
             JOIN products p ON pv.product_id = p.id
@@ -975,12 +976,12 @@ class WebsiteController {
             WHERE (
                 EXISTS (
                     SELECT 1 FROM stock_balances sb 
-                    WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.quantity > 0
+                    WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.quantity > 0
                 )
                 OR EXISTS (
                     SELECT 1 FROM allocation_items ai 
                     JOIN warehouse_allocations wa ON ai.allocation_id = wa.id 
-                    WHERE ai.variant_id = pv.id
+                    WHERE wa.concern_id = " . (int)currentConcernId() . " AND ai.variant_id = pv.id
                       AND (COALESCE(ai.received_qty, 0) > 0 OR COALESCE(ai.damaged_qty, 0) > 0)
                       AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED')
                       AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WEBSITE')
@@ -1206,11 +1207,11 @@ class WebsiteController {
                    b.name as brand_name, sel.name as seller_name,
                    COALESCE((
                        SELECT SUM(sb.quantity) FROM stock_balances sb 
-                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.stock_state = 'AVAILABLE'
+                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'AVAILABLE'
                    ), 0) as available_quantity,
                    COALESCE((
                        SELECT SUM(sb.quantity) FROM stock_balances sb 
-                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.stock_state = 'DAMAGED'
+                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'DAMAGED'
                    ), 0) as damaged_quantity
             FROM product_variants pv
             JOIN products p ON pv.product_id = p.id
@@ -1945,12 +1946,15 @@ class WebsiteController {
         }
         $chan = $this->getChannel();
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+        $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.mrp, pv.selling_price, p.name as product_name,
                     COALESCE(wc.name, c.name, 'General') as category_name,
                     COALESCE((
                         SELECT SUM(quantity) FROM stock_balances 
                         WHERE variant_id = pv.id AND stock_state = 'AVAILABLE' AND location_type = 'WAREHOUSE'
+                          AND location_id IN ({$warehouseList}) AND concern_id = " . (int)currentConcernId() . "
                     ), 0) as stock_qty
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -3163,7 +3167,7 @@ class WebsiteController {
                     p.name as product_name, p.code as product_code,
                     COALESCE(sz.name, 'Free Size') as size_name,
                     COALESCE(clr.name, 'Standard') as color_name,
-                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND stock_state = 'AVAILABLE'), 0) as available_stock
+                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'WAREHOUSE' AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'), 0) as available_stock
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
@@ -4424,6 +4428,7 @@ class WebsiteController {
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors cl ON pv.color_id = cl.id
              WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)
+               AND sb.concern_id = " . (int)currentConcernId() . "
              GROUP BY sb.variant_id, sb.stock_state
              HAVING quantity > 0
              ORDER BY c.name ASC, p.name ASC, pv.sku ASC, sb.stock_state ASC",
@@ -4865,7 +4870,8 @@ class WebsiteController {
 
                 $chanStockRows = Database::fetchAll(
                     "SELECT * FROM stock_balances 
-                     WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($chanPlaceholders) AND stock_state = ? AND quantity > 0
+                     WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($chanPlaceholders)
+                       AND concern_id = " . (int)currentConcernId() . " AND stock_state = ? AND quantity > 0
                      ORDER BY quantity DESC",
                     array_merge([$variantId], $chanIds, [$stockState])
                 );
@@ -5163,7 +5169,8 @@ class WebsiteController {
 
                 $balRow = Database::fetchOne(
                     "SELECT COALESCE(SUM(quantity), 0) as tot_qty FROM stock_balances 
-                     WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($placeholders)",
+                     WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($placeholders)
+                       AND concern_id = " . (int)currentConcernId(),
                     array_merge([$variantId], $chanIds)
                 );
                 $totalStockCount = (int)($balRow['tot_qty'] ?? 0);
@@ -5409,14 +5416,16 @@ class WebsiteController {
         // Sum up stock balances across all website channels for this variant
         $availRow = Database::fetchOne(
             "SELECT COALESCE(SUM(quantity), 0) as tot_qty FROM stock_balances 
-             WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($placeholders) AND stock_state = 'AVAILABLE'",
+             WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($placeholders)
+               AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'",
             array_merge([$variantId], $chanIds)
         );
         $availStock = (float)($availRow['tot_qty'] ?? 0);
 
         $dmgRow = Database::fetchOne(
             "SELECT COALESCE(SUM(quantity), 0) as tot_qty FROM stock_balances 
-             WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($placeholders) AND stock_state = 'DAMAGED'",
+             WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($placeholders)
+               AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'DAMAGED'",
             array_merge([$variantId], $chanIds)
         );
         $dmgStock = (float)($dmgRow['tot_qty'] ?? 0);
@@ -5455,6 +5464,7 @@ class WebsiteController {
              FROM stock_transactions st
              LEFT JOIN users u ON st.user_id = u.id
              WHERE st.location_type = 'CHANNEL' AND st.location_id IN ($placeholders) AND st.variant_id = ?
+               AND st.concern_id = " . (int)currentConcernId() . "
              ORDER BY st.id DESC LIMIT 15",
             array_merge($chanIds, [$variantId])
         );

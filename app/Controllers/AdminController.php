@@ -22,6 +22,8 @@ class AdminController {
      * Admin Dashboard.
      */
     public function dashboard(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $stockConcernId = $concernId ?? 0;
         if (!hasPermission('dashboard', 'view')) {
             if (hasPermission('production', 'view') || hasPermission('cutting', 'view') || hasPermission('programs', 'view')) {
                 Response::redirect(url('production/dashboard'));
@@ -88,7 +90,8 @@ class AdminController {
             "SELECT COALESCE(SUM(sb.quantity * pv.selling_price), 0) as total 
              FROM stock_balances sb 
              JOIN product_variants pv ON sb.variant_id = pv.id 
-             WHERE sb.stock_state = 'AVAILABLE'"
+             WHERE sb.stock_state = 'AVAILABLE' AND sb.concern_id = ?",
+            [$stockConcernId]
         );
         $data['totalStockValue'] = $result['total'] ?? 0;
 
@@ -104,7 +107,9 @@ class AdminController {
              FROM stock_balances sb 
              JOIN product_variants pv ON sb.variant_id = pv.id 
              JOIN products p ON pv.product_id = p.id 
-             WHERE sb.stock_state = 'AVAILABLE' AND sb.quantity <= p.min_stock AND p.min_stock > 0"
+             WHERE sb.stock_state = 'AVAILABLE' AND sb.concern_id = ?
+               AND sb.quantity <= p.min_stock AND p.min_stock > 0",
+            [$stockConcernId]
         );
         $data['lowStockCount'] = $result['cnt'] ?? 0;
 
@@ -146,8 +151,10 @@ class AdminController {
              FROM stock_balances sb
              JOIN product_variants pv ON sb.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
-             WHERE sb.stock_state = 'AVAILABLE' AND sb.quantity <= p.min_stock AND p.min_stock > 0
-             ORDER BY sb.quantity ASC LIMIT 10"
+             WHERE sb.stock_state = 'AVAILABLE' AND sb.concern_id = ?
+               AND sb.quantity <= p.min_stock AND p.min_stock > 0
+             ORDER BY sb.quantity ASC LIMIT 10",
+            [$stockConcernId]
         );
 
         // Recent Audit Activity Logs
@@ -1416,7 +1423,7 @@ class AdminController {
         }
         try {
             // Check stock balances
-            $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'WAREHOUSE' AND location_id = ?", [$whId])['total'] ?? 0);
+            $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'WAREHOUSE' AND location_id = ? AND concern_id = ?", [$whId, (int)currentConcernId()])['total'] ?? 0);
             if ($stockCount > 0) {
                 Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', "Cannot delete warehouse: It holds {$stockCount} active inventory units. Please transfer stock or deactivate it.");
             }
@@ -1556,7 +1563,7 @@ class AdminController {
         }
         try {
             // Check stock balances
-            $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'SHOP' AND location_id = ?", [$shopId])['total'] ?? 0);
+            $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'SHOP' AND location_id = ? AND concern_id = ?", [$shopId, (int)currentConcernId()])['total'] ?? 0);
             if ($stockCount > 0) {
                 Response::redirect(url('admin/dashboard?tab=shops'), 'error', "Cannot delete shop: It holds {$stockCount} active stock items. Please transfer stock or deactivate it.");
             }

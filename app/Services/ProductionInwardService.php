@@ -12,6 +12,17 @@ class ProductionInwardService {
     }
 
     public static function getReceipts(?int $unitId = null, string $search = ''): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $assignedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($assignedUnitId === 0 || ($assignedUnitId !== null && $unitId !== null && $unitId !== $assignedUnitId)) {
+            return [];
+        }
+        if ($assignedUnitId !== null) {
+            $unitId = $assignedUnitId;
+        }
         $sql = "SELECT pi.*, dest.name AS destination_name,
                        CASE pi.source_type
                            WHEN 'WAREHOUSE' THEN wh.name
@@ -22,14 +33,14 @@ class ProductionInwardService {
                        COUNT(pii.id) AS line_count,
                        COALESCE(SUM(pii.quantity), 0) AS total_quantity
                 FROM production_inwards pi
-                JOIN production_units dest ON dest.id = pi.destination_unit_id
-                LEFT JOIN warehouses wh ON pi.source_type = 'WAREHOUSE' AND wh.id = pi.source_id
-                LEFT JOIN shops sh ON pi.source_type = 'SHOP' AND sh.id = pi.source_id
-                LEFT JOIN production_units src_unit ON pi.source_type = 'PRODUCTION_UNIT' AND src_unit.id = pi.source_id
+                JOIN production_units dest ON dest.id = pi.destination_unit_id AND dest.concern_id = ?
+                LEFT JOIN warehouses wh ON pi.source_type = 'WAREHOUSE' AND wh.id = pi.source_id AND wh.concern_id = ?
+                LEFT JOIN shops sh ON pi.source_type = 'SHOP' AND sh.id = pi.source_id AND sh.concern_id = ?
+                LEFT JOIN production_units src_unit ON pi.source_type = 'PRODUCTION_UNIT' AND src_unit.id = pi.source_id AND src_unit.concern_id = ?
                 LEFT JOIN users u ON u.id = pi.received_by
                 LEFT JOIN production_inward_items pii ON pii.inward_id = pi.id
-                WHERE pi.status = 'RECEIVED'";
-        $params = [];
+                WHERE pi.status = 'RECEIVED' AND pi.concern_id = ?";
+        $params = [$concernId, $concernId, $concernId, $concernId, $concernId];
         if ($unitId !== null) {
             $sql .= ' AND pi.destination_unit_id = ?';
             $params[] = $unitId;
@@ -59,6 +70,8 @@ class ProductionInwardService {
     }
 
     public static function getUnitStock(int $unitId): array {
+        StockService::assertLocationBelongsToActiveConcern('PRODUCTION_UNIT', $unitId);
+        $concernId = (int)currentConcernId();
         return Database::fetchAll(
             "SELECT sb.variant_id, sb.quantity, pv.sku, pv.mrp, pv.selling_price,
                     p.name AS product_name, s.name AS size_name, c.name AS color_name
@@ -67,25 +80,40 @@ class ProductionInwardService {
              JOIN products p ON p.id = pv.product_id
              LEFT JOIN sizes s ON s.id = pv.size_id
              LEFT JOIN colors c ON c.id = pv.color_id
-             WHERE sb.location_type = 'PRODUCTION_UNIT' AND sb.location_id = ?
+             WHERE sb.location_type = 'PRODUCTION_UNIT' AND sb.location_id = ? AND sb.concern_id = ?
                AND sb.stock_state = 'AVAILABLE' AND sb.quantity > 0
              ORDER BY p.name, s.sort_order, c.name, pv.sku",
-            [$unitId]
+            [$unitId, $concernId]
         );
     }
 
     public static function getStockAcrossUnits(?int $unitId = null): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        if ($unitId !== null) {
+            StockService::assertLocationBelongsToActiveConcern('PRODUCTION_UNIT', $unitId);
+        }
+        $assignedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($assignedUnitId === 0 || ($assignedUnitId !== null && $unitId !== null && $unitId !== $assignedUnitId)) {
+            return [];
+        }
+        if ($assignedUnitId !== null) {
+            $unitId = $assignedUnitId;
+        }
         $sql = "SELECT sb.variant_id, sb.location_id AS production_unit_id, pu.name AS production_unit_name,
                        sb.quantity, pv.sku, pv.mrp, pv.selling_price,
                        p.name AS product_name, s.name AS size_name, c.name AS color_name
                 FROM stock_balances sb
-                JOIN production_units pu ON pu.id = sb.location_id
+                JOIN production_units pu ON pu.id = sb.location_id AND pu.concern_id = ?
                 JOIN product_variants pv ON pv.id = sb.variant_id
                 JOIN products p ON p.id = pv.product_id
                 LEFT JOIN sizes s ON s.id = pv.size_id
                 LEFT JOIN colors c ON c.id = pv.color_id
-                WHERE sb.location_type = 'PRODUCTION_UNIT' AND sb.stock_state = 'AVAILABLE' AND sb.quantity > 0";
-        $params = [];
+                WHERE sb.location_type = 'PRODUCTION_UNIT' AND sb.stock_state = 'AVAILABLE' AND sb.quantity > 0
+                  AND sb.concern_id = ?";
+        $params = [$concernId, $concernId];
         if ($unitId !== null) {
             $sql .= ' AND sb.location_id = ?';
             $params[] = $unitId;
@@ -135,6 +163,7 @@ class ProductionInwardService {
     ): string {
         self::assertSource($sourceType, $sourceId);
         self::assertDestination($destinationUnitId);
+        $concernId = (int)currentConcernId();
 
         if ($sourceType === 'PRODUCTION_UNIT' && $sourceId === $destinationUnitId) {
             throw new InvalidArgumentException('The source and destination production units must be different.');
@@ -148,9 +177,9 @@ class ProductionInwardService {
             }
             $duplicate = Database::fetchOne(
                 "SELECT id FROM production_inwards
-                 WHERE source_type = ? AND source_id = ? AND UPPER(source_batch_number) = UPPER(?) AND status = 'RECEIVED'
+                 WHERE concern_id = ? AND source_type = ? AND source_id = ? AND UPPER(source_batch_number) = UPPER(?) AND status = 'RECEIVED'
                  LIMIT 1",
-                [$sourceType, $sourceId, $batch['batch_number']]
+                [$concernId, $sourceType, $sourceId, $batch['batch_number']]
             );
             if ($duplicate) {
                 throw new InvalidArgumentException('This source batch has already been received by Production.');
@@ -170,10 +199,10 @@ class ProductionInwardService {
             $temporaryNumber = 'TMP-PI-' . bin2hex(random_bytes(10));
             Database::execute(
                 "INSERT INTO production_inwards
-                    (grn_number, source_type, source_id, destination_unit_id, source_batch_number, notes, received_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (grn_number, source_type, source_id, destination_unit_id, source_batch_number, notes, received_by, concern_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [$temporaryNumber, $sourceType, $sourceId, $destinationUnitId,
-                    $batchNumber !== '' ? $batchNumber : null, $notes !== '' ? $notes : null, $userId ?: null]
+                    $batchNumber !== '' ? $batchNumber : null, $notes !== '' ? $notes : null, $userId ?: null, $concernId]
             );
             $inwardId = (int)Database::lastInsertId();
             $grnNumber = 'PGRN-' . date('Y') . '-' . sprintf('%06d', $inwardId);
@@ -195,9 +224,9 @@ class ProductionInwardService {
                     'Production inward ' . $grnNumber
                 );
                 Database::execute(
-                    "INSERT INTO production_inward_items (inward_id, variant_id, quantity, scanned_codes)
-                     VALUES (?, ?, ?, ?)",
-                    [$inwardId, $variantId, $quantity, !empty($item['codes']) ? json_encode(array_values($item['codes'])) : null]
+                    "INSERT INTO production_inward_items (inward_id, variant_id, quantity, scanned_codes, concern_id)
+                     VALUES (?, ?, ?, ?, ?)",
+                    [$inwardId, $variantId, $quantity, !empty($item['codes']) ? json_encode(array_values($item['codes'])) : null, $concernId]
                 );
             }
 
@@ -292,10 +321,10 @@ class ProductionInwardService {
                 "SELECT pb.id, pb.batch_number
                  FROM production_batches pb
                  WHERE UPPER(pb.batch_number) = UPPER(?)
-                   AND pb.destination_warehouse_id = ?
+                   AND pb.destination_warehouse_id = ? AND pb.concern_id = ?
                    AND pb.status IN ('DISPATCHED', 'RECEIVED')
                  LIMIT 1",
-                [$code, $sourceId]
+                [$code, $sourceId, (int)currentConcernId()]
             );
             if ($batch) {
                 return ['batch_number' => $batch['batch_number'], 'items' => self::getBatchItems((int)$batch['id'])];
@@ -306,10 +335,10 @@ class ProductionInwardService {
             $allocation = Database::fetchOne(
                 "SELECT id, allocation_number
                  FROM warehouse_allocations
-                 WHERE UPPER(allocation_number) = UPPER(?) AND shop_id = ?
+                WHERE UPPER(allocation_number) = UPPER(?) AND shop_id = ? AND concern_id = ?
                    AND status IN ('PARTIAL_RECEIVED', 'RECEIVED', 'COMPLETED')
                  LIMIT 1",
-                [$code, $sourceId]
+                [$code, $sourceId, (int)currentConcernId()]
             );
             if ($allocation) {
                 $rows = Database::fetchAll(
@@ -331,9 +360,9 @@ class ProductionInwardService {
         if ($sourceType === 'PRODUCTION_UNIT') {
             $receipt = Database::fetchOne(
                 "SELECT id, grn_number FROM production_inwards
-                 WHERE UPPER(grn_number) = UPPER(?) AND destination_unit_id = ? AND status = 'RECEIVED'
+                 WHERE UPPER(grn_number) = UPPER(?) AND destination_unit_id = ? AND concern_id = ? AND status = 'RECEIVED'
                  LIMIT 1",
-                [$code, $sourceId]
+                [$code, $sourceId, (int)currentConcernId()]
             );
             if ($receipt) {
                 $rows = Database::fetchAll(
@@ -470,9 +499,9 @@ class ProductionInwardService {
     private static function availableAt(string $sourceType, int $sourceId, int $variantId): float {
         $row = Database::fetchOne(
             "SELECT quantity FROM stock_balances
-             WHERE variant_id = ? AND location_type = ? AND location_id = ? AND stock_state = 'AVAILABLE'
+             WHERE variant_id = ? AND location_type = ? AND location_id = ? AND stock_state = 'AVAILABLE' AND concern_id = ?
              LIMIT 1",
-            [$variantId, $sourceType, $sourceId]
+            [$variantId, $sourceType, $sourceId, (int)currentConcernId()]
         );
         return (float)($row['quantity'] ?? 0);
     }
@@ -481,15 +510,7 @@ class ProductionInwardService {
         if (!in_array($sourceType, self::SOURCE_TYPES, true) || $sourceId <= 0) {
             throw new InvalidArgumentException('Select a valid source concern.');
         }
-        $table = match ($sourceType) {
-            'WAREHOUSE' => 'warehouses',
-            'SHOP' => 'shops',
-            'PRODUCTION_UNIT' => 'production_units',
-        };
-        $source = Database::fetchOne("SELECT id FROM {$table} WHERE id = ? AND is_active = 1", [$sourceId]);
-        if (!$source) {
-            throw new InvalidArgumentException('The selected source concern is not active.');
-        }
+        StockService::assertLocationBelongsToActiveConcern($sourceType, $sourceId);
     }
 
     private static function assertDestination(int $unitId): void {

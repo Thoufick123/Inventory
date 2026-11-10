@@ -30,14 +30,18 @@ class SalesController {
         }
 
         $placeholders = implode(',', array_fill(0, count($channelIds), '?'));
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
         $rows = Database::fetchAll(
             "SELECT variant_id, SUM(quantity) AS available_stock
              FROM stock_balances
              WHERE location_type = 'CHANNEL'
                AND location_id IN ($placeholders)
-               AND stock_state = 'AVAILABLE'
+               AND stock_state = 'AVAILABLE' AND concern_id = ?
              GROUP BY variant_id",
-            $channelIds
+            array_merge($channelIds, [$concernId])
         );
 
         $stockByVariant = [];
@@ -346,14 +350,19 @@ class SalesController {
         string $notes
     ): void {
         $placeholders = implode(',', array_fill(0, count($channelIds), '?'));
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            throw new RuntimeException('Select an active concern before processing channel stock.');
+        }
         $balances = Database::fetchAll(
             "SELECT location_id, quantity
              FROM stock_balances
              WHERE variant_id = ? AND location_type = 'CHANNEL'
                AND location_id IN ($placeholders) AND stock_state = 'AVAILABLE' AND quantity > 0
+               AND concern_id = ?
              ORDER BY location_id ASC
              FOR UPDATE",
-            array_merge([$variantId], $channelIds)
+            array_merge([$variantId], $channelIds, [$concernId])
         );
 
         $remaining = $quantity;
@@ -410,9 +419,10 @@ class SalesController {
             "SELECT ai.variant_id, ai.selected_qr_codes, ai.received_qr_codes, ai.received_qty, ai.damaged_qty
              FROM allocation_items ai
              JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
-             WHERE ai.selected_qr_codes IS NOT NULL AND ai.selected_qr_codes != ''
+             WHERE wa.concern_id = ?
+               AND ai.selected_qr_codes IS NOT NULL AND ai.selected_qr_codes != ''
                AND wa.status != 'CANCELLED' AND (" . implode(' OR ', $scopeParts) . ")",
-            $params
+            array_merge([(int)currentConcernId()], $params)
         );
 
         $variantTagsMap = [];

@@ -214,7 +214,8 @@ class WhatsappController {
                     COALESCE(SUM(CASE WHEN sb.stock_state = 'AVAILABLE' THEN sb.quantity * COALESCE(NULLIF(pv.selling_price, 0), NULLIF(pv.mrp, 0), 250) ELSE 0 END), 0) as available_value
              FROM stock_balances sb
              LEFT JOIN product_variants pv ON sb.variant_id = pv.id
-             WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)",
+             WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)
+               AND sb.concern_id = " . (int)currentConcernId(),
             $waChanIds
         );
 
@@ -957,9 +958,9 @@ class WhatsappController {
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors c ON pv.color_id = c.id
              LEFT JOIN users u ON st.user_id = u.id
-             WHERE st.reference_type = 'warehouse_allocations' AND st.reference_id = ?
+             WHERE st.reference_type = 'warehouse_allocations' AND st.reference_id = ? AND st.concern_id = ?
              ORDER BY st.id ASC",
-            [$allocId]
+            [$allocId, (int)currentConcernId()]
         );
 
         // Fetch channel damages logged for this allocation
@@ -1024,11 +1025,11 @@ class WhatsappController {
                    c.name as color_name,
                    COALESCE((
                        SELECT SUM(sb.quantity) FROM stock_balances sb 
-                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.stock_state = 'AVAILABLE'
+                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'AVAILABLE'
                    ), 0) as available_quantity,
                    COALESCE((
                        SELECT SUM(sb.quantity) FROM stock_balances sb 
-                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.stock_state = 'DAMAGED'
+                       WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'DAMAGED'
                    ), 0) as damaged_quantity,
                    COALESCE((
                        SELECT SUM(si.quantity) 
@@ -1068,7 +1069,7 @@ class WhatsappController {
                        SELECT SUM(ai.received_qty) 
                        FROM allocation_items ai 
                        JOIN warehouse_allocations wa ON ai.allocation_id = wa.id 
-                       WHERE ai.variant_id = pv.id AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WHATSAPP')
+                       WHERE wa.concern_id = " . (int)currentConcernId() . " AND ai.variant_id = pv.id AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WHATSAPP')
                    ), 0) as total_inward_quantity
             FROM product_variants pv
             JOIN products p ON pv.product_id = p.id
@@ -1080,12 +1081,12 @@ class WhatsappController {
             WHERE (
                 EXISTS (
                     SELECT 1 FROM stock_balances sb 
-                    WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.quantity > 0
+                    WHERE sb.variant_id = pv.id AND sb.location_type = 'CHANNEL' AND sb.location_id IN ($chanIn) AND sb.concern_id = " . (int)currentConcernId() . " AND sb.quantity > 0
                 )
                 OR EXISTS (
                     SELECT 1 FROM allocation_items ai 
                     JOIN warehouse_allocations wa ON ai.allocation_id = wa.id 
-                    WHERE ai.variant_id = pv.id AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED') AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WHATSAPP')
+                    WHERE wa.concern_id = " . (int)currentConcernId() . " AND ai.variant_id = pv.id AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED') AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WHATSAPP')
                 )
             )
         ";
@@ -1358,6 +1359,7 @@ class WhatsappController {
              FROM stock_transactions st
              LEFT JOIN users u ON st.user_id = u.id
              WHERE st.location_type = 'CHANNEL' AND st.location_id IN ($chanIn) AND st.variant_id = ?
+               AND st.concern_id = " . (int)currentConcernId() . "
              ORDER BY st.id DESC LIMIT 50",
             array_merge($chanIds, [$variantId])
         );
@@ -1371,7 +1373,7 @@ class WhatsappController {
              JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
              LEFT JOIN warehouses w ON wa.warehouse_id = w.id
              LEFT JOIN allocation_outwards ao ON ao.allocation_id = wa.id
-             WHERE ai.variant_id = ? AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED') AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WHATSAPP')
+             WHERE wa.concern_id = " . (int)currentConcernId() . " AND ai.variant_id = ? AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED') AND ((wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($chanIn)) OR wa.destination_type IN ($destIn) OR wa.destination_type = 'WHATSAPP')
              ORDER BY wa.id DESC",
             array_merge([$variantId], $chanIds, $destList)
         );
@@ -2025,6 +2027,7 @@ class WhatsappController {
                     COALESCE((
                         SELECT SUM(quantity) FROM stock_balances 
                         WHERE variant_id = pv.id AND stock_state = 'AVAILABLE' AND location_type = 'WAREHOUSE'
+                          AND concern_id = " . (int)currentConcernId() . "
                     ), 0) as stock_qty
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
@@ -2289,7 +2292,7 @@ class WhatsappController {
                     COALESCE(clr.name, 'Standard') as color_name,
                     COALESCE((SELECT SUM(quantity) FROM stock_balances
                               WHERE variant_id = pv.id AND location_type = 'CHANNEL'
-                                AND location_id IN ($channelPlaceholders) AND stock_state = 'AVAILABLE'), 0) as available_stock
+                                AND location_id IN ($channelPlaceholders) AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'), 0) as available_stock
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
@@ -3130,6 +3133,7 @@ class WhatsappController {
                     $stockMovementExists = Database::fetchOne(
                         "SELECT id FROM stock_transactions
                          WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id = ?
+                           AND concern_id = " . (int)currentConcernId() . "
                            AND transaction_type = 'DAMAGE_LOGGED' AND reference_type = 'channel_damages'
                            AND notes LIKE ?
                          LIMIT 1",
@@ -3233,7 +3237,7 @@ class WhatsappController {
             $stockLocation = Database::fetchOne(
                 "SELECT location_id FROM stock_balances
                  WHERE variant_id = ? AND location_type = 'CHANNEL' AND location_id IN ($stockChannelPlaceholders)
-                   AND stock_state = 'AVAILABLE' AND quantity >= ?
+                   AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE' AND quantity >= ?
                  ORDER BY quantity DESC LIMIT 1",
                 array_merge([$vId], $chanIds, [(float)$qty])
             );
@@ -4078,7 +4082,7 @@ class WhatsappController {
                 "SELECT COALESCE(SUM(quantity), 0) as available_stock
                  FROM stock_balances
                  WHERE variant_id = ? AND location_type = 'CHANNEL'
-                   AND location_id IN ($channelPlaceholders) AND stock_state = 'AVAILABLE'",
+                   AND location_id IN ($channelPlaceholders) AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'",
                 array_merge([(int)$foundVariant['id']], $whatsappChannelIds)
             )['available_stock'] ?? 0);
             $payload = [
@@ -4327,7 +4331,8 @@ class WhatsappController {
              LEFT JOIN sub_subcategories ssc ON p.sub_subcategory_id = ssc.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors cl ON pv.color_id = cl.id
-             WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders) AND sb.quantity > 0
+             WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)
+               AND sb.concern_id = " . (int)currentConcernId() . " AND sb.quantity > 0
              ORDER BY c.name ASC, p.name ASC, pv.sku ASC, sb.stock_state ASC",
             $chanIds
         );
@@ -4337,7 +4342,8 @@ class WhatsappController {
             "SELECT ai.variant_id, ai.selected_qr_codes
              FROM allocation_items ai
              JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
-             WHERE wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($placeholders)
+             WHERE wa.concern_id = " . (int)currentConcernId() . "
+               AND wa.destination_type = 'CHANNEL' AND wa.destination_id IN ($placeholders)
                AND ai.selected_qr_codes IS NOT NULL AND ai.selected_qr_codes != ''",
             $chanIds
         );
@@ -4716,7 +4722,7 @@ class WhatsappController {
                     "SELECT * FROM stock_balances
                      WHERE variant_id = ? AND location_type = 'CHANNEL'
                        AND location_id IN ($stockChannelPlaceholders)
-                       AND stock_state = ? AND quantity > 0
+                       AND concern_id = " . (int)currentConcernId() . " AND stock_state = ? AND quantity > 0
                      ORDER BY quantity DESC LIMIT 1",
                     array_merge([$variantId], $stockChannelIds, [$stockState])
                 );
@@ -5201,8 +5207,8 @@ class WhatsappController {
                        s.name as size_name, c.name as color_name, 
                        cat.name as category_name, subcat.name as subcategory_name, subsubcat.name as sub_subcategory_name,
                        b.name as brand_name,
-                       (SELECT quantity FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'CHANNEL' AND location_id IN ($placeholders) AND stock_state = 'AVAILABLE' LIMIT 1) as available_quantity,
-                       (SELECT quantity FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'CHANNEL' AND location_id IN ($placeholders) AND stock_state = 'DAMAGED' LIMIT 1) as damaged_quantity
+                       (SELECT quantity FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'CHANNEL' AND location_id IN ($placeholders) AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE' LIMIT 1) as available_quantity,
+                       (SELECT quantity FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'CHANNEL' AND location_id IN ($placeholders) AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'DAMAGED' LIMIT 1) as damaged_quantity
                 FROM stock_balances sb
                 JOIN product_variants pv ON sb.variant_id = pv.id
                 JOIN products p ON pv.product_id = p.id
@@ -5212,7 +5218,8 @@ class WhatsappController {
                 LEFT JOIN brands b ON p.brand_id = b.id
                 LEFT JOIN sizes s ON pv.size_id = s.id
                 LEFT JOIN colors c ON pv.color_id = c.id
-                WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders) AND sb.variant_id = ? "
+                WHERE sb.location_type = 'CHANNEL' AND sb.location_id IN ($placeholders)
+                  AND sb.concern_id = " . (int)currentConcernId() . " AND sb.variant_id = ? "
                 . ($targetStockState !== 'ALL' ? " AND sb.stock_state = ? " : "") . " LIMIT 1";
 
         $params = array_merge($chanIds, $chanIds, $chanIds, [$variantId]);
@@ -5251,6 +5258,7 @@ class WhatsappController {
                  FROM stock_transactions st
                  LEFT JOIN users u ON st.user_id = u.id
                  WHERE st.location_type = 'CHANNEL' AND st.location_id IN ($placeholders) AND st.variant_id = ?
+                   AND st.concern_id = " . (int)currentConcernId() . "
                  ORDER BY st.id DESC LIMIT 15",
                 array_merge($chanIds, [$variantId])
             );

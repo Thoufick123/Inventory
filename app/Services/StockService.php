@@ -33,6 +33,7 @@ class StockService {
         if ($quantity <= 0) {
             throw new InvalidArgumentException("Increase quantity must be positive. Got: $quantity");
         }
+        self::assertLocationBelongsToActiveConcern($locationType, $locationId);
 
         Database::beginTransaction();
         try {
@@ -90,6 +91,7 @@ class StockService {
         if ($quantity <= 0) {
             throw new InvalidArgumentException("Decrease quantity must be positive. Got: $quantity");
         }
+        self::assertLocationBelongsToActiveConcern($locationType, $locationId);
 
         Database::beginTransaction();
         try {
@@ -153,6 +155,7 @@ class StockService {
         if ($quantity <= 0) {
             throw new InvalidArgumentException("Reserve quantity must be positive.");
         }
+        self::assertLocationBelongsToActiveConcern($locationType, $locationId);
 
         Database::beginTransaction();
         try {
@@ -231,6 +234,7 @@ class StockService {
         if ($quantity <= 0) {
             throw new InvalidArgumentException("Release quantity must be positive.");
         }
+        self::assertLocationBelongsToActiveConcern($locationType, $locationId);
 
         Database::beginTransaction();
         try {
@@ -304,6 +308,11 @@ class StockService {
     ): bool {
         if ($quantity <= 0) {
             throw new InvalidArgumentException("Transfer quantity must be positive.");
+        }
+        $concernId = self::assertLocationBelongsToActiveConcern($srcLocationType, $srcLocationId);
+        $destinationConcernId = self::assertLocationBelongsToActiveConcern($destLocationType, $destLocationId);
+        if ($concernId !== $destinationConcernId) {
+            throw new InvalidArgumentException('Stock cannot be transferred between different concerns.');
         }
 
         Database::beginTransaction();
@@ -381,6 +390,11 @@ class StockService {
         if ($quantity <= 0) {
             throw new InvalidArgumentException("Adjustment quantity must be positive.");
         }
+        self::assertLocationBelongsToActiveConcern($locationType, $locationId);
+        $adjustmentType = strtoupper($adjustmentType);
+        if (!in_array($adjustmentType, ['INCREASE', 'DECREASE'], true)) {
+            throw new InvalidArgumentException('Adjustment type must be INCREASE or DECREASE.');
+        }
 
         $transactionType = $adjustmentType === 'INCREASE' ? 'ADJUSTMENT_INCREASE' : 'ADJUSTMENT_DECREASE';
 
@@ -407,11 +421,12 @@ class StockService {
      * Get current balance for a variant at a specific location.
      */
     public static function getBalance(int $variantId, string $locationType, int $locationId, ?string $stockState = null): float {
+        $concernId = self::assertLocationBelongsToActiveConcern($locationType, $locationId);
         if ($stockState) {
             $result = Database::fetchOne(
                 "SELECT quantity FROM stock_balances 
-                 WHERE variant_id = ? AND location_type = ? AND location_id = ? AND stock_state = ?",
-                [$variantId, $locationType, $locationId, $stockState]
+                 WHERE variant_id = ? AND location_type = ? AND location_id = ? AND stock_state = ? AND concern_id = ?",
+                [$variantId, $locationType, $locationId, $stockState, $concernId]
             );
             return (float) ($result['quantity'] ?? 0);
         }
@@ -419,16 +434,21 @@ class StockService {
         // Sum all states
         $result = Database::fetchOne(
             "SELECT SUM(quantity) as total FROM stock_balances 
-             WHERE variant_id = ? AND location_type = ? AND location_id = ?",
-            [$variantId, $locationType, $locationId]
+             WHERE variant_id = ? AND location_type = ? AND location_id = ? AND concern_id = ?",
+            [$variantId, $locationType, $locationId, $concernId]
         );
         return (float) ($result['total'] ?? 0);
+    }
+
+    public static function getAvailable(int $variantId, string $locationType, int $locationId): float {
+        return self::getBalance($variantId, $locationType, $locationId, 'AVAILABLE');
     }
 
     /**
      * Get all stock balances for a location.
      */
     public static function getStockByLocation(string $locationType, int $locationId, array $filters = []): array {
+        $concernId = self::assertLocationBelongsToActiveConcern($locationType, $locationId);
         $sql = "SELECT sb.*, pv.sku, pv.qr_code, pv.selling_price, pv.mrp,
                        p.name as product_name, p.code as product_code,
                        s.name as size_name, c.name as color_name
@@ -437,8 +457,8 @@ class StockService {
                 JOIN products p ON pv.product_id = p.id
                 LEFT JOIN sizes s ON pv.size_id = s.id
                 LEFT JOIN colors c ON pv.color_id = c.id
-                WHERE sb.location_type = ? AND sb.location_id = ?";
-        $params = [$locationType, $locationId];
+                WHERE sb.location_type = ? AND sb.location_id = ? AND sb.concern_id = ?";
+        $params = [$locationType, $locationId, $concernId];
 
         if (!empty($filters['stock_state'])) {
             $sql .= " AND sb.stock_state = ?";
@@ -463,17 +483,25 @@ class StockService {
      * Get transaction history for a variant.
      */
     public static function getTransactionHistory(int $variantId, array $filters = []): array {
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            return [];
+        }
         $sql = "SELECT st.*, u.full_name as user_name
                 FROM stock_transactions st
                 LEFT JOIN users u ON st.user_id = u.id
-                WHERE st.variant_id = ?";
-        $params = [$variantId];
+                WHERE st.variant_id = ? AND st.concern_id = ?";
+        $params = [$variantId, $concernId];
 
         if (!empty($filters['location_type'])) {
             $sql .= " AND st.location_type = ?";
             $params[] = $filters['location_type'];
         }
         if (!empty($filters['location_id'])) {
+            self::assertLocationBelongsToActiveConcern(
+                (string)($filters['location_type'] ?? ''),
+                (int)$filters['location_id']
+            );
             $sql .= " AND st.location_id = ?";
             $params[] = $filters['location_id'];
         }
@@ -503,6 +531,7 @@ class StockService {
      * Get low stock alerts for a location.
      */
     public static function getLowStockAlerts(string $locationType, int $locationId): array {
+        $concernId = self::assertLocationBelongsToActiveConcern($locationType, $locationId);
         return Database::fetchAll(
             "SELECT sb.*, pv.sku, p.name as product_name, p.min_stock,
                     s.name as size_name, c.name as color_name
@@ -511,12 +540,12 @@ class StockService {
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors c ON pv.color_id = c.id
-             WHERE sb.location_type = ? AND sb.location_id = ?
+             WHERE sb.location_type = ? AND sb.location_id = ? AND sb.concern_id = ?
                AND sb.stock_state = 'AVAILABLE'
                AND sb.quantity <= p.min_stock
                AND p.min_stock > 0
              ORDER BY sb.quantity ASC",
-            [$locationType, $locationId]
+            [$locationType, $locationId, $concernId]
         );
     }
 
@@ -524,13 +553,14 @@ class StockService {
      * Get total stock value for a location.
      */
     public static function getStockValue(string $locationType, int $locationId): float {
+        $concernId = self::assertLocationBelongsToActiveConcern($locationType, $locationId);
         $result = Database::fetchOne(
             "SELECT SUM(sb.quantity * pv.selling_price) as total_value
              FROM stock_balances sb
              JOIN product_variants pv ON sb.variant_id = pv.id
-             WHERE sb.location_type = ? AND sb.location_id = ?
+             WHERE sb.location_type = ? AND sb.location_id = ? AND sb.concern_id = ?
                AND sb.stock_state = 'AVAILABLE'",
-            [$locationType, $locationId]
+            [$locationType, $locationId, $concernId]
         );
         return (float) ($result['total_value'] ?? 0);
     }
@@ -543,11 +573,15 @@ class StockService {
      * Get balance with row lock for transactional safety.
      */
     private static function getBalanceLocked(int $variantId, string $locationType, int $locationId, string $stockState): float {
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            throw new InvalidArgumentException('Select an active concern before accessing stock.');
+        }
         $result = Database::fetchOne(
             "SELECT quantity FROM stock_balances 
-             WHERE variant_id = ? AND location_type = ? AND location_id = ? AND stock_state = ?
+             WHERE variant_id = ? AND location_type = ? AND location_id = ? AND stock_state = ? AND concern_id = ?
              FOR UPDATE",
-            [$variantId, $locationType, $locationId, $stockState]
+            [$variantId, $locationType, $locationId, $stockState, $concernId]
         );
         return (float) ($result['quantity'] ?? 0);
     }
@@ -556,30 +590,102 @@ class StockService {
      * Insert or update a stock balance record.
      */
     private static function upsertBalance(int $variantId, string $locationType, int $locationId, string $stockState, float $quantity): void {
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            throw new InvalidArgumentException('Select an active concern before updating stock.');
+        }
         Database::execute(
-            "INSERT INTO stock_balances (variant_id, location_type, location_id, stock_state, quantity, last_updated, created_at)
-             VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+            "INSERT INTO stock_balances (variant_id, location_type, location_id, stock_state, quantity, concern_id, last_updated, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
              ON DUPLICATE KEY UPDATE quantity = VALUES(quantity), last_updated = NOW()",
-            [$variantId, $locationType, $locationId, $stockState, $quantity]
+            [$variantId, $locationType, $locationId, $stockState, $quantity, $concernId]
         );
 
-        // Keep master products.quantity cached total synchronized
-        try {
-            Database::execute(
-                "UPDATE products p
-                 JOIN product_variants pv ON p.id = pv.product_id
-                 SET p.quantity = (
-                     SELECT COALESCE(SUM(sb.quantity), 0)
-                     FROM stock_balances sb
-                     JOIN product_variants pv2 ON sb.variant_id = pv2.id
-                     WHERE pv2.product_id = p.id AND sb.location_type = 'WAREHOUSE' AND sb.stock_state = 'AVAILABLE'
-                 )
-                 WHERE pv.id = ?",
-                [$variantId]
-            );
-        } catch (Exception $e) {
-            // Ignore during nested triggers or migrations
+    }
+
+    public static function assertLocationBelongsToActiveConcern(string $locationType, int $locationId): int {
+        $concernId = self::currentConcernScopeId();
+        $locationType = strtoupper(trim($locationType));
+        if ($concernId === null || $locationId <= 0) {
+            throw new InvalidArgumentException('Stock operations require an active concern and valid facility.');
         }
+
+        $facility = null;
+        $assignmentHelper = null;
+        $facilityType = null;
+        switch ($locationType) {
+            case 'WAREHOUSE':
+                $facility = Database::fetchOne(
+                    "SELECT id FROM warehouses WHERE id = ? AND concern_id = ? AND is_active = 1",
+                    [$locationId, $concernId]
+                );
+                $assignmentHelper = 'currentWarehouseId';
+                $facilityType = 'WAREHOUSE';
+                break;
+            case 'SHOP':
+                $facility = Database::fetchOne(
+                    "SELECT id FROM shops WHERE id = ? AND concern_id = ? AND is_active = 1",
+                    [$locationId, $concernId]
+                );
+                $assignmentHelper = 'currentShopId';
+                $facilityType = 'SHOP';
+                break;
+            case 'PRODUCTION_UNIT':
+                $facility = Database::fetchOne(
+                    "SELECT id FROM production_units WHERE id = ? AND concern_id = ? AND is_active = 1",
+                    [$locationId, $concernId]
+                );
+                $assignmentHelper = 'currentProductionUnitId';
+                $facilityType = 'PRODUCTION';
+                break;
+            case 'CHANNEL':
+                $facility = Database::fetchOne(
+                    "SELECT id, channel_type, name, code
+                     FROM sales_channels WHERE id = ? AND concern_id = ? AND is_active = 1",
+                    [$locationId, $concernId]
+                );
+                $assignmentHelper = 'currentChannelId';
+                $channelType = strtoupper((string)($facility['channel_type'] ?? ''));
+                if (!in_array($channelType, ['WEBSITE', 'WHATSAPP'], true) && $facility) {
+                    $channelName = strtolower((string)$facility['name'] . ' ' . (string)$facility['code']);
+                    $channelType = str_contains($channelName, 'whatsapp') || str_starts_with((string)$facility['code'], 'WA')
+                        ? 'WHATSAPP'
+                        : (str_contains($channelName, 'web') || str_starts_with((string)$facility['code'], 'WE')
+                            ? 'WEBSITE'
+                            : '');
+                }
+                if (in_array($channelType, ['WEBSITE', 'WHATSAPP'], true)) {
+                    $facilityType = $channelType;
+                }
+                break;
+            case 'OFFICE':
+                if (!function_exists('isSuperAdmin') || !isSuperAdmin()) {
+                    throw new InvalidArgumentException('Office stock is available only to Super Admin.');
+                }
+                return $concernId;
+            default:
+                throw new InvalidArgumentException("Unsupported stock location type: {$locationType}");
+        }
+
+        if (!$facility) {
+            throw new InvalidArgumentException('The stock facility must be active and belong to the active concern.');
+        }
+        if ($facilityType === null || !Concern::hasFacilityModules($concernId, $facilityType)) {
+            throw new InvalidArgumentException('The active concern does not have a compatible module enabled for this stock facility.');
+        }
+        if ($assignmentHelper && function_exists($assignmentHelper)) {
+            $assignedId = $assignmentHelper();
+            if ($assignedId === 0 || ($assignedId !== null && $assignedId !== $locationId)) {
+                throw new InvalidArgumentException('The stock facility is outside the staff member’s assigned facility scope.');
+            }
+        }
+
+        return $concernId;
+    }
+
+    private static function currentConcernScopeId(): ?int {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        return $concernId !== null && $concernId > 0 ? $concernId : null;
     }
 
     /**

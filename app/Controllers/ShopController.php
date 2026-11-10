@@ -155,6 +155,7 @@ class ShopController {
                                  WHERE sb.variant_id = pv.id 
                                    AND sb.location_type = 'SHOP' 
                                    AND sb.location_id = ? 
+                                   AND sb.concern_id = " . (int)currentConcernId() . "
                                    AND sb.stock_state = 'AVAILABLE'), 0) as available_stock
                 FROM product_variants pv
                 JOIN products p ON pv.product_id = p.id
@@ -314,6 +315,7 @@ class ShopController {
                  JOIN stock_balances sb ON sb.variant_id = pv.id
                  WHERE sb.location_type = 'SHOP'
                    AND sb.location_id = ?
+                   AND sb.concern_id = " . (int)currentConcernId() . "
                    AND sb.stock_state = 'AVAILABLE'
                  UNION
                  SELECT DISTINCT CONCAT('product:', c.id) COLLATE utf8mb4_unicode_ci as filter_id,
@@ -324,6 +326,7 @@ class ShopController {
                  JOIN stock_balances sb ON sb.variant_id = pv.id
                  WHERE sb.location_type = 'SHOP'
                    AND sb.location_id = ?
+                   AND sb.concern_id = " . (int)currentConcernId() . "
                    AND sb.stock_state = 'AVAILABLE'
              ) shop_categories
              ORDER BY name ASC",
@@ -339,9 +342,10 @@ class ShopController {
                     COALESCE((SELECT SUM(ai.damaged_qty) FROM allocation_items ai WHERE ai.allocation_id = wa.id), 0) as total_damaged_quantity
              FROM warehouse_allocations wa
              LEFT JOIN warehouses w ON wa.warehouse_id = w.id
-             WHERE (wa.destination_type = 'SHOP' AND wa.destination_id = ?) OR wa.shop_id = ?
+             WHERE wa.concern_id = ?
+               AND ((wa.destination_type = 'SHOP' AND wa.destination_id = ?) OR wa.shop_id = ?)
              ORDER BY wa.id DESC",
-            [$shopId, $shopId]
+            [(int)currentConcernId(), $shopId, $shopId]
         );
 
         Response::view('shop.inventory.index', [
@@ -397,9 +401,9 @@ class ShopController {
             "SELECT st.*, u.full_name as user_name
              FROM stock_transactions st
              LEFT JOIN users u ON st.user_id = u.id
-             WHERE st.location_type = 'SHOP' AND st.location_id = ? AND st.variant_id = ?
+             WHERE st.location_type = 'SHOP' AND st.location_id = ? AND st.variant_id = ? AND st.concern_id = ?
              ORDER BY st.id DESC LIMIT 50",
-            [$shopId, $variantId]
+            [$shopId, $variantId, (int)currentConcernId()]
         );
 
         // 2. Inward Allocations & Dispatches History
@@ -408,14 +412,14 @@ class ShopController {
                     w.name as warehouse_name, w.code as warehouse_code,
                     ao.outward_number, ao.dispatch_date, ao.vehicle_number, ao.transporter_name
              FROM allocation_items ai
-             JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
+             JOIN warehouse_allocations wa ON ai.allocation_id = wa.id AND wa.concern_id = ?
              LEFT JOIN warehouses w ON wa.warehouse_id = w.id
              LEFT JOIN allocation_outwards ao ON ao.allocation_id = wa.id
              WHERE ai.variant_id = ? 
                AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED') 
                AND (wa.shop_id = ? OR wa.destination_id = ? OR wa.destination_type = 'SHOP')
              ORDER BY wa.id DESC",
-            [$variantId, $shopId, $shopId]
+            [(int)currentConcernId(), $variantId, $shopId, $shopId]
         );
 
         // 3. Shop POS Sales Orders History for this variant (strictly SHOP sales)
@@ -775,7 +779,7 @@ class ShopController {
                     p.name as product_name, p.code as product_code,
                     COALESCE(sz.name, 'Free Size') as size_name,
                     COALESCE(clr.name, 'Standard') as color_name,
-                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND stock_state = 'AVAILABLE'), 0) as available_stock
+                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'), 0) as available_stock
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
@@ -996,7 +1000,7 @@ class ShopController {
                     pv.sku, pv.qr_code, pv.mrp,
                     COALESCE(sz.name, 'Free Size') as size_name,
                     COALESCE(clr.name, 'Standard') as color_name,
-                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND stock_state = 'AVAILABLE'), 0) as available_stock
+                    COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'), 0) as available_stock
              FROM sale_items si
              JOIN product_variants pv ON si.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
@@ -2622,7 +2626,7 @@ class ShopController {
              LEFT JOIN sub_subcategories ssc ON p.sub_subcategory_id = ssc.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors cl ON pv.color_id = cl.id
-             WHERE sb.location_type = 'SHOP' AND sb.location_id = ?
+             WHERE sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.concern_id = " . (int)currentConcernId() . "
                AND sb.stock_state IN ('AVAILABLE', 'DAMAGED') AND sb.quantity > 0
              ORDER BY c.name ASC, p.name ASC, pv.sku ASC, sb.stock_state ASC",
             [$shopId]
@@ -2632,11 +2636,11 @@ class ShopController {
         $allocTags = Database::fetchAll(
             "SELECT ai.variant_id, ai.selected_qr_codes
              FROM allocation_items ai
-             JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
+             JOIN warehouse_allocations wa ON ai.allocation_id = wa.id AND wa.concern_id = ?
              WHERE (wa.shop_id = ? OR (wa.destination_type = 'SHOP' AND wa.destination_id = ?))
                   AND wa.status NOT IN ('REQUESTED', 'PENDING', 'CANCELLED', 'REJECTED')
                AND ai.selected_qr_codes IS NOT NULL AND ai.selected_qr_codes != ''",
-            [$shopId, $shopId]
+            [(int)currentConcernId(), $shopId, $shopId]
         );
 
         $variantTagsMap = [];
@@ -3041,7 +3045,7 @@ class ShopController {
             "SELECT pv.*, p.name as product_name, p.code as product_code,
                     cat.name as category_name, subcat.name as subcategory_name, subsubcat.name as sub_subcategory_name,
                     s.name as size_name, c.name as color_name,
-                    COALESCE((SELECT quantity FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND stock_state = 'AVAILABLE' LIMIT 1), 0) as available_qty
+                    COALESCE((SELECT quantity FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = ? AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE' LIMIT 1), 0) as available_qty
              FROM product_variants pv
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN categories cat ON p.category_id = cat.id
@@ -3488,8 +3492,8 @@ class ShopController {
                               s.name as size_name, s.code as size_code,
                               col.name as color_name, col.hex_code as color_hex,
                               cat.name as category_name, subcat.name as subcategory_name, subsubcat.name as sub_subcategory_name,
-                              COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = {$shopId} AND stock_state = 'AVAILABLE'), 0) as available_qty,
-                              COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = {$shopId} AND stock_state = 'DAMAGED'), 0) as damaged_qty
+                              COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = {$shopId} AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'AVAILABLE'), 0) as available_qty,
+                              COALESCE((SELECT SUM(quantity) FROM stock_balances WHERE variant_id = pv.id AND location_type = 'SHOP' AND location_id = {$shopId} AND concern_id = " . (int)currentConcernId() . " AND stock_state = 'DAMAGED'), 0) as damaged_qty
                        FROM product_variants pv
                        JOIN products p ON pv.product_id = p.id
                        LEFT JOIN categories cat ON p.category_id = cat.id
@@ -3564,10 +3568,10 @@ class ShopController {
                 $tx = Database::fetchOne(
                     "SELECT st.variant_id
                      FROM stock_transactions st
-                     WHERE (st.notes LIKE ? OR st.notes LIKE ?) AND st.location_type = 'SHOP' AND st.location_id = ?
+                     WHERE (st.notes LIKE ? OR st.notes LIKE ?) AND st.location_type = 'SHOP' AND st.location_id = ? AND st.concern_id = ?
                      ORDER BY st.id DESC
                      LIMIT 1",
-                    ['%' . $c . '%', '%Tags: ' . $c . '%', $shopId]
+                    ['%' . $c . '%', '%Tags: ' . $c . '%', $shopId, (int)currentConcernId()]
                 );
                 if ($tx && !empty($tx['variant_id'])) {
                     $foundVariant = Database::fetchOne("{$baseSelect} WHERE pv.id = ? LIMIT 1", [$tx['variant_id']]);
@@ -3645,7 +3649,7 @@ class ShopController {
                         LEFT JOIN categories cat ON p.category_id = cat.id
                         LEFT JOIN subcategories subcat ON p.subcategory_id = subcat.id
                         LEFT JOIN sub_subcategories subsubcat ON p.sub_subcategory_id = subsubcat.id
-                        LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.stock_state = 'AVAILABLE'
+                        LEFT JOIN stock_balances sb ON sb.variant_id = pv.id AND sb.location_type = 'SHOP' AND sb.location_id = ? AND sb.concern_id = " . (int)currentConcernId() . " AND sb.stock_state = 'AVAILABLE'
                         WHERE pv.is_active = 1
                         ORDER BY shop_stock DESC, pv.id ASC
                     ", [$shopId]);
@@ -3880,6 +3884,7 @@ class ShopController {
                             WHERE sb.variant_id = pv.id
                               AND sb.location_type = 'SHOP'
                               AND sb.location_id = ?
+                              AND sb.concern_id = " . (int)currentConcernId() . "
                               AND sb.stock_state = 'AVAILABLE'
                         ), 0) as available_stock
                  FROM product_variants pv
