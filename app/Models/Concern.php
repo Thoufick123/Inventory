@@ -6,7 +6,8 @@ class Concern
     {
         return [
             'PRODUCTION' => [
-                'production', 'production_inward', 'production_cash', 'sellers', 'damages', 'catalog', 'programs',
+                'production', 'production_inward', 'production_cash', 'production_billing',
+                'production_billing_returns', 'sellers', 'damages', 'catalog', 'programs',
                 'cutting', 'wastage', 'stitching', 'stitching_wastage', 'production_expenses', 'labels', 'qc',
                 'inventory', 'batches', 'outward', 'warehouse_rework', 'reports_production',
             ],
@@ -335,6 +336,32 @@ class Concern
                     [$id, $moduleKey]
                 );
             }
+
+            $productionModules = array_diff(
+                array_intersect($moduleKeys, self::facilityModuleFamily('PRODUCTION')),
+                ['reports_production']
+            );
+            if ($productionModules && !Database::fetchOne(
+                "SELECT id FROM production_units WHERE concern_id = ? LIMIT 1",
+                [$id]
+            )) {
+                $unitNumber = 1;
+                do {
+                    $unitCode = 'PU-C' . $id . '-' . str_pad((string)$unitNumber, 2, '0', STR_PAD_LEFT);
+                    $unitExists = Database::fetchOne(
+                        "SELECT id FROM production_units WHERE code = ? AND concern_id = ?",
+                        [$unitCode, $id]
+                    );
+                    $unitNumber++;
+                } while ($unitExists);
+
+                Database::execute(
+                    "INSERT INTO production_units (name, code, is_active, concern_id, created_at)
+                     VALUES (?, ?, 1, ?, NOW())",
+                    ['Main Production Unit', $unitCode, $id]
+                );
+            }
+
             Database::commit();
             return $id;
         } catch (\Throwable $e) {

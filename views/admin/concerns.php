@@ -9,7 +9,7 @@ $selectedModuleKeys = array_fill_keys($selectedConcern['module_keys'] ?? [], tru
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
         <div>
             <h1 class="h3 mb-1 fw-bold">Staff Concerns &amp; Modules</h1>
-            <p class="text-muted mb-0">Create custom concerns, choose their modules, and assign staff to one or more concerns.</p>
+            <p class="text-muted mb-0">Create custom concerns, choose their modules, and assign staff to one or more concerns. A Main Production Unit is created automatically when production modules are selected and the concern has no production unit.</p>
         </div>
         <?php if (hasPermission('staff', 'create')): ?>
             <a class="btn btn-outline-primary" href="<?= url('admin/staff/concerns') ?>"><i class="bi bi-plus-lg me-1"></i>New Concern</a>
@@ -36,15 +36,24 @@ $selectedModuleKeys = array_fill_keys($selectedConcern['module_keys'] ?? [], tru
                                 <label for="concernDescription" class="form-label fw-semibold">Description</label>
                                 <textarea id="concernDescription" name="description" class="form-control" rows="2" maxlength="500"><?= e($selectedConcern['description'] ?? '') ?></textarea>
                             </div>
-                            <label class="form-label fw-semibold">Modules <span class="text-danger">*</span></label>
-                            <div class="border rounded-3 p-3" style="max-height: 55vh; overflow-y: auto;">
+                            <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                                <label class="form-label fw-semibold mb-0">Modules <span class="text-danger">*</span></label>
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-sm btn-outline-primary" type="button" id="selectAllConcernModules">Select all</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="clearConcernModules">Clear all</button>
+                                </div>
+                            </div>
+                            <div id="concernModuleList" class="border rounded-3 p-3" style="max-height: 55vh; overflow-y: auto;">
                                 <?php foreach ($hierarchicalModules as $module): ?>
                                     <div class="mb-3">
-                                        <div class="fw-semibold small text-uppercase text-muted mb-2"><?= e($module['title'] ?? 'Modules') ?></div>
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <div class="fw-semibold small text-uppercase text-muted"><?= e($module['title'] ?? 'Modules') ?></div>
+                                            <button class="btn btn-sm btn-link p-0 text-decoration-none concern-module-group-toggle" type="button">Select group</button>
+                                        </div>
                                         <?php foreach ($module['submodules'] ?? [] as $moduleKey => $submodule): ?>
                                             <?php if (empty($submodule['permissions'])) continue; ?>
                                             <div class="form-check mb-1">
-                                                <input class="form-check-input" type="checkbox" name="module_keys[]" id="module_<?= e($moduleKey) ?>" value="<?= e($moduleKey) ?>" <?= isset($selectedModuleKeys[$moduleKey]) ? 'checked' : '' ?>>
+                                                <input class="form-check-input concern-module-checkbox" type="checkbox" name="module_keys[]" id="module_<?= e($moduleKey) ?>" value="<?= e($moduleKey) ?>" <?= isset($selectedModuleKeys[$moduleKey]) ? 'checked' : '' ?>>
                                                 <label class="form-check-label" for="module_<?= e($moduleKey) ?>"><?= e($submodule['name'] ?? ucfirst($moduleKey)) ?></label>
                                             </div>
                                         <?php endforeach; ?>
@@ -59,6 +68,33 @@ $selectedModuleKeys = array_fill_keys($selectedConcern['module_keys'] ?? [], tru
                     <?php endif; ?>
                 </div>
             </div>
+            <script>
+            (() => {
+                const moduleList = document.getElementById('concernModuleList');
+                if (!moduleList) return;
+
+                const moduleCheckboxes = () => Array.from(
+                    moduleList.querySelectorAll('.concern-module-checkbox')
+                );
+
+                document.getElementById('selectAllConcernModules')?.addEventListener('click', () => {
+                    moduleCheckboxes().forEach((checkbox) => { checkbox.checked = true; });
+                });
+
+                document.getElementById('clearConcernModules')?.addEventListener('click', () => {
+                    moduleCheckboxes().forEach((checkbox) => { checkbox.checked = false; });
+                });
+
+                moduleList.querySelectorAll('.concern-module-group-toggle').forEach((button) => {
+                    button.addEventListener('click', () => {
+                        const group = button.closest('.mb-3');
+                        const checkboxes = Array.from(group.querySelectorAll('.concern-module-checkbox'));
+                        const selectGroup = checkboxes.some((checkbox) => !checkbox.checked);
+                        checkboxes.forEach((checkbox) => { checkbox.checked = selectGroup; });
+                    });
+                });
+            })();
+            </script>
         </div>
 
         <div class="col-xl-8">
