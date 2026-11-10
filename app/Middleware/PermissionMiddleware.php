@@ -36,14 +36,6 @@ class PermissionMiddleware {
             Response::error(403, "Your assigned role does not have permission to {$readableAction} in {$readableModule}.");
         }
 
-        if (isGlobalConcernModule($module)) {
-            return;
-        }
-
-        if (!isSuperAdmin() && $module !== 'production') {
-            Response::error(503, 'This module is temporarily unavailable while concern data isolation is being completed.');
-            return;
-        }
     }
 
     /**

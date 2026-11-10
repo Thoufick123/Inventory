@@ -36,6 +36,7 @@ require_once BASE_PATH . '/app/Models/Role.php';
 // Autoload middleware
 require_once BASE_PATH . '/app/Middleware/AuthMiddleware.php';
 require_once BASE_PATH . '/app/Middleware/PermissionMiddleware.php';
+require_once BASE_PATH . '/app/Middleware/ConcernTransferPermissionMiddleware.php';
 
 // Global class autoloader for Services, Models, Controllers, and Helpers
 spl_autoload_register(function (string $className) {

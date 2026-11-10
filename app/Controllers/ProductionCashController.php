@@ -1,6 +1,7 @@
 <?php
 
 require_once BASE_PATH . '/app/Services/ProductionCashService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ProductionCashController
 {
@@ -8,6 +9,7 @@ class ProductionCashController
     {
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : ProductionUnit::getAll(['is_active' => 1]);
         $unitId = $this->resolveUnitId($_GET['unit_id'] ?? null, $units, false);
+        $concernId = ConcernTransactionService::activeConcernId();
         $selectedUnit = null;
         foreach ($units as $unit) {
             if ((int)$unit['id'] === $unitId) {
@@ -44,24 +46,24 @@ class ProductionCashController
              FROM production_cash_registers cr
              LEFT JOIN users opener ON opener.id = cr.cashier_id
              LEFT JOIN users closer ON closer.id = cr.closed_by
-             WHERE cr.production_unit_id = ? ORDER BY cr.id DESC LIMIT 50",
-            [$unitId]
+             WHERE cr.production_unit_id = ? AND cr.concern_id = ? ORDER BY cr.id DESC LIMIT 50",
+            [$unitId, $concernId]
         ) : [];
         $expenses = $unitId > 0 ? Database::fetchAll(
             "SELECT e.*, u.full_name AS staff_name, cr.register_number
              FROM production_cash_expenses e
              LEFT JOIN users u ON u.id = e.created_by
              LEFT JOIN production_cash_registers cr ON cr.id = e.register_id
-             WHERE e.production_unit_id = ? ORDER BY e.id DESC LIMIT 50",
-            [$unitId]
+             WHERE e.production_unit_id = ? AND e.concern_id = ? ORDER BY e.id DESC LIMIT 50",
+            [$unitId, $concernId]
         ) : [];
         $deposits = $unitId > 0 ? Database::fetchAll(
             "SELECT d.*, u.full_name AS staff_name, cr.register_number
              FROM production_cash_deposits d
              LEFT JOIN users u ON u.id = d.deposited_by
              LEFT JOIN production_cash_registers cr ON cr.id = d.register_id
-             WHERE d.production_unit_id = ? ORDER BY d.id DESC LIMIT 50",
-            [$unitId]
+             WHERE d.production_unit_id = ? AND d.concern_id = ? ORDER BY d.id DESC LIMIT 50",
+            [$unitId, $concernId]
         ) : [];
         $user = Session::user() ?? [];
 

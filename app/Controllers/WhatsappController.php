@@ -7,6 +7,7 @@
 
 require_once BASE_PATH . '/app/Services/StockService.php';
 require_once BASE_PATH . '/app/Services/ShopService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 require_once BASE_PATH . '/app/Models/ChannelDamage.php';
 require_once BASE_PATH . '/app/Models/WarehouseReturn.php';
 require_once BASE_PATH . '/app/Models/WarehouseReturnItem.php';
@@ -72,6 +73,7 @@ class WhatsappController {
      */
     public function index(): void {
         $chan = $this->getChannel();
+        $concernId = ConcernTransactionService::activeConcernId();
         list($allocWhereSql, $allocWhereParams) = $this->buildWhatsappAllocWhere('wa');
 
         $search = trim($_GET['search'] ?? '');
@@ -198,8 +200,10 @@ class WhatsappController {
                     COALESCE(SUM(s.total_amount), 0) as total_revenue,
                     COALESCE(SUM((SELECT SUM(quantity) FROM sale_items WHERE sale_id = s.id)), 0) as sold_qty
              FROM sales s
-             WHERE (s.sales_channel = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')
-               AND s.status != 'CANCELLED'"
+             WHERE s.concern_id = ?
+               AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')
+               AND s.status != 'CANCELLED'",
+            [$concernId]
         );
 
         $orderCount   = (int)($salesStats['order_count'] ?? 0);
@@ -237,8 +241,10 @@ class WhatsappController {
                     s.created_at as date
              FROM sales s
              LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE s.sales_channel = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%'
-             ORDER BY s.created_at DESC LIMIT 10"
+             WHERE s.concern_id = ?
+               AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')
+             ORDER BY s.created_at DESC LIMIT 10",
+            [$concernId]
         );
 
         Response::view('whatsapp_orders.index', [
@@ -417,8 +423,10 @@ class WhatsappController {
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
              LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE (s.sales_channel = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')
-             ORDER BY r.created_at DESC"
+             WHERE r.concern_id = ? AND s.concern_id = r.concern_id
+               AND (s.sales_channel = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')
+             ORDER BY r.created_at DESC",
+            [ConcernTransactionService::activeConcernId()]
         );
 
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
@@ -2058,6 +2066,8 @@ class WhatsappController {
         $chan = $this->getChannel();
         $channelId = (int)$chan['id'];
         $warehouseId = (int)($_POST['warehouse_id'] ?? 0);
+        ConcernTransactionService::assertFacility('WHATSAPP', $channelId);
+        ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
         $notes = trim($_POST['notes'] ?? '');
         $items = $_POST['items'] ?? [];
 
@@ -2113,8 +2123,8 @@ class WhatsappController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
-        $where = ["(s.sales_channel = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')"];
-        $params = [];
+        $where = ["s.concern_id = ?", "(s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')"];
+        $params = [ConcernTransactionService::activeConcernId()];
 
         if (!empty($search)) {
             $where[] = "(s.invoice_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ? OR s.notes LIKE ? OR s.biller_name LIKE ?)";
@@ -2212,8 +2222,8 @@ class WhatsappController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
-        $where = ["(s.sales_channel = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')"];
-        $params = [];
+        $where = ["r.concern_id = ?", "s.concern_id = r.concern_id", "r.source_type = 'WHATSAPP'", "(s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%')"];
+        $params = [ConcernTransactionService::activeConcernId()];
 
         if (!empty($search)) {
             $where[] = "(r.return_number LIKE ? OR s.invoice_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ?)";
@@ -2261,7 +2271,7 @@ class WhatsappController {
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
              LEFT JOIN customers c ON s.customer_id = c.id
-             LEFT JOIN exchanges e ON e.return_id = r.id
+             LEFT JOIN exchanges e ON e.return_id = r.id AND e.concern_id = r.concern_id
              WHERE {$whereClause}
              ORDER BY r.created_at DESC",
             $params
@@ -2326,6 +2336,7 @@ class WhatsappController {
     }
 
     public function whatsappReturnsLookup(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $term = trim($_REQUEST['q'] ?? $_REQUEST['query'] ?? $_REQUEST['term'] ?? $_REQUEST['invoice_number'] ?? $_REQUEST['search'] ?? '');
         if (empty($term)) {
             Response::jsonError("Please provide an invoice number, customer phone, or piece QR tag.");
@@ -2340,10 +2351,10 @@ class WhatsappController {
                 "SELECT s.*, COALESCE(c.name, s.customer_name, 'WhatsApp Customer') as customer_name,
                         COALESCE(c.phone, s.customer_phone, '-') as customer_phone, c.email as customer_email
                  FROM sales s LEFT JOIN customers c ON s.customer_id = c.id
-                 WHERE (c.phone LIKE ? OR s.customer_phone LIKE ?)
+                 WHERE s.concern_id = ? AND (c.phone LIKE ? OR s.customer_phone LIKE ?)
                    AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
                  ORDER BY s.id DESC LIMIT 50",
-                ["%{$phoneTerm}%", "%{$phoneTerm}%"]
+                [$concernId, "%{$phoneTerm}%", "%{$phoneTerm}%"]
             );
             $phoneOrders = [];
             foreach ($phoneSales as $phoneSale) {
@@ -2376,8 +2387,8 @@ class WhatsappController {
                 }
                 unset($phoneItem);
                 $existingInvoiceReturn = Database::fetchOne(
-                    "SELECT id, return_number FROM returns WHERE sale_id = ? AND source_type = 'WHATSAPP' ORDER BY id DESC LIMIT 1",
-                    [(int)$phoneSale['id']]
+                    "SELECT id, return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WHATSAPP' ORDER BY id DESC LIMIT 1",
+                    [(int)$phoneSale['id'], $concernId]
                 );
                 $phoneOrders[] = [
                     'sale' => $phoneSale,
@@ -2416,6 +2427,7 @@ class WhatsappController {
                        OR si_sub.qr_code = ?
                 )
              )
+             AND s.concern_id = ?
              AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
              ORDER BY s.id DESC LIMIT 1",
             [
@@ -2424,7 +2436,8 @@ class WhatsappController {
                 $term, "%{$term}%", 
                 "%{$term}%", "%{$term}%", 
                 "%{$term}%", $term,
-                "%{$term}%", $term
+                "%{$term}%", $term,
+                $concernId
             ]
         );
 
@@ -2437,7 +2450,7 @@ class WhatsappController {
                         c.email as customer_email
                  FROM sales s
                  LEFT JOIN customers c ON s.customer_id = c.id
-                 WHERE (s.invoice_number = ? 
+                 WHERE s.concern_id = ? AND (s.invoice_number = ?
                     OR s.invoice_number LIKE ? 
                     OR c.phone = ? 
                     OR c.phone LIKE ? 
@@ -2453,8 +2466,10 @@ class WhatsappController {
                            OR si_sub.qr_code = ?
                     )
                  )
+                 AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
                  ORDER BY s.id DESC LIMIT 1",
                 [
+                    $concernId,
                     $term, "%{$term}%", 
                     $term, "%{$term}%", 
                     $term, "%{$term}%", 
@@ -2506,8 +2521,8 @@ class WhatsappController {
         unset($it);
 
         $existingInvoiceReturn = Database::fetchOne(
-            "SELECT id, return_number FROM returns WHERE sale_id = ? AND source_type = 'WHATSAPP' ORDER BY id DESC LIMIT 1",
-            [(int)$sale['id']]
+            "SELECT id, return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WHATSAPP' ORDER BY id DESC LIMIT 1",
+            [(int)$sale['id'], $concernId]
         );
 
         Response::jsonSuccess("WhatsApp Sale record loaded successfully", [
@@ -2536,7 +2551,13 @@ class WhatsappController {
             return;
         }
 
-        $sale = Database::fetchOne("SELECT * FROM sales WHERE id = ?", [$saleId]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $sale = Database::fetchOne(
+            "SELECT * FROM sales
+             WHERE id = ? AND concern_id = ?
+               AND (sales_channel = 'WHATSAPP' OR sale_type = 'WHATSAPP' OR notes LIKE '%WhatsApp%' OR invoice_number LIKE 'WA-%')",
+            [$saleId, $concernId]
+        );
         if (!$sale) {
             Session::flash('error', 'WhatsApp sale record not found.');
             Response::redirect(url('warehouse/whatsapp-orders/returns'));
@@ -2546,8 +2567,8 @@ class WhatsappController {
         // Return eligibility is invoice-based: one invoice can be returned or
         // exchanged only once, regardless of how many invoices share a phone.
         $existingInvoiceReturn = Database::fetchOne(
-            "SELECT return_number FROM returns WHERE sale_id = ? AND source_type = 'WHATSAPP' ORDER BY id DESC LIMIT 1",
-            [$saleId]
+            "SELECT return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WHATSAPP' ORDER BY id DESC LIMIT 1",
+            [$saleId, $concernId]
         );
         if ($existingInvoiceReturn) {
             Session::flash('error', "Invoice {$sale['invoice_number']} was already returned/exchanged under {$existingInvoiceReturn['return_number']}.");
@@ -2557,6 +2578,9 @@ class WhatsappController {
 
         $chan = $this->getChannel();
         $channelId = (int)$chan['id'];
+        if (!empty($sale['sales_channel_id'])) {
+            ConcernTransactionService::assertFacility('WHATSAPP', (int)$sale['sales_channel_id']);
+        }
         $whatsappChannelIds = $this->getWhatsappChannelIds();
         $replacementStockPlan = [];
         $replacementStockDispatched = [];
@@ -2678,11 +2702,12 @@ class WhatsappController {
 
         $returnNumber = 'RET-WA-' . date('Ymd') . '-' . mt_rand(1000, 9999);
         Database::execute(
-            "INSERT INTO returns (return_number, source_type, sale_id, customer_id, return_type, reason, inspection_status, 
+            "INSERT INTO returns (return_number, concern_id, source_type, sale_id, customer_id, return_type, reason, inspection_status,
                                  refund_amount, refund_mode, refund_status, total_amount, status, processed_by, approved_by, notes, created_at, updated_at)
-             VALUES (?, 'WHATSAPP', ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, NOW(), NOW())",
+             VALUES (?, ?, 'WHATSAPP', ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, NOW(), NOW())",
             [
                 $returnNumber,
+                $concernId,
                 $saleId,
                 $sale['customer_id'] ?? null,
                 $dbReturnType,
@@ -2743,10 +2768,11 @@ class WhatsappController {
             $exchNumber = 'EXC-WA-' . date('Ymd') . '-' . mt_rand(1000, 9999);
             $payAction = $differenceAmount > 0 ? 'COLLECT' : ($differenceAmount < 0 ? 'REFUND' : 'NONE');
             Database::execute(
-                "INSERT INTO exchanges (exchange_number, return_id, source_type, sale_id, original_amount, new_amount, difference_amount, settlement_mode, payment_action, status, payment_status, notes, created_at, updated_at)
-                 VALUES (?, ?, 'WHATSAPP', ?, ?, ?, ?, ?, ?, 'COMPLETED', 'PAID', ?, NOW(), NOW())",
+                "INSERT INTO exchanges (exchange_number, concern_id, return_id, source_type, sale_id, original_amount, new_amount, difference_amount, settlement_mode, payment_action, status, payment_status, notes, created_at, updated_at)
+                 VALUES (?, ?, ?, 'WHATSAPP', ?, ?, ?, ?, ?, ?, 'COMPLETED', 'PAID', ?, NOW(), NOW())",
                 [
                     $exchNumber,
+                    $concernId,
                     $returnId,
                     $saleId,
                     $totalReturnVal,
@@ -2866,8 +2892,8 @@ class WhatsappController {
              LEFT JOIN customers c ON s.customer_id = c.id
              LEFT JOIN exchanges e ON e.return_id = r.id
              LEFT JOIN users u ON r.processed_by = u.id
-             WHERE r.id = ?",
-            [$id]
+             WHERE r.id = ? AND r.concern_id = ? AND r.source_type = 'WHATSAPP'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$return) {
@@ -3321,9 +3347,9 @@ class WhatsappController {
              FROM warehouse_returns wr
              LEFT JOIN warehouses w ON wr.warehouse_id = w.id
              LEFT JOIN users u ON wr.received_by = u.id
-             WHERE wr.source_type = 'WHATSAPP' AND wr.source_id = ?
+             WHERE wr.source_type = 'WHATSAPP' AND wr.source_id = ? AND wr.concern_id = ?
              ORDER BY wr.created_at DESC",
-            [$channelId]
+            [$channelId, ConcernTransactionService::activeConcernId()]
         );
 
         $kpi = [
@@ -3403,10 +3429,11 @@ class WhatsappController {
         // Insert into warehouse_returns
         Database::execute(
             "INSERT INTO warehouse_returns 
-             (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, received_by, created_at, updated_at)
-             VALUES (?, 'WHATSAPP', ?, ?, ?, 'WHATSAPP_DAMAGED_RETURN', 'RECEIVED', ?, ?, NOW(), NOW())",
+             (return_number, concern_id, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, received_by, created_at, updated_at)
+             VALUES (?, ?, 'WHATSAPP', ?, ?, ?, 'WHATSAPP_DAMAGED_RETURN', 'RECEIVED', ?, ?, NOW(), NOW())",
             [
                 $returnNumber,
+                ConcernTransactionService::activeConcernId(),
                 $channelId,
                 $warehouseId,
                 $warehouseId,
@@ -3479,8 +3506,8 @@ class WhatsappController {
              LEFT JOIN warehouses w ON wr.warehouse_id = w.id
              LEFT JOIN sales_channels sc ON wr.source_id = sc.id
              LEFT JOIN users u ON wr.received_by = u.id
-             WHERE wr.id = ?",
-            [$id]
+             WHERE wr.id = ? AND wr.concern_id = ?",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$batch) return null;
@@ -4123,6 +4150,7 @@ class WhatsappController {
         require_once BASE_PATH . '/app/Services/ExpenseService.php';
         $chan = $this->getChannel();
         $channelId = (int)$chan['id'];
+        $concernId = ConcernTransactionService::activeConcernId();
 
         $startDate = $_GET['start_date'] ?? date('Y-m-01');
         $endDate = $_GET['end_date'] ?? date('Y-m-d');
@@ -4150,8 +4178,9 @@ class WhatsappController {
         $recentOrders = Database::fetchAll(
             "SELECT id, invoice_number, customer_name, total_amount 
              FROM sales 
-             WHERE sales_channel = 'WHATSAPP' OR sale_type = 'WHATSAPP' 
-             ORDER BY id DESC LIMIT 50"
+             WHERE concern_id = ? AND (sales_channel = 'WHATSAPP' OR sale_type = 'WHATSAPP')
+             ORDER BY id DESC LIMIT 50",
+            [$concernId]
         );
 
         Response::view('whatsapp_orders.expenses.index', [
@@ -4571,10 +4600,10 @@ class WhatsappController {
                 FROM warehouse_returns wr
                 JOIN warehouses w ON wr.warehouse_id = w.id
                 LEFT JOIN users u ON wr.inspected_by = u.id
-                WHERE (wr.source_type = 'WHATSAPP' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders))) 
+                WHERE wr.concern_id = ? AND (wr.source_type = 'WHATSAPP' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)))
                   AND wr.source_id IN ($placeholders)";
         
-        $params = array_merge($chanIds, $chanIds);
+        $params = array_merge([ConcernTransactionService::activeConcernId()], $chanIds, $chanIds);
 
         if (!empty($filters['status']) && $filters['status'] !== 'ALL') {
             $sql .= " AND wr.status = ?";
@@ -4596,9 +4625,9 @@ class WhatsappController {
                           SUM(CASE WHEN wr.status IN ('RECEIVED', 'INSPECTING') THEN 1 ELSE 0 END) as in_transit_count,
                           SUM(CASE WHEN wr.status IN ('CLASSIFIED', 'COMPLETED') THEN 1 ELSE 0 END) as completed_count
                    FROM warehouse_returns wr
-                   WHERE (wr.source_type = 'WHATSAPP' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)))
+                   WHERE wr.concern_id = ? AND (wr.source_type = 'WHATSAPP' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)))
                      AND wr.source_id IN ($placeholders)";
-        $kpis = Database::fetchOne($kpiSql, array_merge($chanIds, $chanIds)) ?: [
+        $kpis = Database::fetchOne($kpiSql, array_merge([ConcernTransactionService::activeConcernId()], $chanIds, $chanIds)) ?: [
             'total_dispatches'     => 0,
             'total_units_returned' => 0,
             'in_transit_count'     => 0,
@@ -4616,6 +4645,8 @@ class WhatsappController {
      */
     private function createWhatsappWarehouseReturn(int $channelId, array $payload, int $userId): array {
         $warehouseId = (int)($payload['warehouse_id'] ?? 1);
+        ConcernTransactionService::assertFacility('WHATSAPP', $channelId);
+        ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
         $reason = trim($payload['reason'] ?? 'Damaged & Defective Stock Return');
         $items = $payload['items'] ?? [];
 
@@ -4628,8 +4659,8 @@ class WhatsappController {
             $today = date('Ymd');
             $prefix = 'RET-WA-' . $today . '-';
             $last = Database::fetchOne(
-                "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', ConcernTransactionService::activeConcernId()]
             );
             $seq = 1;
             if ($last && !empty($last['return_number'])) {
@@ -4674,9 +4705,9 @@ class WhatsappController {
             $serializedNotes = json_encode($notesData);
 
             Database::execute(
-                "INSERT INTO warehouse_returns (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, created_at, updated_at)
-                 VALUES (?, 'WHATSAPP', ?, ?, ?, ?, 'RECEIVED', ?, NOW(), NOW())",
-                [$returnNumber, $channelId, $warehouseId, $warehouseId, $reason, $serializedNotes]
+                "INSERT INTO warehouse_returns (return_number, concern_id, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, created_at, updated_at)
+                 VALUES (?, ?, 'WHATSAPP', ?, ?, ?, ?, 'RECEIVED', ?, NOW(), NOW())",
+                [$returnNumber, ConcernTransactionService::activeConcernId(), $channelId, $warehouseId, $warehouseId, $reason, $serializedNotes]
             );
             $returnId = (int)Database::lastInsertId();
 
@@ -4814,8 +4845,8 @@ class WhatsappController {
              JOIN warehouses w ON wr.warehouse_id = w.id
              LEFT JOIN sales_channels sc ON (wr.source_id = sc.id)
              LEFT JOIN users u ON wr.inspected_by = u.id
-             WHERE wr.id = ? OR wr.return_number = ?",
-            [$returnId, (string)$returnId]
+             WHERE (wr.id = ? OR wr.return_number = ?) AND wr.concern_id = ?",
+            [$returnId, (string)$returnId, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$ret) return null;

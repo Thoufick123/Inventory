@@ -5,6 +5,7 @@
  */
 
 require_once BASE_PATH . '/app/Models/WarehouseReturnItem.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class WarehouseReturn {
 
@@ -17,7 +18,7 @@ class WarehouseReturn {
         $warehouseFilter = $assignedWarehouseId !== null
             ? ' AND (wr.warehouse_id = ? OR wr.destination_warehouse_id = ?)'
             : '';
-        $params = [$concernId, $concernId, $concernId, $concernId, $id];
+        $params = [$concernId, $concernId, $concernId, $concernId, $id, $concernId];
         if ($assignedWarehouseId !== null) {
             $params[] = $assignedWarehouseId;
             $params[] = $assignedWarehouseId;
@@ -35,7 +36,7 @@ class WarehouseReturn {
              LEFT JOIN sales_channels sc ON wr.source_type IN ('WHATSAPP', 'WEBSITE') AND wr.source_id = sc.id AND sc.concern_id = ?
              LEFT JOIN users u_insp ON wr.inspected_by = u_insp.id
              LEFT JOIN users u_rec ON wr.received_by = u_rec.id
-             WHERE wr.id = ? AND w.id IS NOT NULL AND w_dest.id IS NOT NULL
+             WHERE wr.id = ? AND wr.concern_id = ? AND w.id IS NOT NULL AND w_dest.id IS NOT NULL
                AND (wr.source_type != 'SHOP' OR s.id IS NOT NULL)
                AND (wr.source_type NOT IN ('WHATSAPP', 'WEBSITE') OR sc.id IS NOT NULL){$warehouseFilter}",
             $params
@@ -102,8 +103,8 @@ class WarehouseReturn {
 
     public static function findByNumber(string $returnNumber): ?array {
         $return = Database::fetchOne(
-            "SELECT wr.* FROM warehouse_returns wr WHERE wr.return_number = ?",
-            [$returnNumber]
+            "SELECT wr.* FROM warehouse_returns wr WHERE wr.return_number = ? AND wr.concern_id = ?",
+            [$returnNumber, ConcernTransactionService::activeConcernId()]
         );
         if ($return) {
             return self::find((int)$return['id']);
@@ -149,10 +150,10 @@ class WarehouseReturn {
                 LEFT JOIN shops s ON (wr.source_type = 'SHOP' AND wr.source_id = s.id AND s.concern_id = ?)
                 LEFT JOIN sales_channels sc ON ((wr.source_type = 'WHATSAPP' OR wr.source_type = 'WEBSITE') AND wr.source_id = sc.id AND sc.concern_id = ?)
                 LEFT JOIN users u_insp ON wr.inspected_by = u_insp.id
-                WHERE w.id IS NOT NULL AND w_dest.id IS NOT NULL
+                WHERE wr.concern_id = ? AND w.id IS NOT NULL AND w_dest.id IS NOT NULL
                   AND (wr.source_type != 'SHOP' OR s.id IS NOT NULL)
                   AND (wr.source_type NOT IN ('WHATSAPP', 'WEBSITE') OR sc.id IS NOT NULL)";
-        $params = [$concernId, $concernId, $concernId, $concernId];
+        $params = [$concernId, $concernId, $concernId, $concernId, $concernId];
 
         if (!empty($filters['status']) && $filters['status'] !== 'ALL') {
             $sql .= " AND wr.status = ?";
@@ -217,14 +218,15 @@ class WarehouseReturn {
         }
         Database::execute(
             "INSERT INTO warehouse_returns 
-             (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, concern_id, reason, status, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $data['return_number'],
                 $data['source_type'],
                 $data['source_id'] ?? null,
                 $data['warehouse_id'],
                 $data['destination_warehouse_id'] ?? $data['warehouse_id'],
+                $concernId,
                 $data['reason'] ?? null,
                 $data['status'] ?? 'RECEIVED',
                 $data['notes'] ?? null
@@ -241,27 +243,27 @@ class WarehouseReturn {
             return Database::execute(
                 "UPDATE warehouse_returns
                  SET status = ?, inspected_by = ?, updated_at = NOW()
-                 WHERE id = ? AND warehouse_id IN (
+                 WHERE id = ? AND concern_id = ? AND warehouse_id IN (
                      SELECT id FROM warehouses WHERE concern_id = ?
                  )",
-                [$status, $inspectedBy, $id, (int)currentConcernId()]
+                [$status, $inspectedBy, $id, (int)currentConcernId(), (int)currentConcernId()]
             );
         }
         return Database::execute(
             "UPDATE warehouse_returns
              SET status = ?, updated_at = NOW()
-             WHERE id = ? AND warehouse_id IN (
+             WHERE id = ? AND concern_id = ? AND warehouse_id IN (
                  SELECT id FROM warehouses WHERE concern_id = ?
              )",
-            [$status, $id, (int)currentConcernId()]
+            [$status, $id, (int)currentConcernId(), (int)currentConcernId()]
         );
     }
 
     public static function generateNumber(): string {
         $prefix = 'RET-' . date('Ymd') . '-';
         $last = Database::fetchOne(
-            "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? ORDER BY id DESC LIMIT 1",
-            [$prefix . '%']
+            "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+            [$prefix . '%', ConcernTransactionService::activeConcernId()]
         );
 
         if ($last) {

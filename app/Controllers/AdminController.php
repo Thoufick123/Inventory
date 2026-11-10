@@ -11,6 +11,7 @@ require_once BASE_PATH . '/app/Models/ProductionUnit.php';
 require_once BASE_PATH . '/app/Models/Warehouse.php';
 require_once BASE_PATH . '/app/Models/Shop.php';
 require_once BASE_PATH . '/app/Services/AuditService.php';
+require_once BASE_PATH . '/app/Services/LegacyConcernDataService.php';
 
 class AdminController {
 
@@ -25,29 +26,44 @@ class AdminController {
         $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $stockConcernId = $concernId ?? 0;
         if (!hasPermission('dashboard', 'view')) {
-            if (hasPermission('production', 'view') || hasPermission('cutting', 'view') || hasPermission('programs', 'view')) {
-                Response::redirect(url('production/dashboard'));
-                return;
-            }
-            if (hasPermission('warehouse', 'view') || hasPermission('inward', 'view') || hasPermission('stock', 'view')) {
-                Response::redirect(url('warehouse/dashboard'));
-                return;
-            }
-            if (hasPermission('shop', 'view') || hasPermission('pos', 'view')) {
-                Response::redirect(url('shop/dashboard'));
-                return;
-            }
-            if (hasPermission('assets', 'view')) {
-                Response::redirect(url('asset/dashboard'));
-                return;
-            }
-            if (hasPermission('reports', 'view')) {
-                Response::redirect(url('reports/sales'));
-                return;
-            }
-            if (hasPermission('staff', 'view')) {
-                Response::redirect(url('admin/staff?department=all'));
-                return;
+            $landingPages = [
+                'production' => 'production/dashboard',
+                'sellers' => 'production/sellers',
+                'catalog' => 'production/catalog',
+                'programs' => 'production/programs',
+                'cutting' => 'production/cutting',
+                'stitching' => 'production/stitching',
+                'labels' => 'production/labels',
+                'qc' => 'production/qc',
+                'inventory' => 'production/inventory',
+                'batches' => 'production/batches',
+                'outward' => 'production/outward',
+                'warehouse_rework' => 'production/warehouse-rework',
+                'production_billing' => 'production/billing',
+                'production_cash' => 'production/cash',
+                'production_expenses' => 'production/expenses',
+                'warehouse' => 'warehouse/dashboard',
+                'inward' => 'warehouse/inward',
+                'stock' => 'warehouse/stock',
+                'purchases' => 'warehouse/purchases',
+                'allocation' => 'warehouse/allocation',
+                'returns' => 'warehouse/returns',
+                'website_dashboard' => 'warehouse/website-orders',
+                'website_orders' => 'warehouse/website-orders',
+                'whatsapp_dashboard' => 'warehouse/whatsapp-orders',
+                'whatsapp_orders' => 'warehouse/whatsapp-orders',
+                'shop' => 'shop/dashboard',
+                'pos' => 'shop/pos',
+                'assets' => 'asset/dashboard',
+                'reports' => 'reports/sales',
+                'staff' => 'admin/staff?department=all',
+                'roles' => 'admin/roles',
+            ];
+            foreach ($landingPages as $module => $page) {
+                if (hasPermission($module, 'view')) {
+                    Response::redirect(url($page));
+                    return;
+                }
             }
             Response::error(403, 'Access denied. You do not have permission to view the executive dashboard.');
             return;
@@ -97,7 +113,9 @@ class AdminController {
 
         // Today's sales
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM sales WHERE DATE(created_at) = CURDATE() AND status != 'CANCELLED'"
+            "SELECT COUNT(*) as cnt FROM sales
+             WHERE concern_id = ? AND DATE(created_at) = CURDATE() AND status != 'CANCELLED'",
+            [$stockConcernId]
         );
         $data['todaySales'] = $result['cnt'] ?? 0;
 
@@ -133,7 +151,9 @@ class AdminController {
 
         // Pending returns
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM returns WHERE inspection_status IN ('PENDING', 'INSPECTING')"
+            "SELECT COUNT(*) as cnt FROM returns
+             WHERE concern_id = ? AND inspection_status IN ('PENDING', 'INSPECTING')",
+            [$stockConcernId]
         );
         $data['pendingReturns'] = $result['cnt'] ?? 0;
 
@@ -141,8 +161,10 @@ class AdminController {
         $data['recentSales'] = Database::fetchAll(
             "SELECT s.*, c.name as customer_name 
              FROM sales s 
-             LEFT JOIN customers c ON s.customer_id = c.id 
-             ORDER BY s.created_at DESC LIMIT 10"
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE s.concern_id = ?
+             ORDER BY s.created_at DESC LIMIT 10",
+            [$stockConcernId]
         );
 
         // Low stock items
@@ -1022,6 +1044,95 @@ class AdminController {
                 ['label' => 'Concerns & Modules'],
             ],
         ]);
+    }
+
+    public function legacyConcernData(): void
+    {
+        if (!isSuperAdmin()) {
+            Response::error(403, 'Only Super Admin can review or assign unassigned legacy records.');
+            return;
+        }
+
+        $table = (string)($_GET['table'] ?? '');
+        $tables = LegacyConcernDataService::getTables();
+        if ($table !== '' && !array_key_exists($table, $tables)) {
+            Response::redirect(url('admin/legacy-data'), 'error', 'Unknown legacy data table.');
+            return;
+        }
+
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $data = [
+            'pageTitle' => 'Legacy Concern Data',
+            'activeModule' => 'staff',
+            'activeMenu' => 'legacy-data',
+            'tables' => LegacyConcernDataService::getSummary(),
+            'concerns' => Concern::getAll(true),
+            'selectedTable' => $table,
+            'canAssign' => $table === '' || LegacyConcernDataService::isAssignable($table),
+            'records' => [],
+            'recordCount' => 0,
+            'page' => $page,
+            'pageSize' => 50,
+            'breadcrumb' => [
+                ['label' => 'Staff', 'url' => url('admin/staff')],
+                ['label' => 'Legacy Concern Data'],
+            ],
+        ];
+
+        if ($table !== '') {
+            $result = LegacyConcernDataService::getUnassignedRecords($table, 50, ($page - 1) * 50);
+            $data['records'] = $result['records'];
+            $data['recordCount'] = $result['total'];
+        }
+
+        Response::view('admin.legacy_data', $data);
+    }
+
+    public function assignLegacyConcernData(): void
+    {
+        if (!isSuperAdmin()) {
+            Response::error(403, 'Only Super Admin can assign unassigned legacy records.');
+            return;
+        }
+        if (!CSRF::validateRequest()) {
+            Response::back('error', 'Invalid form submission.');
+            return;
+        }
+
+        $table = (string)($_POST['table'] ?? '');
+        $concernId = (int)($_POST['concern_id'] ?? 0);
+        $recordIds = is_array($_POST['record_ids'] ?? null) ? $_POST['record_ids'] : [];
+        $concern = Concern::find($concernId);
+        if (!$concern || (int)$concern['is_active'] !== 1) {
+            Response::redirect(url('admin/legacy-data'), 'error', 'Choose an active concern.');
+            return;
+        }
+
+        try {
+            $assignedRecordIds = array_values(array_unique(array_filter(
+                array_map('intval', $recordIds),
+                static fn(int $id): bool => $id > 0
+            )));
+            $assignedCount = LegacyConcernDataService::assignUnassignedRecords($table, $assignedRecordIds, $concernId);
+            AuditService::log('staff', 'assign_legacy_concern_data', $table, null, [
+                'concern_id' => null,
+                'record_ids' => $assignedRecordIds,
+            ], [
+                'concern_id' => $concernId,
+                'record_ids' => $assignedRecordIds,
+            ]);
+            Response::redirect(
+                url('admin/legacy-data?table=' . rawurlencode($table)),
+                'success',
+                $assignedCount . ' legacy record(s) assigned to ' . $concern['name'] . '.'
+            );
+        } catch (Throwable $e) {
+            Response::redirect(
+                url('admin/legacy-data?table=' . rawurlencode($table)),
+                'error',
+                'Unable to assign legacy records: ' . $e->getMessage()
+            );
+        }
     }
 
     public function storeConcern(): void

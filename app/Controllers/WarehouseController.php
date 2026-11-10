@@ -1337,6 +1337,7 @@ class WarehouseController {
             Response::redirect(url('warehouse/stock'));
             return;
         }
+        $concernId = ConcernTransactionService::activeConcernId();
         $variantId = (int)$id;
         $variant = Database::fetchOne(
             "SELECT pv.*, 
@@ -1613,11 +1614,14 @@ class WarehouseController {
         } catch (Throwable $e) {}
 
         // Fetch piece tags from direct customer purchases for this variant to skip sold pieces in active inventory
-        $whPurchClause = $selectedWarehouseId ? " AND po.warehouse_id = " . (int)$selectedWarehouseId : "";
+        $whPurchClause = " AND po.warehouse_id IN ({$accessibleWarehouseList})";
+        if ($selectedWarehouseId) {
+            $whPurchClause .= " AND po.warehouse_id = " . (int)$selectedWarehouseId;
+        }
         $purchasedRows = Database::fetchAll(
             "SELECT pi.batch_lot_no, pi.notes 
              FROM purchase_items pi
-             JOIN purchase_orders po ON pi.purchase_order_id = po.id
+             JOIN purchase_orders po ON pi.purchase_order_id = po.id AND po.concern_id = {$concernId}
              WHERE pi.variant_id = ? AND po.status NOT IN ('CANCELLED', 'VOID')$whPurchClause",
             [$variantId]
         );
@@ -1643,7 +1647,9 @@ class WarehouseController {
             "SELECT ei.piece_tag 
              FROM exchange_items ei
              JOIN exchanges e ON ei.exchange_id = e.id
-             WHERE ei.variant_id = ? AND ei.item_type = 'NEW' AND e.status != 'CANCELLED'",
+             JOIN returns r ON e.return_id = r.id AND r.concern_id = e.concern_id
+             WHERE ei.variant_id = ? AND ei.item_type = 'NEW' AND e.status != 'CANCELLED'
+               AND r.concern_id = {$concernId} AND r.source_type = 'WAREHOUSE_PURCHASE'",
             [$variantId]
         );
         foreach ($exchangeOutRows as $er) {
@@ -1660,12 +1666,16 @@ class WarehouseController {
         }
 
         // Fetch returned GOOD piece tags (restocked to available warehouse stock) - these must be UN-HIDDEN / AVAILABLE in active inventory!
-        $whReturnGoodFilter = $selectedWarehouseId ? " AND r.warehouse_id = " . (int)$selectedWarehouseId : "";
+        $whReturnGoodFilter = " AND r.warehouse_id IN ({$accessibleWarehouseList})";
+        if ($selectedWarehouseId) {
+            $whReturnGoodFilter .= " AND r.warehouse_id = " . (int)$selectedWarehouseId;
+        }
         $returnedGoodRows = Database::fetchAll(
             "SELECT ri.reason 
              FROM return_items ri
              JOIN returns r ON ri.return_id = r.id
-             WHERE ri.variant_id = ? AND ri.item_condition = 'GOOD' AND r.status != 'CANCELLED'$whReturnGoodFilter",
+            WHERE ri.variant_id = ? AND ri.item_condition = 'GOOD' AND r.status != 'CANCELLED'
+              AND r.concern_id = {$concernId} AND r.source_type = 'WAREHOUSE_PURCHASE'$whReturnGoodFilter",
             [$variantId]
         );
         $restockedTags = [];
@@ -2223,14 +2233,17 @@ class WarehouseController {
         }
 
         // Fetch all direct customer purchase / sold piece records for this variant
-        $whPurchClause = $selectedWarehouseId ? " AND po.warehouse_id = " . (int)$selectedWarehouseId : "";
+        $whPurchClause = " AND po.warehouse_id IN ({$accessibleWarehouseList})";
+        if ($selectedWarehouseId) {
+            $whPurchClause .= " AND po.warehouse_id = " . (int)$selectedWarehouseId;
+        }
         $variantPurchases = Database::fetchAll(
             "SELECT pi.*, po.po_number, po.order_date, po.status as po_status, po.payment_status, po.payment_method,
                     c.name as customer_name, c.phone as customer_phone, w.name as warehouse_name
              FROM purchase_items pi
-             JOIN purchase_orders po ON pi.purchase_order_id = po.id
-             LEFT JOIN customers c ON po.customer_id = c.id
-             LEFT JOIN warehouses w ON po.warehouse_id = w.id
+             JOIN purchase_orders po ON pi.purchase_order_id = po.id AND po.concern_id = {$concernId}
+             LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
+             LEFT JOIN warehouses w ON po.warehouse_id = w.id AND w.concern_id = po.concern_id
              WHERE pi.variant_id = ? AND po.status IN ('COMPLETED', 'DISPATCHED', 'RECEIVED')$whPurchClause
              ORDER BY po.id DESC, pi.id DESC",
             [$variantId]
@@ -2273,17 +2286,21 @@ class WarehouseController {
         }
 
         // Also append exchanged-out replacement pieces to the sold/outward list
-        $whExchangeClause = $selectedWarehouseId ? " AND r.warehouse_id = " . (int)$selectedWarehouseId : "";
+        $whExchangeClause = " AND r.warehouse_id IN ({$accessibleWarehouseList})";
+        if ($selectedWarehouseId) {
+            $whExchangeClause .= " AND r.warehouse_id = " . (int)$selectedWarehouseId;
+        }
         $variantExchanges = Database::fetchAll(
             "SELECT ei.*, e.exchange_number, e.created_at as exchange_date, e.status as exchange_status,
                     r.return_number, po.po_number, c.name as customer_name, c.phone as customer_phone, w.name as warehouse_name
              FROM exchange_items ei
              JOIN exchanges e ON ei.exchange_id = e.id
-             JOIN returns r ON e.return_id = r.id
-             LEFT JOIN purchase_orders po ON e.purchase_order_id = po.id
-             LEFT JOIN customers c ON po.customer_id = c.id
-             LEFT JOIN warehouses w ON r.warehouse_id = w.id
-             WHERE ei.variant_id = ? AND ei.item_type = 'NEW' AND e.status != 'CANCELLED'$whExchangeClause
+             JOIN returns r ON e.return_id = r.id AND r.concern_id = e.concern_id
+             LEFT JOIN purchase_orders po ON e.purchase_order_id = po.id AND po.concern_id = r.concern_id
+             LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
+             LEFT JOIN warehouses w ON r.warehouse_id = w.id AND w.concern_id = r.concern_id
+             WHERE ei.variant_id = ? AND ei.item_type = 'NEW' AND e.status != 'CANCELLED'
+               AND r.concern_id = {$concernId} AND r.source_type = 'WAREHOUSE_PURCHASE'$whExchangeClause
              ORDER BY ei.id DESC",
             [$variantId]
         );
@@ -2314,17 +2331,21 @@ class WarehouseController {
         }
 
         // Fetch all customer return and exchange records for this variant
-        $whReturnClause = $selectedWarehouseId ? " AND r.warehouse_id = " . (int)$selectedWarehouseId : "";
+        $whReturnClause = " AND r.warehouse_id IN ({$accessibleWarehouseList})";
+        if ($selectedWarehouseId) {
+            $whReturnClause .= " AND r.warehouse_id = " . (int)$selectedWarehouseId;
+        }
         $variantReturns = Database::fetchAll(
             "SELECT ri.*, r.return_number, r.return_type, r.reason as return_reason, r.refund_amount as total_refund, r.created_at as return_date,
                     r.refund_mode, r.status as return_status, r.notes as return_notes, po.po_number,
                     c.name as customer_name, c.phone as customer_phone, w.name as warehouse_name
              FROM return_items ri
              JOIN returns r ON ri.return_id = r.id
-             LEFT JOIN purchase_orders po ON r.purchase_order_id = po.id
-             LEFT JOIN customers c ON r.customer_id = c.id
-             LEFT JOIN warehouses w ON r.warehouse_id = w.id
-             WHERE ri.variant_id = ? AND r.status != 'CANCELLED'$whReturnClause
+             LEFT JOIN purchase_orders po ON r.purchase_order_id = po.id AND po.concern_id = r.concern_id
+             LEFT JOIN customers c ON r.customer_id = c.id AND c.concern_id = r.concern_id
+             LEFT JOIN warehouses w ON r.warehouse_id = w.id AND w.concern_id = r.concern_id
+             WHERE ri.variant_id = ? AND r.status != 'CANCELLED'
+               AND r.concern_id = {$concernId} AND r.source_type = 'WAREHOUSE_PURCHASE'$whReturnClause
              ORDER BY r.id DESC, ri.id DESC",
             [$variantId]
         );
@@ -3792,11 +3813,19 @@ class WarehouseController {
             return null;
         }
 
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if (!$warehouseIds) {
+            return null;
+        }
+        $warehouseList = implode(',', $warehouseIds);
+
         return Database::fetchOne(
             "SELECT wa.allocation_number, wa.status, ai.variant_id
              FROM allocation_items ai
              JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
              WHERE FIND_IN_SET(UPPER(?), UPPER(REPLACE(COALESCE(ai.selected_qr_codes, ''), ' ', ''))) > 0
+               AND wa.concern_id = " . (int)ConcernTransactionService::activeConcernId() . "
+               AND wa.warehouse_id IN ({$warehouseList})
                AND wa.status IN ('REQUESTED', 'APPROVED', 'PICKED', 'PACKED', 'DISPATCHED', 'DELIVERED', 'RECEIVED')
              LIMIT 1",
             [trim($tagCode)]
@@ -3808,16 +3837,22 @@ class WarehouseController {
             return null;
         }
 
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if (!$warehouseIds) {
+            return null;
+        }
+        $warehouseList = implode(',', $warehouseIds);
+        $concernId = ConcernTransactionService::activeConcernId();
         $soldTag = Database::fetchOne(
             "SELECT pi.variant_id, po.po_number, po.status
              FROM purchase_items pi
-             JOIN purchase_orders po ON pi.purchase_order_id = po.id
+             JOIN purchase_orders po ON pi.purchase_order_id = po.id AND po.concern_id = {$concernId}
              WHERE (
                     FIND_IN_SET(UPPER(?), UPPER(REPLACE(COALESCE(pi.batch_lot_no, ''), ' ', ''))) > 0
                     OR UPPER(TRIM(COALESCE(pi.batch_lot_no, ''))) = UPPER(?)
                     OR pi.notes LIKE ?
                )
-               AND po.status NOT IN ('CANCELLED', 'VOID')
+               AND po.status NOT IN ('CANCELLED', 'VOID') AND po.warehouse_id IN ({$warehouseList})
              ORDER BY po.id DESC, pi.id DESC
              LIMIT 1",
             [trim($tagCode), trim($tagCode), '%' . $tagCode . '%']
@@ -3834,6 +3869,7 @@ class WarehouseController {
                AND ri.reason LIKE ?
                AND ri.item_condition = 'GOOD'
                AND ri.destination = 'AVAILABLE'
+               AND r.concern_id = {$concernId} AND r.source_type = 'WAREHOUSE_PURCHASE'
                AND r.status NOT IN ('CANCELLED', 'REJECTED')
              ORDER BY r.id DESC
              LIMIT 1",
@@ -3843,6 +3879,13 @@ class WarehouseController {
     }
 
     private function findDispatchedWhatsappTag(string $tagCode, int $warehouseId = 0): ?array {
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        if (!$warehouseIds || ($warehouseId > 0 && !in_array($warehouseId, $warehouseIds, true))) {
+            return null;
+        }
+        $warehouseList = implode(',', $warehouseIds);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $warehouseClause = $warehouseId > 0 ? " AND wa.warehouse_id = " . (int)$warehouseId : "";
         $outwardTag = Database::fetchOne(
             "SELECT ao.outward_number, sc.name as channel_name, pv.id as variant_id,
                     CASE
@@ -3855,13 +3898,14 @@ class WarehouseController {
              FROM allocation_outwards ao
              JOIN warehouse_allocations wa ON wa.id = ao.allocation_id
              JOIN allocation_items ai ON ai.allocation_id = wa.id
-             JOIN sales_channels sc ON sc.id = COALESCE(ao.channel_id, wa.channel_id)
+             JOIN sales_channels sc ON sc.id = COALESCE(ao.channel_id, wa.channel_id) AND sc.concern_id = wa.concern_id
              JOIN product_variants pv ON pv.id = ai.variant_id
              JOIN products p ON p.id = pv.product_id
              LEFT JOIN warehouse_categories wc ON wc.id = p.warehouse_category_id
              WHERE UPPER(TRIM(ao.destination_type)) = 'CHANNEL'
                AND UPPER(sc.channel_type) = 'WHATSAPP'
                AND ao.status IN ('DISPATCHED', 'DELIVERED')
+               AND wa.concern_id = {$concernId} AND wa.warehouse_id IN ({$warehouseList}){$warehouseClause}
                AND FIND_IN_SET(UPPER(?), UPPER(REPLACE(COALESCE(ai.selected_qr_codes, ''), ' ', ''))) > 0
              LIMIT 1",
             [trim($tagCode)]
@@ -3870,12 +3914,10 @@ class WarehouseController {
             return null;
         }
 
-        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
-        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
         $stockSql = "SELECT COALESCE(SUM(quantity), 0) as available_qty
                      FROM stock_balances
                      WHERE variant_id = ? AND location_type = 'WAREHOUSE'
-                       AND concern_id = " . (int)currentConcernId() . " AND location_id IN ({$warehouseList}) AND stock_state = 'AVAILABLE'";
+                       AND concern_id = {$concernId} AND location_id IN ({$warehouseList}) AND stock_state = 'AVAILABLE'";
         $stockParams = [(int)$outwardTag['variant_id']];
         if ($warehouseId > 0) {
             $stockSql .= " AND location_id = ?";
@@ -4384,7 +4426,10 @@ class WarehouseController {
 
         $purchases = PurchaseOrder::getAll($filters);
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
-        $customers = Database::fetchAll("SELECT * FROM customers WHERE is_active = 1 ORDER BY name ASC");
+        $customers = Database::fetchAll(
+            "SELECT * FROM customers WHERE concern_id = ? AND is_active = 1 ORDER BY name ASC",
+            [ConcernTransactionService::activeConcernId()]
+        );
 
         // Summary Stats
         $stats = [
@@ -4511,7 +4556,10 @@ class WarehouseController {
             return;
         }
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
-        $customers = Database::fetchAll("SELECT * FROM customers WHERE is_active = 1 ORDER BY name ASC");
+        $customers = Database::fetchAll(
+            "SELECT * FROM customers WHERE concern_id = ? AND is_active = 1 ORDER BY name ASC",
+            [ConcernTransactionService::activeConcernId()]
+        );
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
         $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
         $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
@@ -4678,6 +4726,7 @@ class WarehouseController {
                 Response::redirect(url('warehouse/purchases/create'), 'error', 'Please add at least one product item to the purchase order.');
             }
 
+            $concernId = ConcernTransactionService::activeConcernId();
             $customerId = !empty($_POST['customer_id']) ? (int)$_POST['customer_id'] : null;
             $customerPhone = !empty($_POST['customer_phone']) ? preg_replace('/[^0-9]/', '', trim($_POST['customer_phone'])) : '';
             $customerName = !empty($_POST['customer_name']) ? trim($_POST['customer_name']) : '';
@@ -4688,7 +4737,10 @@ class WarehouseController {
 
             if (!$customerId) {
                 if (!empty($customerPhone)) {
-                    $existingCust = Database::fetchOne("SELECT * FROM customers WHERE phone = ? LIMIT 1", [$customerPhone]);
+                    $existingCust = Database::fetchOne(
+                        "SELECT * FROM customers WHERE concern_id = ? AND phone = ? LIMIT 1",
+                        [$concernId, $customerPhone]
+                    );
                     if ($existingCust) {
                         $customerId = (int)$existingCust['id'];
                         Database::execute(
@@ -4698,22 +4750,22 @@ class WarehouseController {
                                 city = CASE WHEN ? != '' THEN ? ELSE city END,
                                 state = CASE WHEN ? != '' THEN ? ELSE state END,
                                 gst_number = CASE WHEN ? != '' THEN ? ELSE gst_number END
-                             WHERE id = ?",
-                            [$customerName, $customerName, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId]
+                             WHERE id = ? AND concern_id = ?",
+                            [$customerName, $customerName, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId, $concernId]
                         );
                     } else {
                         Database::execute(
-                            "INSERT INTO customers (name, phone, address, city, state, gst_number, source_channel, is_active, created_at) 
-                             VALUES (?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
-                            [$customerName ?: ('Customer ' . $customerPhone), $customerPhone, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
+                            "INSERT INTO customers (concern_id, name, phone, address, city, state, gst_number, source_channel, is_active, created_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
+                            [$concernId, $customerName ?: ('Customer ' . $customerPhone), $customerPhone, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
                         );
                         $customerId = (int)Database::lastInsertId();
                     }
                 } elseif (!empty($customerName)) {
                     Database::execute(
-                        "INSERT INTO customers (name, phone, address, city, state, gst_number, source_channel, is_active, created_at) 
-                         VALUES (?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
-                        [$customerName, null, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
+                        "INSERT INTO customers (concern_id, name, phone, address, city, state, gst_number, source_channel, is_active, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
+                        [$concernId, $customerName, null, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
                     );
                     $customerId = (int)Database::lastInsertId();
                 }
@@ -4726,9 +4778,10 @@ class WarehouseController {
                         city = CASE WHEN ? != '' THEN ? ELSE city END,
                         state = CASE WHEN ? != '' THEN ? ELSE state END,
                         gst_number = CASE WHEN ? != '' THEN ? ELSE gst_number END
-                     WHERE id = ?",
-                    [$customerName, $customerName, $customerPhone, $customerPhone, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId]
+                     WHERE id = ? AND concern_id = ?",
+                    [$customerName, $customerName, $customerPhone, $customerPhone, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId, $concernId]
                 );
+                ConcernTransactionService::assertCustomer((int)$customerId);
             }
 
             $paymentMethod = $_POST['payment_method'] ?? 'CASH';
@@ -4807,7 +4860,10 @@ class WarehouseController {
             && PurchaseOrder::hasPriorEdit($poId);
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $items = PurchaseOrder::getItems($poId);
-        $customers = Database::fetchAll("SELECT * FROM customers WHERE is_active = 1 ORDER BY name ASC");
+        $customers = Database::fetchAll(
+            "SELECT * FROM customers WHERE concern_id = ? AND is_active = 1 ORDER BY name ASC",
+            [ConcernTransactionService::activeConcernId()]
+        );
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
         $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
         $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
@@ -4975,6 +5031,7 @@ class WarehouseController {
                 return;
             }
 
+            $concernId = ConcernTransactionService::activeConcernId();
             $customerId = !empty($_POST['customer_id']) ? (int)$_POST['customer_id'] : null;
             $customerPhone = !empty($_POST['customer_phone']) ? preg_replace('/[^0-9]/', '', trim($_POST['customer_phone'])) : '';
             $customerName = !empty($_POST['customer_name']) ? trim($_POST['customer_name']) : '';
@@ -4985,7 +5042,10 @@ class WarehouseController {
 
             if (!$customerId) {
                 if (!empty($customerPhone)) {
-                    $existingCust = Database::fetchOne("SELECT * FROM customers WHERE phone = ? LIMIT 1", [$customerPhone]);
+                    $existingCust = Database::fetchOne(
+                        "SELECT * FROM customers WHERE concern_id = ? AND phone = ? LIMIT 1",
+                        [$concernId, $customerPhone]
+                    );
                     if ($existingCust) {
                         $customerId = (int)$existingCust['id'];
                         Database::execute(
@@ -4995,22 +5055,22 @@ class WarehouseController {
                                 city = CASE WHEN ? != '' THEN ? ELSE city END,
                                 state = CASE WHEN ? != '' THEN ? ELSE state END,
                                 gst_number = CASE WHEN ? != '' THEN ? ELSE gst_number END
-                             WHERE id = ?",
-                            [$customerName, $customerName, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId]
+                             WHERE id = ? AND concern_id = ?",
+                            [$customerName, $customerName, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId, $concernId]
                         );
                     } else {
                         Database::execute(
-                            "INSERT INTO customers (name, phone, address, city, state, gst_number, source_channel, is_active, created_at) 
-                             VALUES (?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
-                            [$customerName ?: ('Customer ' . $customerPhone), $customerPhone, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
+                            "INSERT INTO customers (concern_id, name, phone, address, city, state, gst_number, source_channel, is_active, created_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
+                            [$concernId, $customerName ?: ('Customer ' . $customerPhone), $customerPhone, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
                         );
                         $customerId = (int)Database::lastInsertId();
                     }
                 } elseif (!empty($customerName)) {
                     Database::execute(
-                        "INSERT INTO customers (name, phone, address, city, state, gst_number, source_channel, is_active, created_at) 
-                         VALUES (?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
-                        [$customerName, null, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
+                        "INSERT INTO customers (concern_id, name, phone, address, city, state, gst_number, source_channel, is_active, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, 'WAREHOUSE', 1, NOW())",
+                        [$concernId, $customerName, null, $customerAddress ?: null, $customerCity ?: null, $customerState ?: 'Tamil Nadu', $customerGst ?: null]
                     );
                     $customerId = (int)Database::lastInsertId();
                 }
@@ -5023,9 +5083,10 @@ class WarehouseController {
                         city = CASE WHEN ? != '' THEN ? ELSE city END,
                         state = CASE WHEN ? != '' THEN ? ELSE state END,
                         gst_number = CASE WHEN ? != '' THEN ? ELSE gst_number END
-                     WHERE id = ?",
-                    [$customerName, $customerName, $customerPhone, $customerPhone, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId]
+                     WHERE id = ? AND concern_id = ?",
+                    [$customerName, $customerName, $customerPhone, $customerPhone, $customerAddress, $customerAddress, $customerCity, $customerCity, $customerState, $customerState, $customerGst, $customerGst, $customerId, $concernId]
                 );
+                ConcernTransactionService::assertCustomer((int)$customerId);
             }
 
             $paymentMethod = $_POST['payment_method'] ?? 'CASH';
@@ -5670,14 +5731,18 @@ class WarehouseController {
             return;
         }
         header('Content-Type: application/json');
+        $concernId = ConcernTransactionService::activeConcernId();
         $q = trim($_REQUEST['q'] ?? $_REQUEST['query'] ?? $_REQUEST['search'] ?? '');
         if ($q === '') {
-            $customers = Database::fetchAll("SELECT * FROM customers WHERE is_active = 1 ORDER BY name ASC LIMIT 25");
+            $customers = Database::fetchAll(
+                "SELECT * FROM customers WHERE concern_id = ? AND is_active = 1 ORDER BY name ASC LIMIT 25",
+                [$concernId]
+            );
         } else {
             $like = '%' . $q . '%';
             $customers = Database::fetchAll(
                 "SELECT * FROM customers 
-                 WHERE is_active = 1 AND (name LIKE ? OR phone LIKE ? OR city LIKE ? OR gst_number LIKE ?)
+                 WHERE concern_id = ? AND is_active = 1 AND (name LIKE ? OR phone LIKE ? OR city LIKE ? OR gst_number LIKE ?)
                  ORDER BY 
                     CASE 
                         WHEN name = ? OR phone = ? THEN 1
@@ -5686,7 +5751,7 @@ class WarehouseController {
                         ELSE 4 
                     END, name ASC 
                  LIMIT 25",
-                [$like, $like, $like, $like, $q, $q, $q . '%', $q . '%']
+                [$concernId, $like, $like, $like, $like, $q, $q, $q . '%', $q . '%']
             );
         }
         echo json_encode(['success' => true, 'customers' => $customers]);
@@ -5704,16 +5769,17 @@ class WarehouseController {
         }
         header('Content-Type: application/json');
         
+        $concernId = ConcernTransactionService::activeConcernId();
         $customerId = (int)($id ?: ($_REQUEST['customer_id'] ?? $_REQUEST['id'] ?? 0));
         $query = trim($_REQUEST['q'] ?? $_REQUEST['query'] ?? $_REQUEST['phone'] ?? $_REQUEST['search'] ?? '');
 
         $customer = null;
         if ($customerId > 0) {
-            $customer = Database::fetchOne("SELECT * FROM customers WHERE id = ?", [$customerId]);
+            $customer = Database::fetchOne("SELECT * FROM customers WHERE id = ? AND concern_id = ?", [$customerId, $concernId]);
         } elseif ($query !== '') {
             $customer = Database::fetchOne(
-                "SELECT * FROM customers WHERE (phone = ? OR name = ? OR email = ?) AND is_active = 1 LIMIT 1",
-                [$query, $query, $query]
+                "SELECT * FROM customers WHERE concern_id = ? AND (phone = ? OR name = ? OR email = ?) AND is_active = 1 LIMIT 1",
+                [$concernId, $query, $query, $query]
             );
             if ($customer) {
                 $customerId = (int)$customer['id'];
@@ -5728,18 +5794,12 @@ class WarehouseController {
             exit;
         }
 
-        // If customer record not in table but queried by id
-        if (!$customer && $customerId > 0) {
-            $customer = [
-                'id'         => $customerId,
-                'name'       => 'Customer #' . $customerId,
-                'phone'      => '',
-                'email'      => '',
-                'city'       => 'Local',
-                'state'      => '',
-                'address'    => '',
-                'gst_number' => ''
-            ];
+        if (!$customer) {
+            echo json_encode([
+                'success' => false,
+                'message' => 'Customer profile not found in the active concern.'
+            ]);
+            exit;
         }
 
         // Query all Purchase Orders by this customer
@@ -5750,16 +5810,16 @@ class WarehouseController {
                     COALESCE(pi_stats.total_items, 0) as total_items,
                     COALESCE(pi_stats.total_ordered_qty, 0) as total_ordered_qty
              FROM purchase_orders po
-             JOIN warehouses w ON po.warehouse_id = w.id
+             JOIN warehouses w ON po.warehouse_id = w.id AND w.concern_id = po.concern_id
              LEFT JOIN users u ON po.created_by = u.id
              LEFT JOIN (
                  SELECT purchase_order_id, COUNT(*) as total_items, SUM(quantity) as total_ordered_qty
                  FROM purchase_items
                  GROUP BY purchase_order_id
              ) pi_stats ON po.id = pi_stats.purchase_order_id
-             WHERE po.customer_id = ?
+             WHERE po.customer_id = ? AND po.concern_id = ?
              ORDER BY po.order_date DESC, po.id DESC",
-            [$customerId]
+            [$customerId, $concernId]
         );
 
         // Query all Line Items purchased by this customer across orders
@@ -5777,14 +5837,14 @@ class WarehouseController {
              JOIN purchase_orders po ON pi.purchase_order_id = po.id
              JOIN product_variants pv ON pi.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
-             JOIN warehouses w ON po.warehouse_id = w.id
+             JOIN warehouses w ON po.warehouse_id = w.id AND w.concern_id = po.concern_id
              LEFT JOIN warehouse_categories cat ON p.warehouse_category_id = cat.id
              LEFT JOIN categories c_old ON p.category_id = c_old.id
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors c ON pv.color_id = c.id
-             WHERE po.customer_id = ?
+             WHERE po.customer_id = ? AND po.concern_id = ?
              ORDER BY po.order_date DESC, po.id DESC, pi.id DESC",
-            [$customerId]
+            [$customerId, $concernId]
         );
 
         // Build distinct purchased products aggregation
@@ -6002,6 +6062,7 @@ class WarehouseController {
         }
         $query = trim($_GET['query'] ?? '');
         $warehouseId = (int)(Session::get('warehouse_id') ?? $_GET['warehouse_id'] ?? 1);
+        $concernId = ConcernTransactionService::activeConcernId();
 
         if (empty($query)) {
             Response::json(['success' => false, 'message' => 'Please enter a PO number, Invoice number, Customer Name, or Phone.'], 400);
@@ -6009,6 +6070,7 @@ class WarehouseController {
         }
 
         try {
+            ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
             if (!empty($_GET['count_only'])) {
                 $phone = preg_replace('/\D+/', '', $query);
                 if (!preg_match('/^[+\d\s()-]+$/', $query) || strlen($phone) < 10 || strlen($phone) > 15) {
@@ -6019,25 +6081,25 @@ class WarehouseController {
                 $count = Database::fetchOne(
                     "SELECT COUNT(*) AS invoice_count
                      FROM purchase_orders po
-                     JOIN customers c ON c.id = po.customer_id
-                     WHERE c.phone = ?
+                     JOIN customers c ON c.id = po.customer_id AND c.concern_id = po.concern_id
+                     WHERE po.concern_id = ? AND po.warehouse_id = ? AND c.phone = ?
                        AND po.seller_id IS NULL
                        AND po.warehouse_supplier_id IS NULL",
-                    [$phone]
+                    [$concernId, $warehouseId, $phone]
                 );
                 $invoices = Database::fetchAll(
                     "SELECT po.id, po.po_number, po.order_date, po.total_amount,
                             po.payment_status, po.payment_method,
                             (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_order_id = po.id) AS item_count,
                             (SELECT COALESCE(SUM(pi.quantity), 0) FROM purchase_items pi WHERE pi.purchase_order_id = po.id) AS total_qty,
-                            (SELECT r.return_number FROM returns r WHERE r.purchase_order_id = po.id ORDER BY r.id DESC LIMIT 1) AS return_number
+                            (SELECT r.return_number FROM returns r WHERE r.purchase_order_id = po.id AND r.concern_id = po.concern_id ORDER BY r.id DESC LIMIT 1) AS return_number
                      FROM purchase_orders po
-                     JOIN customers c ON c.id = po.customer_id
-                     WHERE c.phone = ?
+                     JOIN customers c ON c.id = po.customer_id AND c.concern_id = po.concern_id
+                     WHERE po.concern_id = ? AND po.warehouse_id = ? AND c.phone = ?
                        AND po.seller_id IS NULL
                        AND po.warehouse_supplier_id IS NULL
                      ORDER BY po.order_date DESC, po.id DESC",
-                    [$phone]
+                    [$concernId, $warehouseId, $phone]
                 );
                 Response::json([
                     'success' => true,
@@ -6231,7 +6293,12 @@ class WarehouseController {
         }
 
         try {
-            $existing = Database::fetchOne("SELECT id, name, phone, address, city, state, gst_number FROM customers WHERE phone = ?", [$phone]);
+            $concernId = ConcernTransactionService::activeConcernId();
+            $existing = Database::fetchOne(
+                "SELECT id, name, phone, address, city, state, gst_number
+                 FROM customers WHERE concern_id = ? AND phone = ?",
+                [$concernId, $phone]
+            );
             if ($existing) {
                 Response::json([
                     'success'   => true,
@@ -6242,9 +6309,9 @@ class WarehouseController {
             }
 
             Database::execute(
-                "INSERT INTO customers (name, phone, email, address, city, state, gst_number, source_channel, is_active, created_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())",
-                [$name, $phone, $email ?: null, $address ?: null, $city ?: null, $state ?: null, $gstNumber ?: null, (!empty($_POST['source_channel']) ? trim($_POST['source_channel']) : 'WAREHOUSE')]
+                "INSERT INTO customers (concern_id, name, phone, email, address, city, state, gst_number, source_channel, is_active, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())",
+                [$concernId, $name, $phone, $email ?: null, $address ?: null, $city ?: null, $state ?: null, $gstNumber ?: null, (!empty($_POST['source_channel']) ? trim($_POST['source_channel']) : 'WAREHOUSE')]
             );
             $id = (int)Database::lastInsertId();
 
@@ -8440,17 +8507,50 @@ class WarehouseController {
     }
 
     public function createTransfer(): void {
-        if (!hasPermission('warehouse', 'view') && !hasPermission('warehouse', 'create')) {
+        if (!hasPermission('warehouse', 'create')) {
             Session::flash('error', 'Access denied.');
             Response::redirect(url('warehouse/transfers'));
             return;
         }
+        $concernId = ConcernTransactionService::activeConcernId();
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        $scopedShopId = function_exists('currentShopId') ? currentShopId() : null;
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
         $shops = function_exists('getScopedShops') ? getScopedShops() : Shop::getActive();
+        if ($scopedWarehouseId !== null && $scopedWarehouseId > 0 && !($scopedShopId > 0)) {
+            $shops = [];
+        } elseif ($scopedShopId !== null && $scopedShopId > 0 && !($scopedWarehouseId > 0)) {
+            $warehouses = [];
+        }
         $categories = Database::fetchAll("SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name ASC");
         $subcategories = Database::fetchAll("SELECT id, category_id, name FROM subcategories WHERE is_active = 1 ORDER BY name ASC");
         $subSubcategories = Database::fetchAll("SELECT id, subcategory_id, name FROM sub_subcategories WHERE is_active = 1 ORDER BY name ASC");
+        $destinationWarehouses = Database::fetchAll(
+            "SELECT w.id, w.name, w.code, w.concern_id, c.name AS concern_name
+             FROM warehouses w
+             JOIN concerns c ON c.id = w.concern_id AND c.is_active = 1
+             WHERE w.is_active = 1 AND w.concern_id <> ?
+             ORDER BY c.name, w.name",
+            [$concernId]
+        );
+        $destinationShops = Database::fetchAll(
+            "SELECT s.id, s.name, s.code, s.concern_id, c.name AS concern_name
+             FROM shops s
+             JOIN concerns c ON c.id = s.concern_id AND c.is_active = 1
+             WHERE s.is_active = 1 AND s.concern_id <> ?
+             ORDER BY c.name, s.name",
+            [$concernId]
+        );
+        $destinationWarehouses = array_values(array_filter(
+            $destinationWarehouses,
+            static fn(array $facility): bool => Concern::hasModule((int)$facility['concern_id'], 'warehouse')
+                && Concern::hasFacilityModules((int)$facility['concern_id'], 'WAREHOUSE')
+        ));
+        $destinationShops = array_values(array_filter(
+            $destinationShops,
+            static fn(array $facility): bool => Concern::hasModule((int)$facility['concern_id'], 'warehouse')
+                && Concern::hasFacilityModules((int)$facility['concern_id'], 'SHOP')
+        ));
 
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, p.name as product_name, p.category_id, p.subcategory_id, p.sub_subcategory_id,
@@ -8463,14 +8563,13 @@ class WarehouseController {
              ORDER BY p.name ASC"
         );
 
-        $destinationWarehouses = Warehouse::getAll(['is_active' => 1, 'unscoped' => true]);
-
         Response::view('warehouse.transfers.create', [
             'pageTitle'              => 'Create Stock Transfer',
             'activeModule'           => 'warehouse',
             'activeMenu'             => 'wh-transfers',
             'warehouses'             => $warehouses,
             'destinationWarehouses'  => $destinationWarehouses,
+            'destinationShops'       => $destinationShops,
             'scopedWarehouseId'      => $scopedWarehouseId,
             'shops'                  => $shops,
             'categories'             => $categories,
@@ -8492,7 +8591,7 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('warehouse', 'create') && !hasPermission('allocation', 'create') && !hasPermission('stock', 'adjust') && !hasPermission('warehouse', 'edit') && !hasPermission('warehouse', 'view')) {
+        if (!hasPermission('warehouse', 'create')) {
             Session::flash('error', 'Access denied.');
             Response::redirect(url('warehouse/transfers'));
             return;
@@ -8500,33 +8599,23 @@ class WarehouseController {
 
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
 
-        $srcTarget = $_POST['source_target'] ?? '';
-        if (str_starts_with($srcTarget, 'SHOP_')) {
-            $srcType = 'SHOP';
-            $srcId = (int)substr($srcTarget, 5);
-        } elseif (str_starts_with($srcTarget, 'WAREHOUSE_')) {
-            $srcType = 'WAREHOUSE';
-            $srcId = (int)substr($srcTarget, 10);
-        } else {
-            $srcType = $_POST['source_type'] ?? 'WAREHOUSE';
-            $srcId = (int)($_POST['source_id'] ?? 0);
+        $srcTarget = (string)($_POST['source_target'] ?? '');
+        if (!preg_match('/^(WAREHOUSE|SHOP)_(\d+)$/', $srcTarget, $sourceMatch)) {
+            Session::flash('error', 'Choose a valid source facility.');
+            Response::redirect(url('warehouse/transfers/create'));
+            return;
         }
-
-        if ($scopedWarehouseId !== null && $srcType === 'WAREHOUSE') {
-            $srcId = $scopedWarehouseId;
+        $srcType = $sourceMatch[1];
+        $srcId = (int)$sourceMatch[2];
+        $destTarget = (string)($_POST['destination_target'] ?? '');
+        if (!preg_match('/^(WAREHOUSE|SHOP)_(\d+)_(\d+)$/', $destTarget, $destinationMatch)) {
+            Session::flash('error', 'Choose a valid destination facility in another concern.');
+            Response::redirect(url('warehouse/transfers/create'));
+            return;
         }
-
-        $destTarget = $_POST['destination_target'] ?? '';
-        if (str_starts_with($destTarget, 'SHOP_')) {
-            $destType = 'SHOP';
-            $destId = (int)substr($destTarget, 5);
-        } elseif (str_starts_with($destTarget, 'WAREHOUSE_')) {
-            $destType = 'WAREHOUSE';
-            $destId = (int)substr($destTarget, 10);
-        } else {
-            $destType = $_POST['destination_type'] ?? 'WAREHOUSE';
-            $destId = (int)($_POST['destination_id'] ?? 0);
-        }
+        $destType = $destinationMatch[1];
+        $destConcernId = (int)$destinationMatch[2];
+        $destId = (int)$destinationMatch[3];
 
         $notesRaw = trim($_POST['notes'] ?? '');
         $logistics = [
@@ -8540,9 +8629,8 @@ class WarehouseController {
 
         $variantIds = $_POST['variant_ids'] ?? [];
         $quantities = $_POST['quantities'] ?? [];
-
-        if ($srcId === $destId && $srcType === $destType) {
-            Session::flash('error', 'Source and destination cannot be identical.');
+        if (!is_array($variantIds) || !is_array($quantities)) {
+            Session::flash('error', 'Transfer items are invalid.');
             Response::redirect(url('warehouse/transfers/create'));
             return;
         }
@@ -8551,99 +8639,94 @@ class WarehouseController {
             $transferNumber = WarehouseTransfer::generateNumber();
             $userId = Session::get('user_id');
 
-            $transferId = WarehouseTransfer::create([
+            $items = [];
+            foreach (($variantIds ?: []) as $idx => $variantId) {
+                $items[] = [
+                    'variant_id' => (int)$variantId,
+                    'quantity' => (int)($quantities[$idx] ?? 0),
+                ];
+            }
+            WarehouseTransfer::create([
                 'transfer_number'  => $transferNumber,
                 'source_type'      => $srcType,
                 'source_id'        => $srcId,
                 'destination_type' => $destType,
                 'destination_id'   => $destId,
+                'destination_concern_id' => $destConcernId,
                 'requested_by'     => $userId,
-                'status'           => 'REQUESTED',
-                'notes'            => $formattedNotes
+                'notes'            => $formattedNotes,
+                'items'            => $items,
             ]);
-
-            foreach ($variantIds as $idx => $vId) {
-                $qty = (int)($quantities[$idx] ?? 0);
-                if ($qty <= 0) continue;
-
-                TransferItem::create([
-                    'transfer_id' => $transferId,
-                    'variant_id'  => (int)$vId,
-                    'quantity'    => $qty,
-                ]);
-            }
 
             Session::flash('success', "Transfer Request #{$transferNumber} submitted!");
             Response::redirect(url('warehouse/transfers'));
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+            error_log('Concern transfer request failed: ' . $e->getMessage());
             Session::flash('error', 'Failed to create transfer: ' . $e->getMessage());
             Response::redirect(url('warehouse/transfers/create'));
         }
     }
 
     public function approveTransfer(int $id): void {
-        if (!hasPermission('warehouse', 'approve') && !hasPermission('allocation', 'approve') && !hasPermission('stock', 'adjust') && !hasPermission('warehouse', 'edit')) {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token.');
+            Response::redirect(url('warehouse/transfers'));
+            return;
+        }
+        if (!hasPermission('warehouse', 'approve')) {
             Session::flash('error', 'Access denied.');
             Response::redirect(url('warehouse/transfers'));
             return;
         }
-        $transfer = WarehouseTransfer::find($id);
-        if (!$transfer) {
-            Session::flash('error', 'Transfer not found.');
-            Response::redirect(url('warehouse/transfers'));
-            return;
+        try {
+            $transfer = WarehouseTransfer::find($id);
+            if (!$transfer || (int)$transfer['source_concern_id'] !== ConcernTransactionService::activeConcernId()) {
+                throw new InvalidArgumentException('Transfer not found in the active source concern.');
+            }
+            WarehouseTransfer::dispatch($id, (int)Session::get('user_id'));
+            Session::flash('success', "Transfer #{$transfer['transfer_number']} dispatched; source stock is now in transit.");
+        } catch (Throwable $e) {
+            error_log('Concern transfer dispatch failed: ' . $e->getMessage());
+            Session::flash('error', $e->getMessage());
         }
-
-        $userId = Session::get('user_id');
-        WarehouseTransfer::updateStatus($id, 'IN_TRANSIT', $userId);
-
-        Session::flash('success', "Transfer #{$transfer['transfer_number']} approved and set to IN_TRANSIT.");
         Response::redirect(url('warehouse/transfers'));
     }
 
     public function receiveTransfer(int $id): void {
-        if (!hasPermission('warehouse', 'receive') && !hasPermission('allocation', 'dispatch') && !hasPermission('stock', 'adjust') && !hasPermission('inward', 'verify') && !hasPermission('inward', 'create')) {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token.');
+            Response::redirect(url('warehouse/transfers'));
+            return;
+        }
+        if (!hasPermission('warehouse', 'receive')) {
             Session::flash('error', 'Access denied.');
             Response::redirect(url('warehouse/transfers'));
             return;
         }
-        $transfer = WarehouseTransfer::find($id);
-        if (!$transfer) {
-            Session::flash('error', 'Transfer not found.');
-            Response::redirect(url('warehouse/transfers'));
-            return;
-        }
-
-        $userId = Session::get('user_id');
-
         try {
-            foreach ($transfer['items'] as $item) {
-                $rQty = (float)($item['quantity']);
-
-                StockService::transfer(
-                    variantId: (int)$item['variant_id'],
-                    srcLocationType: $transfer['source_type'],
-                    srcLocationId: (int)$transfer['source_id'],
-                    destLocationType: $transfer['destination_type'],
-                    destLocationId: (int)$transfer['destination_id'],
-                    quantity: $rQty,
-                    referenceType: 'warehouse_transfers',
-                    referenceId: $id,
-                    userId: $userId,
-                    notes: "Inter-Warehouse Transfer #{$transfer['transfer_number']}"
-                );
-
-                TransferItem::updateReceivedQty($item['id'], (int)$rQty, 0);
+            $transfer = WarehouseTransfer::find($id);
+            if (!$transfer || (int)$transfer['destination_concern_id'] !== ConcernTransactionService::activeConcernId()) {
+                throw new InvalidArgumentException('Transfer not found in the active destination concern.');
             }
-
-            WarehouseTransfer::updateStatus($id, 'RECEIVED', $userId);
-
-            Session::flash('success', "Transfer #{$transfer['transfer_number']} received and stock credited!");
-            Response::redirect(url('warehouse/transfers'));
-        } catch (Exception $e) {
-            Session::flash('error', 'Transfer receipt failed: ' . $e->getMessage());
-            Response::redirect(url('warehouse/transfers'));
+            $received = $_POST['received_qty'] ?? [];
+            $damaged = $_POST['damaged_qty'] ?? [];
+            if (!is_array($received) || !is_array($damaged)) {
+                throw new InvalidArgumentException('Received item quantities are invalid.');
+            }
+            $receipt = [];
+            foreach ($received as $itemId => $quantity) {
+                $receipt[(int)$itemId] = [
+                    'received_qty' => $quantity,
+                    'damaged_qty' => $damaged[$itemId] ?? 0,
+                ];
+            }
+            WarehouseTransfer::receive($id, $receipt, (int)Session::get('user_id'));
+            Session::flash('success', "Transfer #{$transfer['transfer_number']} received; stock and any discrepancies were recorded.");
+        } catch (Throwable $e) {
+            error_log('Concern transfer receipt failed: ' . $e->getMessage());
+            Session::flash('error', $e->getMessage());
         }
+        Response::redirect(url('warehouse/transfers'));
     }
 
     // =========================================================================
@@ -12015,6 +12098,9 @@ class WarehouseController {
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['status'] ?? '';
         $sellerType = $_GET['seller_type'] ?? '';
+        $concernId = ConcernTransactionService::activeConcernId();
+        $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+        $warehouseList = $warehouseIds ? implode(',', $warehouseIds) : '0';
 
         $sql = "SELECT s.*,
                        COALESCE(po_summary.total_orders, 0) as total_orders,
@@ -12037,6 +12123,7 @@ class WarehouseController {
                         GROUP BY purchase_order_id
                     ) pi_sum ON po.id = pi_sum.purchase_order_id
                     WHERE (po.warehouse_supplier_id IS NOT NULL OR po.seller_id IS NOT NULL)
+                      AND po.concern_id = {$concernId} AND po.warehouse_id IN ({$warehouseList})
                     GROUP BY COALESCE(po.warehouse_supplier_id, po.seller_id)
                 ) po_summary ON po_summary.seller_id = s.id
                 WHERE 1=1";
@@ -12068,13 +12155,14 @@ class WarehouseController {
         $sellers = Database::fetchAll($sql, $params);
 
         // Compute overall top KPI cards
+        $purchaseScope = "concern_id = {$concernId} AND warehouse_id IN ({$warehouseList})";
         $stats = [
             'total_sellers'      => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM warehouse_suppliers WHERE is_active = 1")['cnt'] ?? 0),
-            'total_orders'       => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM purchase_orders WHERE warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL")['cnt'] ?? 0),
-            'total_spend'        => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL")['total'] ?? 0),
-            'total_inward_units' => (int)(Database::fetchOne("SELECT COALESCE(SUM(pi.quantity), 0) as total FROM purchase_items pi JOIN purchase_orders po ON pi.purchase_order_id = po.id WHERE po.warehouse_supplier_id IS NOT NULL OR po.seller_id IS NOT NULL")['total'] ?? 0),
-            'paid_spend'         => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE (warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL) AND payment_status = 'PAID'")['total'] ?? 0),
-            'pending_spend'      => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE (warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL) AND payment_status != 'PAID'")['total'] ?? 0),
+            'total_orders'       => (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM purchase_orders WHERE (warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL) AND {$purchaseScope}")['cnt'] ?? 0),
+            'total_spend'        => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE (warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL) AND {$purchaseScope}")['total'] ?? 0),
+            'total_inward_units' => (int)(Database::fetchOne("SELECT COALESCE(SUM(pi.quantity), 0) as total FROM purchase_items pi JOIN purchase_orders po ON pi.purchase_order_id = po.id WHERE (po.warehouse_supplier_id IS NOT NULL OR po.seller_id IS NOT NULL) AND po.concern_id = {$concernId} AND po.warehouse_id IN ({$warehouseList})")['total'] ?? 0),
+            'paid_spend'         => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE (warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL) AND payment_status = 'PAID' AND {$purchaseScope}")['total'] ?? 0),
+            'pending_spend'      => (float)(Database::fetchOne("SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_orders WHERE (warehouse_supplier_id IS NOT NULL OR seller_id IS NOT NULL) AND payment_status != 'PAID' AND {$purchaseScope}")['total'] ?? 0),
         ];
 
         Response::view('warehouse.sellers.index', [
@@ -12136,6 +12224,8 @@ class WarehouseController {
                         SELECT po.payment_screenshot_url
                         FROM purchase_orders po
                         WHERE (po.warehouse_supplier_id = s.id OR po.seller_id = s.id)
+                          AND po.concern_id = " . (int)ConcernTransactionService::activeConcernId() . "
+                          AND po.warehouse_id IN ({$warehouseList})
                           AND po.payment_screenshot_url IS NOT NULL
                           AND po.payment_screenshot_url != ''
                         ORDER BY po.id DESC
@@ -12594,6 +12684,7 @@ class WarehouseController {
                  GROUP BY purchase_order_id
              ) pi_count ON po.id = pi_count.purchase_order_id
              WHERE (po.warehouse_supplier_id = ? OR po.seller_id = ?)
+               AND po.concern_id = " . (int)ConcernTransactionService::activeConcernId() . "
                AND po.warehouse_id IN ({$warehouseList})
              ORDER BY po.id DESC",
             [$id, $id]
@@ -12621,7 +12712,7 @@ class WarehouseController {
                           AND sb.concern_id = " . (int)currentConcernId() . " AND sb.location_id IN ({$warehouseList})
                     ), 0) as current_stock_qty
              FROM purchase_items pi
-             JOIN purchase_orders po ON pi.purchase_order_id = po.id
+             JOIN purchase_orders po ON pi.purchase_order_id = po.id AND po.concern_id = " . (int)ConcernTransactionService::activeConcernId() . "
              JOIN product_variants pv ON pi.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN categories c ON p.category_id = c.id
@@ -12629,6 +12720,7 @@ class WarehouseController {
              LEFT JOIN colors cl ON pv.color_id = cl.id
              LEFT JOIN warehouses w ON po.warehouse_id = w.id
              WHERE (po.warehouse_supplier_id = ? OR po.seller_id = ?)
+               AND po.warehouse_id IN ({$warehouseList})
              GROUP BY pv.id, pv.sku, pv.qr_code, pv.selling_price, p.id, p.name, p.code, c.name, sz.name, cl.name
              ORDER BY total_bought_qty DESC",
             [$id, $id]
@@ -12709,7 +12801,8 @@ class WarehouseController {
                         SELECT SUM(pi.quantity)
                         FROM purchase_items pi
                         JOIN purchase_orders po ON pi.purchase_order_id = po.id
-                        WHERE pi.variant_id = pv.id
+                        WHERE pi.variant_id = pv.id AND po.concern_id = " . (int)currentConcernId() . "
+                          AND po.warehouse_id IN ({$warehouseList})
                     ), 0) as purchased_qty
              FROM products p
              LEFT JOIN brands b ON p.brand_id = b.id

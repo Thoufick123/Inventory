@@ -6,20 +6,26 @@
  */
 
 require_once BASE_PATH . '/app/Services/AuditService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class CashService {
+    private static function activeConcernIdForShop(int $shopId): int {
+        ConcernTransactionService::assertFacility('SHOP', $shopId);
+        return ConcernTransactionService::activeConcernId();
+    }
 
     /**
      * Get the active (open) register shift for a shop.
      */
     public static function getActiveRegister(int $shopId): ?array {
+        $concernId = self::activeConcernIdForShop($shopId);
         $register = Database::fetchOne(
             "SELECT cr.*, COALESCE(cr.cashier_name, u.full_name) as cashier_name, u.email as cashier_email
              FROM cash_registers cr
              JOIN users u ON cr.cashier_id = u.id
-             WHERE cr.shop_id = ? AND cr.status = 'OPEN'
+             WHERE cr.shop_id = ? AND cr.concern_id = ? AND cr.status = 'OPEN'
              ORDER BY cr.id DESC LIMIT 1",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         if (!$register) return null;
@@ -36,8 +42,8 @@ class CashService {
                 COALESCE(SUM(CASE WHEN transaction_type = 'REFUND_CASH' THEN amount ELSE 0 END), 0) as live_cash_refund,
                 COALESCE(SUM(CASE WHEN transaction_type = 'BANK_DEPOSIT' THEN amount ELSE 0 END), 0) as live_bank_deposit
              FROM cash_transactions
-             WHERE register_id = ?",
-            [$regId]
+             WHERE register_id = ? AND concern_id = ?",
+            [$regId, $concernId]
         );
 
         $opening = (float)$register['opening_balance'];
@@ -61,7 +67,7 @@ class CashService {
                 bank_deposit_amount = ?,
                 expected_cash = ?,
                 updated_at = NOW()
-             WHERE id = ?",
+             WHERE id = ? AND concern_id = ?",
             [
                 $cashSales,
                 (float)($flow['live_upi_sales'] ?? 0),
@@ -71,7 +77,8 @@ class CashService {
                 $cashRefund,
                 $bankDeposit,
                 $expectedCash,
-                $regId
+                $regId,
+                $concernId
             ]
         );
 
@@ -116,9 +123,9 @@ class CashService {
              FROM cash_registers cr
              LEFT JOIN users u ON cr.cashier_id = u.id
              LEFT JOIN users cu ON cr.closed_by = cu.id
-             WHERE cr.shop_id = ? AND cr.status = 'CLOSED'
+             WHERE cr.shop_id = ? AND cr.concern_id = ? AND cr.status = 'CLOSED'
              ORDER BY cr.closing_time DESC, cr.id DESC LIMIT 1",
-            [$shopId]
+            [$shopId, self::activeConcernIdForShop($shopId)]
         );
 
         if (!$reg) return null;
@@ -170,6 +177,7 @@ class CashService {
         string $discrepancyReason = '',
         string $cashierName = ''
     ): array {
+        $concernId = self::activeConcernIdForShop($shopId);
         $active = self::getActiveRegister($shopId);
         if ($active) {
             throw new RuntimeException("A cash register shift is already open ({$active['register_number']}). Please close the current shift first.");
@@ -210,8 +218,8 @@ class CashService {
             $today = date('Ymd');
             $prefix = 'REG-' . $today . '-';
             $lastReg = Database::fetchOne(
-                "SELECT register_number FROM cash_registers WHERE register_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT register_number FROM cash_registers WHERE register_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($lastReg && !empty($lastReg['register_number'])) {
@@ -224,13 +232,14 @@ class CashService {
 
             Database::execute(
                 "INSERT INTO cash_registers (
-                    shop_id, register_number, cashier_id, cashier_name, opening_time, opening_balance,
+                    shop_id, concern_id, register_number, cashier_id, cashier_name, opening_time, opening_balance,
                     opening_expected_float, opening_difference,
                     opening_denominations, opening_notes, opening_discrepancy_reason,
                     expected_cash, status, created_at
-                ) VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, 'OPEN', NOW())",
+                ) VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, 'OPEN', NOW())",
                 [
                     $shopId,
+                    $concernId,
                     $registerNumber,
                     $userId,
                     $cashierName ?: null,
@@ -290,17 +299,19 @@ class CashService {
      * Close an Active Cash Register Shift with Physical Cash Count & Denominations.
      */
     public static function closeRegister(int $registerId, int $userId, float $countedCash, array $denominations = [], string $reason = '', string $notes = ''): array {
-        $register = Database::fetchOne("SELECT * FROM cash_registers WHERE id = ?", [$registerId]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $register = Database::fetchOne("SELECT * FROM cash_registers WHERE id = ? AND concern_id = ?", [$registerId, $concernId]);
         if (!$register) {
             throw new InvalidArgumentException("Cash register record #{$registerId} not found.");
         }
+        self::activeConcernIdForShop((int)$register['shop_id']);
         if ($register['status'] === 'CLOSED') {
             throw new RuntimeException("This cash register shift is already closed.");
         }
 
         // Recompute active register aggregates
         self::getActiveRegister((int)$register['shop_id']);
-        $register = Database::fetchOne("SELECT * FROM cash_registers WHERE id = ?", [$registerId]);
+        $register = Database::fetchOne("SELECT * FROM cash_registers WHERE id = ? AND concern_id = ?", [$registerId, $concernId]);
 
         $expectedCash = (float)$register['expected_cash'];
         $cashDiff = $countedCash - $expectedCash;
@@ -319,7 +330,7 @@ class CashService {
                     status = 'CLOSED',
                     notes = ?,
                     updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ?",
                 [
                     $userId,
                     $countedCash,
@@ -327,7 +338,8 @@ class CashService {
                     $cashDiff,
                     $reason,
                     $notes,
-                    $registerId
+                    $registerId,
+                    $concernId
                 ]
             );
 
@@ -376,6 +388,7 @@ class CashService {
      */
     public static function recordExpense(array $payload, int $userId): array {
         $shopId = (int)$payload['shop_id'];
+        $concernId = self::activeConcernIdForShop($shopId);
         $amount = (float)$payload['amount'];
         $category = trim($payload['expense_category'] ?? '');
         if (empty($category)) {
@@ -401,8 +414,8 @@ class CashService {
             $today = date('Ymd');
             $prefix = 'EXP-' . $today . '-';
             $lastExp = Database::fetchOne(
-                "SELECT voucher_number FROM cash_expenses WHERE voucher_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT voucher_number FROM cash_expenses WHERE voucher_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($lastExp && !empty($lastExp['voucher_number'])) {
@@ -413,11 +426,12 @@ class CashService {
 
             Database::execute(
                 "INSERT INTO cash_expenses (
-                    shop_id, register_id, voucher_number, expense_category, amount,
+                    shop_id, concern_id, register_id, voucher_number, expense_category, amount,
                     paid_to, payment_mode, bill_number, approved_by, created_by, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
                 [
                     $shopId,
+                    $concernId,
                     $registerId,
                     $voucherNumber,
                     $category,
@@ -532,6 +546,7 @@ class CashService {
      */
     public static function recordBankDeposit(array $payload, int $userId): array {
         $shopId = (int)$payload['shop_id'];
+        $concernId = self::activeConcernIdForShop($shopId);
         $amount = (float)$payload['amount'];
         $bankName = trim($payload['bank_name'] ?? 'Bank Account');
         $accountNum = trim($payload['account_number'] ?? '');
@@ -551,8 +566,8 @@ class CashService {
             $today = date('Ymd');
             $prefix = 'DEP-' . $today . '-';
             $lastDep = Database::fetchOne(
-                "SELECT deposit_number FROM bank_deposits WHERE deposit_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT deposit_number FROM bank_deposits WHERE deposit_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($lastDep && !empty($lastDep['deposit_number'])) {
@@ -563,11 +578,12 @@ class CashService {
 
             Database::execute(
                 "INSERT INTO bank_deposits (
-                    shop_id, register_id, deposit_number, bank_name, account_number,
+                    shop_id, concern_id, register_id, deposit_number, bank_name, account_number,
                     amount, slip_number, deposit_date, deposited_by, verified_by, status, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'VERIFIED', ?, NOW())",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'VERIFIED', ?, NOW())",
                 [
                     $shopId,
+                    $concernId,
                     $registerId,
                     $depositNumber,
                     $bankName,
@@ -624,11 +640,20 @@ class CashService {
      * Helper to insert a record in `cash_transactions`.
      */
     public static function logTransaction(array $data): int {
+        $shopId = (int)$data['shop_id'];
+        $concernId = self::activeConcernIdForShop($shopId);
+        $registerId = isset($data['register_id']) ? (int)$data['register_id'] : null;
+        if ($registerId !== null && !Database::fetchOne(
+            "SELECT id FROM cash_registers WHERE id = ? AND shop_id = ? AND concern_id = ?",
+            [$registerId, $shopId, $concernId]
+        )) {
+            throw new InvalidArgumentException('Cash register does not belong to the active concern and shop.');
+        }
         $today = date('Ymd');
         $prefix = 'CTX-' . $today . '-';
         $lastCtx = Database::fetchOne(
-            "SELECT transaction_number FROM cash_transactions WHERE transaction_number LIKE ? ORDER BY id DESC LIMIT 1",
-            [$prefix . '%']
+            "SELECT transaction_number FROM cash_transactions WHERE transaction_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+            [$prefix . '%', $concernId]
         );
         $seq = 1;
         if ($lastCtx && !empty($lastCtx['transaction_number'])) {
@@ -639,13 +664,14 @@ class CashService {
 
         Database::execute(
             "INSERT INTO cash_transactions (
-                shop_id, register_id, transaction_number, transaction_type, flow_direction,
+                shop_id, concern_id, register_id, transaction_number, transaction_type, flow_direction,
                 amount, payment_mode, category, reference_id, source_table, source_id,
                 handled_by, description, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
-                $data['shop_id'],
-                $data['register_id'] ?? null,
+                $shopId,
+                $concernId,
+                $registerId,
                 $txNumber,
                 $data['transaction_type'],
                 $data['flow_direction'],
@@ -667,6 +693,7 @@ class CashService {
      * Compute Grand KPI Analysis Summary for the Cash Portal.
      */
     public static function getCashFlowSummary(int $shopId, ?string $startDate = null, ?string $endDate = null): array {
+        $concernId = self::activeConcernIdForShop($shopId);
         $today = date('Y-m-d');
         $start = $startDate ?: $today;
         $end = $endDate ?: $today;
@@ -688,8 +715,8 @@ class CashService {
                 COALESCE(SUM(CASE WHEN transaction_type = 'REFUND_CASH' THEN amount ELSE 0 END), 0) as today_cash_refunds,
                 COALESCE(SUM(CASE WHEN transaction_type = 'BANK_DEPOSIT' THEN amount ELSE 0 END), 0) as today_bank_deposits
              FROM cash_transactions
-             WHERE shop_id = ? AND DATE(created_at) BETWEEN ? AND ?",
-            [$shopId, $start, $end]
+             WHERE shop_id = ? AND concern_id = ? AND DATE(created_at) BETWEEN ? AND ?",
+            [$shopId, $concernId, $start, $end]
         );
 
         $cashInflow = (float)($todayStats['today_cash_inflow'] ?? 0);
@@ -706,8 +733,8 @@ class CashService {
                 SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) as open_shifts,
                 SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) as closed_shifts
              FROM cash_registers
-             WHERE shop_id = ?",
-            [$shopId]
+             WHERE shop_id = ? AND concern_id = ?",
+            [$shopId, $concernId]
         );
 
         return [
@@ -732,8 +759,8 @@ class CashService {
      * Get Filtered Transactions Ledger.
      */
     public static function getTransactionsLedger(int $shopId, array $filters = []): array {
-        $where = ["ct.shop_id = ?"];
-        $params = [$shopId];
+        $where = ["ct.shop_id = ?", "ct.concern_id = ?"];
+        $params = [$shopId, self::activeConcernIdForShop($shopId)];
 
         if (!empty($filters['type'])) {
             $where[] = "ct.transaction_type = ?";
@@ -783,6 +810,7 @@ class CashService {
      * Get Complete Shift Details for Thermal Shift Receipt.
      */
     public static function getRegisterShiftDetails(int $registerId): ?array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $register = Database::fetchOne(
             "SELECT cr.*, 
                     COALESCE(cr.cashier_name, u_open.full_name) as open_cashier_name, u_open.phone as open_cashier_phone,
@@ -792,37 +820,38 @@ class CashService {
              LEFT JOIN users u_open ON cr.cashier_id = u_open.id
              LEFT JOIN users u_close ON cr.closed_by = u_close.id
              LEFT JOIN shops sh ON cr.shop_id = sh.id
-             WHERE cr.id = ?",
-            [$registerId]
+             WHERE cr.id = ? AND cr.concern_id = ?",
+            [$registerId, $concernId]
         );
 
         if (!$register) return null;
+        self::activeConcernIdForShop((int)$register['shop_id']);
 
         $transactions = Database::fetchAll(
             "SELECT ct.*, u.full_name as staff_name
              FROM cash_transactions ct
              LEFT JOIN users u ON ct.handled_by = u.id
-             WHERE ct.register_id = ?
+             WHERE ct.register_id = ? AND ct.concern_id = ?
              ORDER BY ct.id ASC",
-            [$registerId]
+            [$registerId, $concernId]
         );
 
         $expenses = Database::fetchAll(
             "SELECT ce.*, u.full_name as staff_name
              FROM cash_expenses ce
              LEFT JOIN users u ON ce.created_by = u.id
-             WHERE ce.register_id = ?
+             WHERE ce.register_id = ? AND ce.concern_id = ?
              ORDER BY ce.id ASC",
-            [$registerId]
+            [$registerId, $concernId]
         );
 
         $deposits = Database::fetchAll(
             "SELECT bd.*, u.full_name as staff_name
              FROM bank_deposits bd
              LEFT JOIN users u ON bd.deposited_by = u.id
-             WHERE bd.register_id = ?
+             WHERE bd.register_id = ? AND bd.concern_id = ?
              ORDER BY bd.id ASC",
-            [$registerId]
+            [$registerId, $concernId]
         );
 
         return [
@@ -837,7 +866,8 @@ class CashService {
      * Get Single Expense Voucher Details for Printing.
      */
     public static function getExpenseDetails(int $expenseId): ?array {
-        return Database::fetchOne(
+        $concernId = ConcernTransactionService::activeConcernId();
+        $expense = Database::fetchOne(
             "SELECT ce.*, u.full_name as staff_name, app_u.full_name as approver_name,
                     sh.name as shop_name, sh.address as shop_address, sh.phone as shop_phone,
                     cr.register_number
@@ -846,8 +876,12 @@ class CashService {
              LEFT JOIN users app_u ON ce.approved_by = app_u.id
              LEFT JOIN shops sh ON ce.shop_id = sh.id
              LEFT JOIN cash_registers cr ON ce.register_id = cr.id
-             WHERE ce.id = ?",
-            [$expenseId]
+             WHERE ce.id = ? AND ce.concern_id = ?",
+            [$expenseId, $concernId]
         );
+        if ($expense) {
+            self::activeConcernIdForShop((int)$expense['shop_id']);
+        }
+        return $expense;
     }
 }

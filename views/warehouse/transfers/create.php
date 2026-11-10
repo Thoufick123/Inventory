@@ -1,7 +1,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h2 class="h3 mb-0 text-gray-800"><i class="bi bi-arrow-left-right me-2 text-info"></i>Create Inter-Warehouse Transfer</h2>
-        <p class="text-muted small mb-0">Move stock between physical warehouses or retail locations with real-time StockService synchronization.</p>
+        <h2 class="h3 mb-0 text-gray-800"><i class="bi bi-arrow-left-right me-2 text-info"></i>Create Concern-to-Concern Transfer</h2>
+        <p class="text-muted small mb-0">Submit an outward transfer. Source stock is deducted only when dispatched and destination stock is added only when received.</p>
     </div>
     <div>
         <a href="<?= url('warehouse/transfers') ?>" class="btn btn-outline-secondary">Back to Transfers</a>
@@ -13,8 +13,13 @@
 
     <h5 class="fw-bold text-dark border-bottom pb-2 mb-3"><i class="bi bi-geo-alt me-2 text-primary"></i>Source & Destination Locations</h5>
     <?php 
-        $isSourceScoped = !empty($scopedWarehouseId) || count($warehouses) <= 1;
-        $destWhList = $destinationWarehouses ?? $warehouses;
+        $sourceShopId = function_exists('currentShopId') ? currentShopId() : null;
+        $hasWarehouseAssignment = !empty($scopedWarehouseId);
+        $hasShopAssignment = !empty($sourceShopId);
+        $sourceTarget = $hasWarehouseAssignment && !$hasShopAssignment
+            ? 'WAREHOUSE_' . (int)$scopedWarehouseId
+            : ($hasShopAssignment && !$hasWarehouseAssignment ? 'SHOP_' . (int)$sourceShopId : '');
+        $isSourceScoped = $sourceTarget !== '';
     ?>
     <div class="row g-3 mb-4">
         <div class="col-md-6">
@@ -25,38 +30,42 @@
                 <?php endif; ?>
                 <optgroup label="Warehouses">
                     <?php foreach ($warehouses as $wh): ?>
-                        <option value="WAREHOUSE_<?= $wh['id'] ?>" <?= ($isSourceScoped || (!empty($scopedWarehouseId) && $scopedWarehouseId == $wh['id'])) ? 'selected' : '' ?>>
+                        <option value="WAREHOUSE_<?= $wh['id'] ?>" <?= $sourceTarget === 'WAREHOUSE_' . (int)$wh['id'] ? 'selected' : '' ?>>
                             <?= htmlspecialchars($wh['name']) ?><?= !empty($wh['code']) ? ' (' . htmlspecialchars($wh['code']) . ')' : '' ?>
                         </option>
                     <?php endforeach; ?>
                 </optgroup>
-                <?php if (!$isSourceScoped): ?>
                 <optgroup label="Retail Shops">
                     <?php foreach ($shops as $sh): ?>
-                        <option value="SHOP_<?= $sh['id'] ?>"><?= htmlspecialchars($sh['name']) ?><?= !empty($sh['code']) ? ' (' . htmlspecialchars($sh['code']) . ')' : '' ?></option>
+                        <option value="SHOP_<?= $sh['id'] ?>" <?= $sourceTarget === 'SHOP_' . (int)$sh['id'] ? 'selected' : '' ?>><?= htmlspecialchars($sh['name']) ?><?= !empty($sh['code']) ? ' (' . htmlspecialchars($sh['code']) . ')' : '' ?></option>
                     <?php endforeach; ?>
                 </optgroup>
-                <?php endif; ?>
             </select>
             <?php if ($isSourceScoped): ?>
-                <input type="hidden" name="source_target" value="WAREHOUSE_<?= htmlspecialchars((string)($warehouses[0]['id'] ?? $scopedWarehouseId ?? '')) ?>">
+                <input type="hidden" name="source_target" value="<?= htmlspecialchars($sourceTarget) ?>">
             <?php endif; ?>
         </div>
         <div class="col-md-6">
-            <label class="form-label fw-bold">Destination Location <span class="text-danger">*</span></label>
+            <label class="form-label fw-bold">Destination in Another Concern <span class="text-danger">*</span></label>
             <select name="destination_target" class="form-select" required>
-                <option value="">-- Select Destination Location --</option>
+                <option value="">-- Select Destination Concern and Facility --</option>
                 <optgroup label="Warehouses">
-                    <?php foreach ($destWhList as $wh): ?>
-                        <?php if ($isSourceScoped && (!empty($scopedWarehouseId) ? $wh['id'] == $scopedWarehouseId : $wh['id'] == ($warehouses[0]['id'] ?? 0))) continue; ?>
-                        <option value="WAREHOUSE_<?= $wh['id'] ?>"><?= htmlspecialchars($wh['name']) ?><?= !empty($wh['code']) ? ' (' . htmlspecialchars($wh['code']) . ')' : '' ?></option>
+                    <?php foreach (($destinationWarehouses ?? []) as $wh): ?>
+                        <option value="WAREHOUSE_<?= (int)$wh['concern_id'] ?>_<?= (int)$wh['id'] ?>">
+                            <?= htmlspecialchars($wh['concern_name']) ?>: <?= htmlspecialchars($wh['name']) ?><?= !empty($wh['code']) ? ' (' . htmlspecialchars($wh['code']) . ')' : '' ?>
+                        </option>
                     <?php endforeach; ?>
                 </optgroup>
-                <optgroup label="Retail Shops">
-                    <?php foreach ($shops as $sh): ?>
-                        <option value="SHOP_<?= $sh['id'] ?>"><?= htmlspecialchars($sh['name']) ?><?= !empty($sh['code']) ? ' (' . htmlspecialchars($sh['code']) . ')' : '' ?></option>
+                <optgroup label="Shops">
+                    <?php foreach (($destinationShops ?? []) as $sh): ?>
+                        <option value="SHOP_<?= (int)$sh['concern_id'] ?>_<?= (int)$sh['id'] ?>">
+                            <?= htmlspecialchars($sh['concern_name']) ?>: <?= htmlspecialchars($sh['name']) ?><?= !empty($sh['code']) ? ' (' . htmlspecialchars($sh['code']) . ')' : '' ?>
+                        </option>
                     <?php endforeach; ?>
                 </optgroup>
+                <?php if (empty($destinationWarehouses) && empty($destinationShops)): ?>
+                    <option value="" disabled>No active transfer destinations are available.</option>
+                <?php endif; ?>
             </select>
         </div>
     </div>

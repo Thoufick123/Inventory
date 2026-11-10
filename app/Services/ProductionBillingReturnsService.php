@@ -1,5 +1,7 @@
 <?php
 
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
+
 class ProductionBillingReturnsService {
     public static function getSchemaIssues(): array {
         $requiredColumns = [
@@ -41,18 +43,24 @@ class ProductionBillingReturnsService {
 
     public static function getSummary(): array {
         try {
+            $concernId = ConcernTransactionService::activeConcernId();
             $summary = Database::fetchOne(
                 "SELECT COUNT(*) AS total_transactions,
                         SUM(DATE(created_at) = CURDATE()) AS today_transactions,
                         SUM(action_type = 'RETURN') AS total_returns_count,
                         SUM(action_type = 'EXCHANGE') AS total_exchanges_count,
                         COALESCE(SUM(CASE WHEN action_type = 'RETURN' THEN refund_amount ELSE 0 END), 0) AS total_refund_amount
-                 FROM production_bill_returns"
+                 FROM production_bill_returns
+                 WHERE concern_id = ?",
+                [$concernId]
             ) ?: [];
             $items = Database::fetchOne(
                 "SELECT COUNT(*) AS returned_items,
                         SUM(item_condition = 'DAMAGED') AS damaged_items
-                 FROM production_bill_return_items"
+                 FROM production_bill_return_items pri
+                 JOIN production_bill_returns pr ON pr.id = pri.return_id
+                 WHERE pr.concern_id = ?",
+                [$concernId]
             ) ?: [];
             return array_merge([
                 'total_transactions' => 0,
@@ -79,11 +87,12 @@ class ProductionBillingReturnsService {
     }
 
     public static function getHistory(string $tab = 'all'): array {
-        $where = '';
+        $where = ' WHERE pb.concern_id = ?';
+        $params = [ConcernTransactionService::activeConcernId()];
         if ($tab === 'returns') {
-            $where = " WHERE pr.action_type = 'RETURN'";
+            $where .= " AND pr.action_type = 'RETURN'";
         } elseif ($tab === 'exchanges') {
-            $where = " WHERE pr.action_type = 'EXCHANGE'";
+            $where .= " AND pr.action_type = 'EXCHANGE'";
         }
 
         try {
@@ -98,7 +107,8 @@ class ProductionBillingReturnsService {
                  LEFT JOIN users u ON u.id = pr.processed_by
                  {$where}
                  ORDER BY pr.created_at DESC, pr.id DESC
-                 LIMIT 200"
+                 LIMIT 200",
+                 $params
             );
         } catch (Throwable $e) {
             error_log('ProductionBillingReturnsService::getHistory failed: ' . $e->getMessage());
@@ -120,13 +130,14 @@ class ProductionBillingReturnsService {
                     COALESCE(pb.customer_name, pb.company_name, 'Production Customer') AS display_customer_name,
                     COALESCE(pb.customer_phone, pb.company_phone, '') AS display_customer_phone
              FROM production_bills pb
-             WHERE pb.bill_number = ? OR pb.customer_phone = ? OR pb.company_phone = ? OR pb.id = ?
+             WHERE pb.concern_id = ? AND (pb.bill_number = ? OR pb.customer_phone = ? OR pb.company_phone = ? OR pb.id = ?)
              ORDER BY pb.id DESC LIMIT 1",
-            [$query, $query, $query, ctype_digit($query) ? (int)$query : 0]
+            [ConcernTransactionService::activeConcernId(), $query, $query, $query, ctype_digit($query) ? (int)$query : 0]
         );
         if (!$bill) {
             return null;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$bill['production_unit_id']);
 
         $items = Database::fetchAll(
             "SELECT pbi.*,
@@ -153,26 +164,27 @@ class ProductionBillingReturnsService {
             'items' => $items,
             'history' => Database::fetchAll(
                 "SELECT return_number, action_type, refund_amount, new_amount, difference_amount, created_at
-                 FROM production_bill_returns WHERE bill_id = ? ORDER BY id DESC",
-                [(int)$bill['id']]
+                 FROM production_bill_returns WHERE bill_id = ? AND concern_id = ? ORDER BY id DESC",
+                [(int)$bill['id'], ConcernTransactionService::activeConcernId()]
             ),
         ];
     }
 
     public static function getDetails(int $returnId): ?array {
         $return = Database::fetchOne(
-            "SELECT pr.*, pb.bill_number, pb.bill_date, pb.buyer_type, pb.customer_name, pb.customer_phone,
+            "SELECT pr.*, pb.production_unit_id, pb.bill_number, pb.bill_date, pb.buyer_type, pb.customer_name, pb.customer_phone,
                     pb.customer_address, pb.company_name, pb.company_address, pb.company_gstin,
                     u.full_name AS processed_by_name
              FROM production_bill_returns pr
              JOIN production_bills pb ON pb.id = pr.bill_id
              LEFT JOIN users u ON u.id = pr.processed_by
-             WHERE pr.id = ?",
-            [$returnId]
+             WHERE pr.id = ? AND pr.concern_id = ? AND pb.concern_id = ?",
+            [$returnId, ConcernTransactionService::activeConcernId(), ConcernTransactionService::activeConcernId()]
         );
         if (!$return) {
             return null;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$return['production_unit_id']);
         $items = Database::fetchAll(
             "SELECT pri.*, r.id AS returned_inventory_id, r.new_tag_code AS returned_inventory_tag,
                     r.status AS returned_inventory_status
@@ -202,10 +214,14 @@ class ProductionBillingReturnsService {
 
         Database::beginTransaction();
         try {
-            $bill = Database::fetchOne('SELECT * FROM production_bills WHERE id = ? FOR UPDATE', [$billId]);
+            $bill = Database::fetchOne(
+                'SELECT * FROM production_bills WHERE id = ? AND concern_id = ? FOR UPDATE',
+                [$billId, ConcernTransactionService::activeConcernId()]
+            );
             if (!$bill) {
                 throw new InvalidArgumentException('Production Bill was not found.');
             }
+            ConcernTransactionService::assertFacility('PRODUCTION', (int)$bill['production_unit_id']);
 
             $processed = [];
             $seenOriginal = [];
@@ -292,10 +308,10 @@ class ProductionBillingReturnsService {
             $returnNumber = 'PBR-' . date('Ymd') . '-' . strtoupper(bin2hex(random_bytes(3)));
             Database::execute(
                 "INSERT INTO production_bill_returns
-                    (return_number, bill_id, action_type, reason, refund_amount, new_amount, difference_amount,
+                    (return_number, concern_id, bill_id, action_type, reason, refund_amount, new_amount, difference_amount,
                      payment_action, settlement_mode, notes, processed_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [$returnNumber, $billId, $action, $reason, $refundAmount, $newAmount, abs($difference),
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [$returnNumber, ConcernTransactionService::activeConcernId(), $billId, $action, $reason, $refundAmount, $newAmount, abs($difference),
                     $paymentAction, $settlementMode, trim((string)($payload['notes'] ?? '')) ?: null, $userId ?: null]
             );
             $returnId = (int)Database::lastInsertId();

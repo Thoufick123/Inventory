@@ -14,6 +14,7 @@ require_once BASE_PATH . '/app/Models/AllocationItem.php';
 require_once BASE_PATH . '/app/Models/Warehouse.php';
 require_once BASE_PATH . '/app/Models/Shop.php';
 require_once BASE_PATH . '/app/Models/ShopDamage.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ShopService {
 
@@ -74,16 +75,16 @@ class ShopService {
                     COALESCE(SUM(CASE WHEN payment_mode = 'CARD' THEN total_amount ELSE 0 END), 0) as card_total,
                     COALESCE(MAX(total_amount), 0) as highest_sale
              FROM sales 
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) = ? AND status != 'CANCELLED'",
-            [$shopId, $today]
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) = ? AND status != 'CANCELLED'",
+            [$shopId, $concernId, $today]
         );
 
         // This Month's Sales
         $monthStats = Database::fetchOne(
             "SELECT COALESCE(SUM(total_amount), 0) as month_revenue, COUNT(id) as month_invoices
              FROM sales 
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE()) AND status != 'CANCELLED'",
-            [$shopId]
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE()) AND status != 'CANCELLED'",
+            [$shopId, $concernId]
         );
 
         // Low stock items count in this shop
@@ -99,20 +100,20 @@ class ShopService {
         $returnsToday = (int)(Database::fetchOne(
             "SELECT COUNT(r.id) as cnt 
              FROM returns r 
-             JOIN sales s ON r.sale_id = s.id 
-             WHERE s.shop_id = ? AND DATE(r.created_at) = ?",
-            [$shopId, $today]
+             JOIN sales s ON r.sale_id = s.id AND s.concern_id = r.concern_id
+             WHERE s.shop_id = ? AND s.sale_type = 'SHOP' AND s.concern_id = ? AND r.concern_id = ? AND DATE(r.created_at) = ?",
+            [$shopId, $concernId, $concernId, $today]
         )['cnt'] ?? 0);
 
         // Recent Sales List
         $recentSales = Database::fetchAll(
             "SELECT s.*, c.name as customer_name, c.phone as customer_phone, u.full_name as staff_name
              FROM sales s
-             LEFT JOIN customers c ON s.customer_id = c.id
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
              LEFT JOIN users u ON s.billing_staff_id = u.id
-             WHERE s.shop_id = ? AND s.sale_type = 'SHOP'
+             WHERE s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP'
              ORDER BY s.created_at DESC LIMIT 10",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         // ==========================================
@@ -143,9 +144,9 @@ class ShopService {
                     COALESCE(SUM(CASE WHEN payment_mode = 'CASH' THEN total_amount ELSE 0 END), 0) as cash_rev,
                     COALESCE(SUM(CASE WHEN payment_mode != 'CASH' THEN total_amount ELSE 0 END), 0) as digital_rev
              FROM sales
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND status != 'CANCELLED'
              GROUP BY DATE(created_at)",
-            [$shopId, $startDate7]
+            [$shopId, $concernId, $startDate7]
         );
         foreach ($sales7Days as $row) {
             $sd = $row['s_date'];
@@ -175,9 +176,9 @@ class ShopService {
                     COUNT(id) as inv_count, 
                     COALESCE(SUM(total_amount), 0) as tot_rev
              FROM sales
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND status != 'CANCELLED'
              GROUP BY DATE(created_at)",
-            [$shopId, $startDate30]
+            [$shopId, $concernId, $startDate30]
         );
         foreach ($sales30Days as $row) {
             $sd = $row['s_date'];
@@ -205,9 +206,9 @@ class ShopService {
                     COUNT(id) as inv_count, 
                     COALESCE(SUM(total_amount), 0) as tot_rev
              FROM sales
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND created_at >= ? AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND created_at >= ? AND status != 'CANCELLED'
              GROUP BY DATE_FORMAT(created_at, '%Y-%m')",
-            [$shopId, $startMonth]
+            [$shopId, $concernId, $startMonth]
         );
         foreach ($sales6Months as $row) {
             $sm = $row['s_month'];
@@ -223,9 +224,9 @@ class ShopService {
                     COUNT(id) as count, 
                     COALESCE(SUM(total_amount), 0) as total 
              FROM sales 
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE()) AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE()) AND status != 'CANCELLED'
              GROUP BY payment_mode",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         // 5. Hourly Revenue Velocity for Today (8 AM to 10 PM)
@@ -245,9 +246,9 @@ class ShopService {
                     COUNT(id) as inv_count, 
                     COALESCE(SUM(total_amount), 0) as tot_rev
              FROM sales
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) = ? AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) = ? AND status != 'CANCELLED'
              GROUP BY DATE_FORMAT(created_at, '%H')",
-            [$shopId, $today]
+            [$shopId, $concernId, $today]
         );
         foreach ($todayHourly as $row) {
             $sh = $row['s_hour'];
@@ -267,11 +268,11 @@ class ShopService {
              JOIN product_variants pv ON si.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN categories c ON p.category_id = c.id
-             WHERE s.shop_id = ? AND s.sale_type = 'SHOP' AND MONTH(s.created_at) = MONTH(CURRENT_DATE()) AND YEAR(s.created_at) = YEAR(CURRENT_DATE()) AND s.status != 'CANCELLED'
+             WHERE s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP' AND MONTH(s.created_at) = MONTH(CURRENT_DATE()) AND YEAR(s.created_at) = YEAR(CURRENT_DATE()) AND s.status != 'CANCELLED'
              GROUP BY pv.id
              ORDER BY total_sold_qty DESC
              LIMIT 5",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         // Summary Calculations
@@ -310,6 +311,8 @@ class ShopService {
      * Get Filtered Summary Card Metrics and Trend Data based on period (today, week, month, custom start/end date).
      */
     public static function getFilteredMetrics(int $shopId, string $period = 'today', ?string $customStart = null, ?string $customEnd = null): array {
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = ConcernTransactionService::activeConcernId();
         $today = date('Y-m-d');
         $startDate = $today;
         $endDate = $today;
@@ -348,8 +351,8 @@ class ShopService {
                     COALESCE(SUM(CASE WHEN payment_mode NOT IN ('CASH', 'UPI', 'CARD') THEN total_amount ELSE 0 END), 0) as other_total,
                     COALESCE(MAX(total_amount), 0) as highest_sale
              FROM sales
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND DATE(created_at) <= ? AND status != 'CANCELLED'",
-            [$shopId, $startDate, $endDate]
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND DATE(created_at) <= ? AND status != 'CANCELLED'",
+            [$shopId, $concernId, $startDate, $endDate]
         );
 
         $totalInvoices = (int)($stats['total_invoices'] ?? 0);
@@ -370,8 +373,8 @@ class ShopService {
             "SELECT COUNT(r.id) as cnt 
              FROM returns r 
              JOIN sales s ON r.sale_id = s.id 
-             WHERE s.shop_id = ? AND DATE(r.created_at) >= ? AND DATE(r.created_at) <= ?",
-            [$shopId, $startDate, $endDate]
+             WHERE s.shop_id = ? AND s.concern_id = ? AND r.concern_id = ? AND DATE(r.created_at) >= ? AND DATE(r.created_at) <= ?",
+            [$shopId, $concernId, $concernId, $startDate, $endDate]
         )['cnt'] ?? 0);
 
         // Day-by-day continuous breakdown for chart in [startDate, endDate]
@@ -402,9 +405,9 @@ class ShopService {
                     COALESCE(SUM(CASE WHEN payment_mode = 'CASH' THEN total_amount ELSE 0 END), 0) as cash_rev,
                     COALESCE(SUM(CASE WHEN payment_mode != 'CASH' THEN total_amount ELSE 0 END), 0) as digital_rev
              FROM sales
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND DATE(created_at) <= ? AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND DATE(created_at) <= ? AND status != 'CANCELLED'
              GROUP BY DATE(created_at)",
-            [$shopId, $startDate, $endDate]
+            [$shopId, $concernId, $startDate, $endDate]
         );
 
         foreach ($salesDaily as $row) {
@@ -423,9 +426,9 @@ class ShopService {
                     COUNT(id) as count, 
                     COALESCE(SUM(total_amount), 0) as total 
              FROM sales 
-             WHERE shop_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND DATE(created_at) <= ? AND status != 'CANCELLED'
+             WHERE shop_id = ? AND concern_id = ? AND sale_type = 'SHOP' AND DATE(created_at) >= ? AND DATE(created_at) <= ? AND status != 'CANCELLED'
              GROUP BY payment_mode",
-            [$shopId, $startDate, $endDate]
+            [$shopId, $concernId, $startDate, $endDate]
         );
 
         // Top selling in period
@@ -438,11 +441,11 @@ class ShopService {
              JOIN product_variants pv ON si.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN categories c ON p.category_id = c.id
-             WHERE s.shop_id = ? AND s.sale_type = 'SHOP' AND DATE(s.created_at) >= ? AND DATE(s.created_at) <= ? AND s.status != 'CANCELLED'
+             WHERE s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP' AND DATE(s.created_at) >= ? AND DATE(s.created_at) <= ? AND s.status != 'CANCELLED'
              GROUP BY pv.id
              ORDER BY total_sold_qty DESC
              LIMIT 5",
-            [$shopId, $startDate, $endDate]
+            [$shopId, $concernId, $startDate, $endDate]
         );
 
         $cashTotal = (float)($stats['cash_total'] ?? 0);
@@ -928,6 +931,8 @@ class ShopService {
      */
     public static function processPOSSale(array $payload, int $userId): array {
         $shopId = (int)($payload['shop_id'] ?? 1);
+        $concernId = ConcernTransactionService::activeConcernId();
+        ConcernTransactionService::assertFacility('SHOP', $shopId);
         $items = $payload['items'] ?? [];
         $paymentMode = $payload['payment_mode'] ?? 'CASH';
         $splitCash = (float)($payload['cash_amount'] ?? 0);
@@ -977,7 +982,7 @@ class ShopService {
             if (!empty($customerPhone)) {
                 $cleanPhone = preg_replace('/[^0-9]/', '', $customerPhone);
                 $last10 = strlen($cleanPhone) >= 10 ? substr($cleanPhone, -10) : $cleanPhone;
-                $cust = Database::fetchOne("SELECT id FROM customers WHERE phone = ? OR (phone IS NOT NULL AND phone != '' AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?)", [$customerPhone, $last10]);
+                $cust = Database::fetchOne("SELECT id FROM customers WHERE concern_id = ? AND (phone = ? OR (phone IS NOT NULL AND phone != '' AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?))", [$concernId, $customerPhone, $last10]);
                 if ($cust) {
                     $customerId = $cust['id'];
                     $updateFields = [];
@@ -989,12 +994,13 @@ class ShopService {
                     if (!empty($customerCity)) { $updateFields[] = "city = ?"; $updateVals[] = $customerCity; }
                     if (!empty($updateFields)) {
                         $updateVals[] = $customerId;
-                        Database::execute("UPDATE customers SET " . implode(', ', $updateFields) . " WHERE id = ?", $updateVals);
+                        Database::execute("UPDATE customers SET " . implode(', ', $updateFields) . " WHERE id = ? AND concern_id = ?", array_merge($updateVals, [$concernId]));
                     }
                 } else {
                     Database::execute(
-                        "INSERT INTO customers (name, phone, email, address, city, gst_number, source_channel, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 'SHOP', 1, NOW())",
+                        "INSERT INTO customers (concern_id, name, phone, email, address, city, gst_number, source_channel, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'SHOP', 1, NOW())",
                         [
+                            $concernId,
                             !empty($customerName) ? $customerName : 'Retail Customer',
                             $customerPhone,
                             $customerEmail ?: null,
@@ -1008,8 +1014,9 @@ class ShopService {
             } elseif (!empty($customerName) && strcasecmp($customerName, 'Walk-in Customer') !== 0) {
                 // If customer name is provided without phone
                 Database::execute(
-                    "INSERT INTO customers (name, email, address, city, gst_number, source_channel, is_active, created_at) VALUES (?, ?, ?, ?, ?, 'SHOP', 1, NOW())",
+                    "INSERT INTO customers (concern_id, name, email, address, city, gst_number, source_channel, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 'SHOP', 1, NOW())",
                     [
+                        $concernId,
                         $customerName,
                         $customerEmail ?: null,
                         $customerAddress ?: null,
@@ -1024,8 +1031,8 @@ class ShopService {
             $today = date('Ymd');
             $prefix = 'INV-' . $today . '-';
             $lastInv = Database::fetchOne(
-                "SELECT invoice_number FROM sales WHERE invoice_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT invoice_number FROM sales WHERE invoice_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($lastInv && !empty($lastInv['invoice_number'])) {
@@ -1101,10 +1108,10 @@ class ShopService {
                             $alreadySold = Database::fetchOne(
                                 "SELECT s.invoice_number FROM sale_items si 
                                  JOIN sales s ON si.sale_id = s.id 
-                                 WHERE s.shop_id = ? AND s.status != 'CANCELLED' 
+                                 WHERE s.shop_id = ? AND s.concern_id = ? AND s.status != 'CANCELLED'
                                    AND (FIND_IN_SET(?, si.scanned_qr_codes) OR si.scanned_qr_codes = ? OR si.scanned_qr_codes LIKE ?)
                                  LIMIT 1",
-                                [$shopId, $t, $t, '%' . $t . '%']
+                                [$shopId, $concernId, $t, $t, '%' . $t . '%']
                             );
                             if ($alreadySold && !empty($alreadySold['invoice_number'])) {
                                 throw new RuntimeException("Piece Serial Tag '{$t}' was already sold in Invoice #{$alreadySold['invoice_number']}. Cannot double-bill the same physical garment.");
@@ -1160,13 +1167,14 @@ class ShopService {
 
             // 4. Insert into `sales`
             Database::execute(
-                "INSERT INTO sales (invoice_number, sale_type, shop_id, customer_id, customer_name, customer_phone, customer_address, subtotal, discount_amount, 
+                "INSERT INTO sales (invoice_number, sale_type, shop_id, concern_id, customer_id, customer_name, customer_phone, customer_address, subtotal, discount_amount,
                                     cgst_amount, sgst_amount, igst_amount, total_amount, payment_mode, 
                                     payment_status, status, billing_staff_id, employee_name, notes, created_at)
-                 VALUES (?, 'SHOP', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, 'PAID', 'PAID', ?, ?, ?, ?)",
+                 VALUES (?, 'SHOP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, 'PAID', 'PAID', ?, ?, ?, ?)",
                 [
                     $invoiceNumber,
                     $shopId,
+                    $concernId,
                     $customerId,
                     $customerName ?: 'Retail Customer',
                     $customerPhone,
@@ -1237,24 +1245,25 @@ class ShopService {
 
                 if ($splitCash > 0) {
                     Database::execute(
-                        "INSERT INTO payments (sale_id, payment_number, payment_mode, amount, reference_number, status, created_at)
-                         VALUES (?, ?, 'CASH', ?, 'POS-CASH', 'COMPLETED', NOW())",
-                        [$saleId, $invoiceNumber . '-CASH', $splitCash]
+                        "INSERT INTO payments (sale_id, concern_id, payment_number, payment_mode, amount, reference_number, status, created_at)
+                         VALUES (?, ?, ?, 'CASH', ?, 'POS-CASH', 'COMPLETED', NOW())",
+                        [$saleId, $concernId, $invoiceNumber . '-CASH', $splitCash]
                     );
                 }
                 if ($splitUpi > 0) {
                     Database::execute(
-                        "INSERT INTO payments (sale_id, payment_number, payment_mode, amount, reference_number, status, created_at)
-                         VALUES (?, ?, 'UPI', ?, ?, 'COMPLETED', NOW())",
-                        [$saleId, $invoiceNumber . '-UPI', $splitUpi, $splitUpiRef ?: $invoiceNumber]
+                        "INSERT INTO payments (sale_id, concern_id, payment_number, payment_mode, amount, reference_number, status, created_at)
+                         VALUES (?, ?, ?, 'UPI', ?, ?, 'COMPLETED', NOW())",
+                        [$saleId, $concernId, $invoiceNumber . '-UPI', $splitUpi, $splitUpiRef ?: $invoiceNumber]
                     );
                 }
             } else {
                 Database::execute(
-                    "INSERT INTO payments (sale_id, payment_number, payment_mode, amount, reference_number, status, created_at)
-                     VALUES (?, ?, ?, ?, ?, 'COMPLETED', NOW())",
+                    "INSERT INTO payments (sale_id, concern_id, payment_number, payment_mode, amount, reference_number, status, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', NOW())",
                     [
                         $saleId,
+                        $concernId,
                         $invoiceNumber . '-PAY',
                         $paymentMode,
                         $totalAmount,
@@ -1366,11 +1375,11 @@ class ShopService {
                     u.full_name as staff_name, sh.name as shop_name, sh.address as shop_address, 
                     sh.phone as shop_phone, sh.gst_number as shop_gstin
              FROM sales s
-             LEFT JOIN customers c ON s.customer_id = c.id
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
              LEFT JOIN users u ON s.billing_staff_id = u.id
              LEFT JOIN shops sh ON s.shop_id = sh.id
-             WHERE s.id = ?",
-            [$saleId]
+             WHERE s.id = ? AND s.concern_id = ?",
+            [$saleId, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$sale) return null;
@@ -1391,7 +1400,7 @@ class ShopService {
             [$saleId]
         );
 
-        $payments = Database::fetchAll("SELECT * FROM payments WHERE sale_id = ?", [$saleId]);
+        $payments = Database::fetchAll("SELECT * FROM payments WHERE sale_id = ? AND concern_id = ?", [$saleId, ConcernTransactionService::activeConcernId()]);
         $totalQty = 0;
         foreach ($items as $item) {
             $totalQty += (int)$item['quantity'];
@@ -1432,9 +1441,9 @@ class ShopService {
                        b.name as brand_name, sel.name as seller_name,
                        sb.quantity as available_quantity,
                        (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'SHOP' AND location_id = sb.location_id AND concern_id = {$concernId} AND stock_state = 'DAMAGED') as damaged_quantity,
-                       (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales sl ON si.sale_id = sl.id WHERE si.variant_id = sb.variant_id AND sl.shop_id = sb.location_id AND sl.sale_type = 'SHOP' AND sl.status != 'CANCELLED') as sold_quantity,
-                       (SELECT COALESCE(SUM(wri.returned_qty), 0) FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wri.variant_id = sb.variant_id AND wr.source_type = 'SHOP' AND wr.source_id = sb.location_id) as returned_quantity,
-                       (SELECT COALESCE(SUM(ri.quantity), 0) FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id WHERE ri.variant_id = sb.variant_id AND (r.source_type = 'SHOP' OR s.shop_id = sb.location_id) AND r.return_type = 'EXCHANGE') as exchanged_quantity,
+                       (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales sl ON si.sale_id = sl.id WHERE si.variant_id = sb.variant_id AND sl.shop_id = sb.location_id AND sl.concern_id = {$concernId} AND sl.sale_type = 'SHOP' AND sl.status != 'CANCELLED') as sold_quantity,
+                       (SELECT COALESCE(SUM(wri.returned_qty), 0) FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wri.variant_id = sb.variant_id AND wr.concern_id = {$concernId} AND wr.source_type = 'SHOP' AND wr.source_id = sb.location_id) as returned_quantity,
+                       (SELECT COALESCE(SUM(ri.quantity), 0) FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id AND s.concern_id = r.concern_id WHERE ri.variant_id = sb.variant_id AND r.concern_id = {$concernId} AND (r.source_type = 'SHOP' OR s.shop_id = sb.location_id) AND r.return_type = 'EXCHANGE') as exchanged_quantity,
                        (SELECT wa.allocation_number FROM allocation_items ai JOIN warehouse_allocations wa ON ai.allocation_id = wa.id WHERE ai.variant_id = sb.variant_id AND wa.concern_id = {$concernId} AND (wa.shop_id = sb.location_id OR (wa.destination_type = 'SHOP' AND wa.destination_id = sb.location_id)) ORDER BY wa.id DESC LIMIT 1) as latest_allocation_number
                 FROM stock_balances sb
                 JOIN product_variants pv ON sb.variant_id = pv.id
@@ -1487,10 +1496,10 @@ class ShopService {
                 $params[] = $shopId;
                 $params[] = $shopId;
             } elseif ($status === 'returned') {
-                $sql .= " AND (sb.variant_id IN (SELECT wri.variant_id FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wr.source_type = 'SHOP' AND wr.source_id = ?))";
+                $sql .= " AND (sb.variant_id IN (SELECT wri.variant_id FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wr.concern_id = {$concernId} AND wr.source_type = 'SHOP' AND wr.source_id = ?))";
                 $params[] = $shopId;
             } elseif ($status === 'exchanged') {
-                $sql .= " AND (sb.variant_id IN (SELECT ri.variant_id FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id WHERE (r.source_type = 'SHOP' OR s.shop_id = ?) AND r.return_type = 'EXCHANGE'))";
+                $sql .= " AND (sb.variant_id IN (SELECT ri.variant_id FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id AND s.concern_id = r.concern_id WHERE r.concern_id = {$concernId} AND (r.source_type = 'SHOP' OR s.shop_id = ?) AND r.return_type = 'EXCHANGE'))";
                 $params[] = $shopId;
             }
         }
@@ -1724,8 +1733,8 @@ class ShopService {
                        sb.quantity as available_quantity,
                        (SELECT COALESCE(SUM(quantity), 0) FROM stock_balances WHERE variant_id = sb.variant_id AND location_type = 'SHOP' AND location_id = sb.location_id AND concern_id = {$concernId} AND stock_state = 'DAMAGED') as damaged_quantity,
                        (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales sl ON si.sale_id = sl.id WHERE si.variant_id = sb.variant_id AND sl.shop_id = sb.location_id AND sl.sale_type = 'SHOP' AND sl.status != 'CANCELLED') as sold_quantity,
-                       (SELECT COALESCE(SUM(wri.returned_qty), 0) FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wri.variant_id = sb.variant_id AND wr.source_type = 'SHOP' AND wr.source_id = sb.location_id) as returned_quantity,
-                       (SELECT COALESCE(SUM(ri.quantity), 0) FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id WHERE ri.variant_id = sb.variant_id AND (r.source_type = 'SHOP' OR s.shop_id = sb.location_id) AND r.return_type = 'EXCHANGE') as exchanged_quantity
+                       (SELECT COALESCE(SUM(wri.returned_qty), 0) FROM warehouse_return_items wri JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id WHERE wri.variant_id = sb.variant_id AND wr.concern_id = {$concernId} AND wr.source_type = 'SHOP' AND wr.source_id = sb.location_id) as returned_quantity,
+                       (SELECT COALESCE(SUM(ri.quantity), 0) FROM return_items ri JOIN returns r ON ri.return_id = r.id LEFT JOIN sales s ON r.sale_id = s.id AND s.concern_id = r.concern_id WHERE ri.variant_id = sb.variant_id AND r.concern_id = {$concernId} AND (r.source_type = 'SHOP' OR s.shop_id = sb.location_id) AND r.return_type = 'EXCHANGE') as exchanged_quantity
                 FROM stock_balances sb
                 JOIN product_variants pv ON sb.variant_id = pv.id
                 JOIN products p ON pv.product_id = p.id
@@ -2336,10 +2345,11 @@ class ShopService {
         $sale = Database::fetchOne(
             "SELECT s.*, c.name as customer_name, c.phone as customer_phone
              FROM sales s
-             LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE s.shop_id = ? AND (s.invoice_number = ? OR c.phone = ?)
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP'
+               AND (s.invoice_number = ? OR c.phone = ?)
              ORDER BY s.id DESC LIMIT 1",
-            [$shopId, $query, $query]
+            [$shopId, $concernId, $query, $query]
         );
 
         if (!$sale) return null;
@@ -2393,6 +2403,8 @@ class ShopService {
     public static function processReturn(array $payload, int $userId): array {
         $saleId = (int)$payload['sale_id'];
         $shopId = (int)$payload['shop_id'];
+        $concernId = ConcernTransactionService::activeConcernId();
+        ConcernTransactionService::assertFacility('SHOP', $shopId);
         $items = $payload['items'] ?? [];
         $actionType = $payload['action_type'] ?? 'RETURN'; // 'RETURN', 'EXCHANGE_SAME', 'EXCHANGE_DIFFERENT', 'CREDIT_NOTE'
         $reason = $payload['reason'] ?? 'Customer Return';
@@ -2413,8 +2425,8 @@ class ShopService {
             $today = date('Ymd');
             $prefix = ($returnType === 'EXCHANGE' ? 'EXC-' : 'RET-') . $today . '-';
             $lastRet = Database::fetchOne(
-                "SELECT return_number FROM returns WHERE return_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT return_number FROM returns WHERE return_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($lastRet && !empty($lastRet['return_number'])) {
@@ -2426,12 +2438,17 @@ class ShopService {
             $sale = Database::fetchOne(
                 "SELECT s.*, c.name as customer_name, c.phone as customer_phone 
                  FROM sales s 
-                 LEFT JOIN customers c ON s.customer_id = c.id 
-                 WHERE s.id = ?",
-                [$saleId]
+                 LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+                 WHERE s.id = ? AND s.concern_id = ? AND s.shop_id = ? AND s.sale_type = 'SHOP'
+                 FOR UPDATE",
+                [$saleId, $concernId, $shopId]
             );
+            if (!$sale) {
+                throw new InvalidArgumentException('The selected sale does not belong to the active concern and shop.');
+            }
             $totalRefund = 0.0;
             $processedItems = [];
+            $requestedReturnQtyBySaleItem = [];
 
             foreach ($items as $it) {
                 // If selected key exists and is empty/falsy, skip
@@ -2447,22 +2464,33 @@ class ShopService {
                 $saleItemId = !empty($it['sale_item_id']) ? (int)$it['sale_item_id'] : null;
                 $variantId = (int)($it['variant_id'] ?? 0);
 
-                // Determine accurate unit rate from sale_items or product_variants
-                $unitPrice = 0.0;
-                if ($saleItemId) {
-                    $si = Database::fetchOne("SELECT unit_price FROM sale_items WHERE id = ? AND sale_id = ?", [$saleItemId, $saleId]);
-                    if ($si) {
-                        $unitPrice = (float)$si['unit_price'];
-                    }
-                }
-                if ($unitPrice <= 0 && !empty($it['unit_price'])) {
-                    $unitPrice = (float)$it['unit_price'];
-                }
-                if ($unitPrice <= 0 && $variantId > 0) {
-                    $pv = Database::fetchOne("SELECT selling_price FROM product_variants WHERE id = ?", [$variantId]);
-                    $unitPrice = (float)($pv['selling_price'] ?? 0);
+                if (!$saleItemId || $variantId <= 0) {
+                    throw new InvalidArgumentException('Each returned item must reference a line from the selected sale.');
                 }
 
+                $saleItem = Database::fetchOne(
+                    "SELECT variant_id, quantity, unit_price
+                     FROM sale_items WHERE id = ? AND sale_id = ?",
+                    [$saleItemId, $saleId]
+                );
+                if (!$saleItem || (int)$saleItem['variant_id'] !== $variantId) {
+                    throw new InvalidArgumentException('A returned item does not match a line from the selected sale.');
+                }
+
+                $alreadyReturned = (int)(Database::fetchOne(
+                    "SELECT COALESCE(SUM(ri.quantity), 0) as quantity
+                     FROM return_items ri
+                     JOIN returns r ON ri.return_id = r.id AND r.concern_id = ?
+                     WHERE ri.sale_item_id = ? AND r.status NOT IN ('CANCELLED', 'REJECTED')",
+                    [$concernId, $saleItemId]
+                )['quantity'] ?? 0);
+                $alreadyRequested = $requestedReturnQtyBySaleItem[$saleItemId] ?? 0;
+                if ($qty > (int)$saleItem['quantity'] - $alreadyReturned - $alreadyRequested) {
+                    throw new InvalidArgumentException('The return quantity exceeds the unreturned quantity on the original sale.');
+                }
+                $requestedReturnQtyBySaleItem[$saleItemId] = $alreadyRequested + $qty;
+
+                $unitPrice = (float)$saleItem['unit_price'];
                 $itemRefund = $unitPrice * $qty;
                 $totalRefund += $itemRefund;
 
@@ -2492,11 +2520,12 @@ class ShopService {
             }
 
             Database::execute(
-                "INSERT INTO returns (return_number, sale_id, customer_id, return_type, reason, inspection_status, 
+                "INSERT INTO returns (return_number, concern_id, sale_id, customer_id, return_type, reason, inspection_status,
                                      refund_amount, refund_mode, refund_status, inspected_by, approved_by, notes, created_at)
-                 VALUES (?, ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, NOW())",
+                 VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, NOW())",
                 [
                     $returnNumber,
+                    $concernId,
                     $saleId,
                     $sale['customer_id'] ?? null,
                     $returnType,
@@ -2622,9 +2651,9 @@ class ShopService {
                 }
 
                 Database::execute(
-                    "INSERT INTO exchanges (return_id, sale_id, original_amount, new_amount, difference_amount, payment_action, status, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', NOW())",
-                    [$returnId, $saleId, $totalRefund, $totalNewExchangeAmount, abs($diffAmount), $paymentAction]
+                    "INSERT INTO exchanges (return_id, concern_id, sale_id, original_amount, new_amount, difference_amount, payment_action, status, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'COMPLETED', NOW())",
+                    [$returnId, $concernId, $saleId, $totalRefund, $totalNewExchangeAmount, abs($diffAmount), $paymentAction]
                 );
                 $exchangeId = (int)Database::lastInsertId();
 
@@ -2722,21 +2751,24 @@ class ShopService {
      * Get Complete Details of a Customer Return and its Returned Items.
      */
     public static function getReturnDetails(int $returnId): ?array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $return = Database::fetchOne(
             "SELECT r.*, s.invoice_number, s.created_at as sale_date, s.payment_mode as sale_payment_mode,
-                    s.subtotal as sale_subtotal, s.total_amount as sale_total_amount,
+                    s.subtotal as sale_subtotal, s.total_amount as sale_total_amount, s.shop_id,
                     c.name as customer_name, c.phone as customer_phone, c.email as customer_email, c.address as customer_address,
                     u.full_name as staff_name, sh.name as shop_name, sh.address as shop_address, sh.phone as shop_phone
              FROM returns r
-             JOIN sales s ON r.sale_id = s.id
-             LEFT JOIN customers c ON r.customer_id = c.id
+             JOIN sales s ON r.sale_id = s.id AND s.concern_id = r.concern_id
+             LEFT JOIN customers c ON r.customer_id = c.id AND c.concern_id = r.concern_id
              LEFT JOIN users u ON r.inspected_by = u.id
-             LEFT JOIN shops sh ON s.shop_id = sh.id
-             WHERE r.id = ? OR r.return_number = ?",
-            [$returnId, (string)$returnId]
+             LEFT JOIN shops sh ON s.shop_id = sh.id AND sh.concern_id = s.concern_id
+             WHERE (r.id = ? OR r.return_number = ?) AND r.concern_id = ? AND s.concern_id = ?
+               AND r.source_type = 'SHOP' AND s.sale_type = 'SHOP'",
+            [$returnId, (string)$returnId, $concernId, $concernId]
         );
 
         if (!$return) return null;
+        ConcernTransactionService::assertFacility('SHOP', (int)$return['shop_id']);
 
         $items = Database::fetchAll(
             "SELECT ri.*, si.unit_price, si.total_amount as original_line_amount, si.scanned_qr_codes,
@@ -2745,14 +2777,14 @@ class ShopService {
                     p.category_code, p.subcategory_code, p.hsn_code,
                     sz.name as size_name, cl.name as color_name, cat.name as category_name
              FROM return_items ri
-             LEFT JOIN sale_items si ON ri.sale_item_id = si.id
+             LEFT JOIN sale_items si ON ri.sale_item_id = si.id AND si.sale_id = ?
              JOIN product_variants pv ON ri.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors cl ON pv.color_id = cl.id
              LEFT JOIN categories cat ON p.category_id = cat.id
              WHERE ri.return_id = ?",
-            [$return['id']]
+            [$return['sale_id'], $return['id']]
         );
 
         $totalReturnedQty = 0;
@@ -2768,7 +2800,7 @@ class ShopService {
         // Synchronize and auto-repair refund_amount if stored as 0
         if (((float)($return['refund_amount'] ?? 0)) <= 0 && $calculatedGrandRefund > 0) {
             $return['refund_amount'] = $calculatedGrandRefund;
-            Database::execute("UPDATE returns SET refund_amount = ? WHERE id = ?", [$calculatedGrandRefund, $return['id']]);
+            Database::execute("UPDATE returns SET refund_amount = ? WHERE id = ? AND concern_id = ?", [$calculatedGrandRefund, $return['id'], ConcernTransactionService::activeConcernId()]);
         }
 
         // Fetch associated exchange details if any
@@ -2776,8 +2808,8 @@ class ShopService {
             "SELECT e.*, 
                     (SELECT COUNT(*) FROM exchange_items WHERE exchange_id = e.id) as item_count
              FROM exchanges e 
-             WHERE e.return_id = ?",
-            [$return['id']]
+             WHERE e.return_id = ? AND e.concern_id = ?",
+            [$return['id'], ConcernTransactionService::activeConcernId()]
         );
         $exchangeItems = [];
         if ($exchange) {
@@ -2806,6 +2838,8 @@ class ShopService {
      * Get Comprehensive Summary KPI Metrics for Customer Returns & Exchanges at a Shop.
      */
     public static function getReturnsSummary(int $shopId): array {
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = ConcernTransactionService::activeConcernId();
         $today = date('Y-m-d');
 
         // Aggregated transaction totals
@@ -2827,8 +2861,8 @@ class ShopService {
                 COALESCE(SUM(CASE WHEN r.refund_mode = 'CREDIT_NOTE' THEN r.refund_amount ELSE 0 END), 0) as total_credit_notes_amount
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
-             WHERE s.shop_id = ?",
-            [$today, $shopId]
+             WHERE s.shop_id = ? AND s.concern_id = ? AND r.concern_id = ?",
+            [$today, $shopId, $concernId, $concernId]
         );
 
         // Item level condition breakdown (Restocked Good vs Damaged)
@@ -2840,8 +2874,8 @@ class ShopService {
              FROM return_items ri
              JOIN returns r ON ri.return_id = r.id
              JOIN sales s ON r.sale_id = s.id
-             WHERE s.shop_id = ?",
-            [$shopId]
+             WHERE s.shop_id = ? AND s.concern_id = ? AND r.concern_id = ?",
+            [$shopId, $concernId, $concernId]
         );
 
         $totalPcs = (int)($itemStats['total_items_returned'] ?? 0);
@@ -3451,6 +3485,8 @@ class ShopService {
      * Get itemized list of all sold products in the shop with rich metadata and filters.
      */
     public static function getSoldProducts(int $shopId, array $filters = []): array {
+        StockService::assertLocationBelongsToActiveConcern('SHOP', $shopId);
+        $concernId = ConcernTransactionService::activeConcernId();
         $sql = "SELECT si.*, 
                        s.invoice_number, s.payment_mode, s.payment_status, s.created_at as sale_date,
                        s.notes as sale_notes, s.subtotal as invoice_subtotal, s.total_amount as invoice_total_amount,
@@ -3469,19 +3505,19 @@ class ShopService {
                 LEFT JOIN sizes sz ON pv.size_id = sz.id
                 LEFT JOIN colors cl ON pv.color_id = cl.id
                 LEFT JOIN categories cat ON p.category_id = cat.id
-                LEFT JOIN customers c ON s.customer_id = c.id
+                LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
                 LEFT JOIN users u ON s.billing_staff_id = u.id
                 LEFT JOIN (
                     SELECT sale_id,
                            SUM(CASE WHEN payment_mode = 'CASH' THEN amount ELSE 0 END) as cash_paid,
                            SUM(CASE WHEN payment_mode <> 'CASH' THEN amount ELSE 0 END) as online_paid
                     FROM payments
-                    WHERE status = 'COMPLETED'
+                    WHERE status = 'COMPLETED' AND concern_id = {$concernId}
                     GROUP BY sale_id
                 ) payment_totals ON payment_totals.sale_id = s.id
-                WHERE s.shop_id = ? AND s.sale_type = 'SHOP'";
+                WHERE s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP'";
         
-        $params = [$shopId];
+        $params = [$shopId, $concernId];
 
         // Filter by Search Query (Product, SKU, Invoice, Customer, Piece Tag)
         if (!empty($filters['search'])) {
@@ -3525,8 +3561,8 @@ class ShopService {
                           COALESCE(SUM(si.discount_amount), 0) as total_discount
                    FROM sale_items si
                    JOIN sales s ON si.sale_id = s.id
-                   WHERE s.shop_id = ? AND s.sale_type = 'SHOP'";
-        $kpiParams = [$shopId];
+                   WHERE s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP'";
+        $kpiParams = [$shopId, $concernId];
 
         if (!empty($filters['start_date'])) {
             $kpiSql .= " AND DATE(s.created_at) >= ?";
@@ -3625,11 +3661,11 @@ class ShopService {
                 LEFT JOIN sizes sz ON pv.size_id = sz.id
                 LEFT JOIN colors cl ON pv.color_id = cl.id
                 LEFT JOIN categories cat ON p.category_id = cat.id
-                LEFT JOIN customers c ON s.customer_id = c.id
+                LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
                 LEFT JOIN users u ON s.billing_staff_id = u.id
-                WHERE si.id = ?";
+                WHERE si.id = ? AND s.concern_id = ?";
         
-        $item = Database::fetchOne($sql, [$saleItemId]);
+        $item = Database::fetchOne($sql, [$saleItemId, ConcernTransactionService::activeConcernId()]);
         if (!$item) return null;
 
         $item['image'] = !empty($item['variant_image']) ? $item['variant_image'] : ($item['product_image'] ?? null);
@@ -3673,6 +3709,8 @@ class ShopService {
      * Get list of all Return-to-Warehouse dispatches created by this Shop.
      */
     public static function getShopWarehouseReturns(int $shopId, array $filters = []): array {
+        $concernId = ConcernTransactionService::activeConcernId();
+        ConcernTransactionService::assertFacility('SHOP', $shopId);
         $sql = "SELECT wr.*, 
                        w.name as warehouse_name, w.code as warehouse_code, w.address as warehouse_address,
                        u.full_name as inspected_by_name,
@@ -3681,11 +3719,11 @@ class ShopService {
                        (SELECT COALESCE(SUM(good_qty), 0) FROM warehouse_return_items WHERE warehouse_return_id = wr.id) as total_good_qty,
                        (SELECT COALESCE(SUM(damaged_qty), 0) FROM warehouse_return_items WHERE warehouse_return_id = wr.id) as total_damaged_qty
                 FROM warehouse_returns wr
-                JOIN warehouses w ON wr.warehouse_id = w.id
+                JOIN warehouses w ON wr.warehouse_id = w.id AND w.concern_id = wr.concern_id
                 LEFT JOIN users u ON wr.inspected_by = u.id
-                WHERE wr.source_type = 'SHOP' AND wr.source_id = ?";
+                WHERE wr.concern_id = ? AND wr.source_type = 'SHOP' AND wr.source_id = ?";
         
-        $params = [$shopId];
+        $params = [$concernId, $shopId];
 
         if (!empty($filters['status']) && $filters['status'] !== 'ALL') {
             $sql .= " AND wr.status = ?";
@@ -3708,8 +3746,8 @@ class ShopService {
                           SUM(CASE WHEN wr.status IN ('RECEIVED', 'INSPECTING') THEN 1 ELSE 0 END) as in_transit_count,
                           SUM(CASE WHEN wr.status IN ('CLASSIFIED', 'COMPLETED') THEN 1 ELSE 0 END) as completed_count
                    FROM warehouse_returns wr
-                   WHERE wr.source_type = 'SHOP' AND wr.source_id = ?";
-        $kpis = Database::fetchOne($kpiSql, [$shopId]) ?: [
+                   WHERE wr.concern_id = ? AND wr.source_type = 'SHOP' AND wr.source_id = ?";
+        $kpis = Database::fetchOne($kpiSql, [$concernId, $shopId]) ?: [
             'total_dispatches'     => 0,
             'total_units_returned' => 0,
             'in_transit_count'     => 0,
@@ -3726,6 +3764,9 @@ class ShopService {
      * Create a new Return to Warehouse from Shop Inventory and deduct stock.
      */
     public static function createShopWarehouseReturn(int $shopId, array $payload, int $userId): array {
+        $concernId = ConcernTransactionService::activeConcernId();
+        ConcernTransactionService::assertFacility('SHOP', $shopId);
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)($payload['warehouse_id'] ?? 0));
         if ($shopId <= 0 || !Shop::find($shopId)) {
             throw new InvalidArgumentException("Invalid shop store context.");
         }
@@ -3779,8 +3820,8 @@ class ShopService {
             $today = date('Ymd');
             $prefix = 'RET-' . $today . '-';
             $last = Database::fetchOne(
-                "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($last && !empty($last['return_number'])) {
@@ -3803,9 +3844,9 @@ class ShopService {
 
             // Insert into warehouse_returns
             Database::execute(
-                "INSERT INTO warehouse_returns (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, created_at, updated_at)
-                 VALUES (?, 'SHOP', ?, ?, ?, ?, 'RECEIVED', ?, NOW(), NOW())",
-                [$returnNumber, $shopId, $warehouseId, $warehouseId, $reason, $serializedNotes]
+                "INSERT INTO warehouse_returns (return_number, concern_id, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, created_at, updated_at)
+                 VALUES (?, ?, 'SHOP', ?, ?, ?, ?, 'RECEIVED', ?, NOW(), NOW())",
+                [$returnNumber, $concernId, $shopId, $warehouseId, $warehouseId, $reason, $serializedNotes]
             );
             $returnId = (int)Database::lastInsertId();
 
@@ -3940,20 +3981,25 @@ class ShopService {
      * Get Complete Details of a Return to Warehouse Consignment for view, gatepass, and inspection.
      */
     public static function getShopWarehouseReturnDetails(int $returnId): ?array {
+        $concernId = ConcernTransactionService::activeConcernId();
+        $shop = self::getActiveShop();
+        $shopId = (int)$shop['id'];
         $ret = Database::fetchOne(
             "SELECT wr.*, 
                     w.name as warehouse_name, w.code as warehouse_code, w.address as warehouse_address, w.phone as warehouse_phone,
                     s.name as shop_name, s.code as shop_code, s.address as shop_address, s.phone as shop_phone,
                     u.full_name as inspected_by_name
              FROM warehouse_returns wr
-             JOIN warehouses w ON wr.warehouse_id = w.id
-             LEFT JOIN shops s ON (wr.source_type = 'SHOP' AND wr.source_id = s.id)
+             JOIN warehouses w ON wr.warehouse_id = w.id AND w.concern_id = wr.concern_id
+             JOIN shops s ON wr.source_type = 'SHOP' AND wr.source_id = s.id AND s.concern_id = wr.concern_id
              LEFT JOIN users u ON wr.inspected_by = u.id
-             WHERE wr.id = ? OR wr.return_number = ?",
-            [$returnId, (string)$returnId]
+             WHERE (wr.id = ? OR wr.return_number = ?) AND wr.concern_id = ? AND wr.source_id = ?",
+            [$returnId, (string)$returnId, $concernId, $shopId]
         );
 
         if (!$ret) return null;
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)$ret['warehouse_id']);
+        ConcernTransactionService::assertFacility('SHOP', (int)$ret['source_id']);
 
         // Unpack outward logistics JSON if present
         $outward = [
@@ -4019,6 +4065,7 @@ class ShopService {
      * Get Customers List with Aggregated Sales & Spend Metrics
      */
     public static function getCustomersList(array $filters = []): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $q = trim($filters['q'] ?? '');
         $status = $filters['status'] ?? 'all';
         $tier = $filters['tier'] ?? 'all';
@@ -4026,7 +4073,7 @@ class ShopService {
         $sort = $filters['sort'] ?? 'recent';
         $channel = $filters['channel'] ?? 'all';
 
-        $where = ["1=1"];
+        $where = ["c.concern_id = {$concernId}"];
         $params = [];
 
         if (!empty($q)) {
@@ -4051,7 +4098,7 @@ class ShopService {
         }
 
         if (!empty($channel) && $channel === 'SHOP') {
-            $where[] = "(c.source_channel = 'SHOP' OR c.id IN (SELECT DISTINCT s_sub.customer_id FROM sales s_sub WHERE s_sub.sale_type = 'SHOP' AND s_sub.customer_id IS NOT NULL))";
+            $where[] = "(c.source_channel = 'SHOP' OR c.id IN (SELECT DISTINCT s_sub.customer_id FROM sales s_sub WHERE s_sub.concern_id = {$concernId} AND s_sub.sale_type = 'SHOP' AND s_sub.customer_id IS NOT NULL))";
         } elseif (!empty($channel) && $channel !== 'all') {
             $where[] = "c.source_channel = ?";
             $params[] = $channel;
@@ -4061,13 +4108,13 @@ class ShopService {
 
         $sql = "
             SELECT c.*,
-                   (SELECT COUNT(s.id) FROM sales s WHERE (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as total_orders,
-                   (SELECT COALESCE(SUM(s.total_amount), 0) FROM sales s WHERE (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as total_spend,
-                   (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as total_items_bought,
-                   (SELECT MAX(s.created_at) FROM sales s WHERE (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as last_visit_date,
-                   (SELECT s2.invoice_number FROM sales s2 WHERE (s2.customer_id = c.id OR (s2.customer_phone IS NOT NULL AND s2.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s2.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s2.sale_type = 'SHOP' AND s2.status != 'CANCELLED' ORDER BY s2.created_at DESC LIMIT 1) as last_invoice_number,
-                   (SELECT s2.id FROM sales s2 WHERE (s2.customer_id = c.id OR (s2.customer_phone IS NOT NULL AND s2.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s2.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s2.sale_type = 'SHOP' AND s2.status != 'CANCELLED' ORDER BY s2.created_at DESC LIMIT 1) as last_sale_id,
-                   (SELECT COUNT(r.id) FROM returns r WHERE r.customer_id = c.id AND r.source_type = 'SHOP') as total_returns
+                   (SELECT COUNT(s.id) FROM sales s WHERE s.concern_id = {$concernId} AND (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as total_orders,
+                   (SELECT COALESCE(SUM(s.total_amount), 0) FROM sales s WHERE s.concern_id = {$concernId} AND (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as total_spend,
+                   (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si JOIN sales s ON si.sale_id = s.id WHERE s.concern_id = {$concernId} AND (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as total_items_bought,
+                   (SELECT MAX(s.created_at) FROM sales s WHERE s.concern_id = {$concernId} AND (s.customer_id = c.id OR (s.customer_phone IS NOT NULL AND s.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED') as last_visit_date,
+                   (SELECT s2.invoice_number FROM sales s2 WHERE s2.concern_id = {$concernId} AND (s2.customer_id = c.id OR (s2.customer_phone IS NOT NULL AND s2.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s2.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s2.sale_type = 'SHOP' AND s2.status != 'CANCELLED' ORDER BY s2.created_at DESC LIMIT 1) as last_invoice_number,
+                   (SELECT s2.id FROM sales s2 WHERE s2.concern_id = {$concernId} AND (s2.customer_id = c.id OR (s2.customer_phone IS NOT NULL AND s2.customer_phone != '' AND c.phone IS NOT NULL AND c.phone != '' AND RIGHT(REGEXP_REPLACE(s2.customer_phone, '[^0-9]', ''), 10) = RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10))) AND s2.sale_type = 'SHOP' AND s2.status != 'CANCELLED' ORDER BY s2.created_at DESC LIMIT 1) as last_sale_id,
+                   (SELECT COUNT(r.id) FROM returns r WHERE r.concern_id = {$concernId} AND r.customer_id = c.id AND r.source_type = 'SHOP') as total_returns
             FROM customers c
             WHERE {$whereSql}
         ";
@@ -4129,15 +4176,16 @@ class ShopService {
      * Get Customer Summary KPI Metrics (Isolated by Channel)
      */
     public static function getCustomerSummaryMetrics(?string $channel = 'SHOP'): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         if ($channel === 'SHOP') {
-            $chanWhere = " WHERE (source_channel = 'SHOP' OR id IN (SELECT DISTINCT customer_id FROM sales WHERE sale_type = 'SHOP' AND customer_id IS NOT NULL))";
-            $chanParams = [];
+            $chanWhere = " WHERE concern_id = ? AND (source_channel = 'SHOP' OR id IN (SELECT DISTINCT customer_id FROM sales WHERE concern_id = ? AND sale_type = 'SHOP' AND customer_id IS NOT NULL))";
+            $chanParams = [$concernId, $concernId];
         } elseif (!empty($channel) && $channel !== 'all') {
-            $chanWhere = " WHERE source_channel = ?";
-            $chanParams = [$channel];
+            $chanWhere = " WHERE concern_id = ? AND source_channel = ?";
+            $chanParams = [$concernId, $channel];
         } else {
-            $chanWhere = '';
-            $chanParams = [];
+            $chanWhere = " WHERE concern_id = ?";
+            $chanParams = [$concernId];
         }
 
         $totalCust = (int)(Database::fetchOne("SELECT COUNT(id) as cnt FROM customers" . $chanWhere, $chanParams)['cnt'] ?? 0);
@@ -4147,15 +4195,17 @@ class ShopService {
             "SELECT COALESCE(SUM(s.total_amount), 0) as total_rev,
                     COUNT(DISTINCT s.customer_id) as buying_customers
              FROM sales s
-             WHERE s.sale_type = 'SHOP' AND s.status != 'CANCELLED'"
+             WHERE s.concern_id = ? AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED'",
+            [$concernId]
         );
 
         $repeatCust = (int)(Database::fetchOne(
             "SELECT COUNT(*) as cnt FROM (
                 SELECT s.customer_id FROM sales s 
-                WHERE s.sale_type = 'SHOP' AND s.status != 'CANCELLED' AND s.customer_id IS NOT NULL 
+                WHERE s.concern_id = ? AND s.sale_type = 'SHOP' AND s.status != 'CANCELLED' AND s.customer_id IS NOT NULL
                 GROUP BY s.customer_id HAVING COUNT(s.id) > 1
-             ) as t"
+             ) as t",
+            [$concernId]
         )['cnt'] ?? 0);
 
         $totalRev = (float)($salesStats['total_rev'] ?? 0);
@@ -4182,7 +4232,8 @@ class ShopService {
      * Get 360-Degree Customer Details with Invoices, Items Bought, and Returns History (Isolated to Shop)
      */
     public static function getCustomerDetails(int $customerId): ?array {
-        $customer = Database::fetchOne("SELECT * FROM customers WHERE id = ?", [$customerId]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $customer = Database::fetchOne("SELECT * FROM customers WHERE id = ? AND concern_id = ?", [$customerId, $concernId]);
         if (!$customer) return null;
 
         // Clean 10-digit phone for cross-channel / duplicate aggregation
@@ -4193,8 +4244,8 @@ class ShopService {
         $matchingIds = [$customerId];
         if (!empty($last10)) {
             $otherCusts = Database::fetchAll(
-                "SELECT * FROM customers WHERE RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?",
-                [$last10]
+                "SELECT * FROM customers WHERE concern_id = ? AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?",
+                [$concernId, $last10]
             );
             foreach ($otherCusts as $oc) {
                 $matchingIds[] = (int)$oc['id'];
@@ -4377,6 +4428,7 @@ class ShopService {
      * Create or Update Customer Profile
      */
     public static function saveCustomer(array $data, ?int $id = null): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $name = trim($data['name'] ?? '');
         $phone = trim($data['phone'] ?? '');
         $email = trim($data['email'] ?? '');
@@ -4394,9 +4446,10 @@ class ShopService {
         }
 
         if ($id) {
-            $existing = Database::fetchOne("SELECT id FROM customers WHERE phone = ? AND id != ?", [$phone, $id]);
+            ConcernTransactionService::assertCustomer($id);
+            $existing = Database::fetchOne("SELECT id FROM customers WHERE concern_id = ? AND phone = ? AND id != ?", [$concernId, $phone, $id]);
         } else {
-            $existing = Database::fetchOne("SELECT id FROM customers WHERE phone = ?", [$phone]);
+            $existing = Database::fetchOne("SELECT id FROM customers WHERE concern_id = ? AND phone = ?", [$concernId, $phone]);
         }
         if ($existing) {
             throw new InvalidArgumentException("A customer with phone number '{$phone}' already exists.");
@@ -4407,7 +4460,7 @@ class ShopService {
                 "UPDATE customers 
                  SET name = ?, phone = ?, email = ?, address = ?, city = ?, state = ?, 
                      gst_number = ?, is_active = ?, updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ?",
                 [
                     $name,
                     $phone,
@@ -4417,7 +4470,8 @@ class ShopService {
                     $state ?: null,
                     $gstNumber ?: null,
                     $isActive,
-                    $id
+                    $id,
+                    $concernId
                 ]
             );
             $customerId = $id;
@@ -4425,9 +4479,10 @@ class ShopService {
         } else {
             $sourceChannel = $data['source_channel'] ?? 'SHOP';
             Database::execute(
-                "INSERT INTO customers (name, phone, email, address, city, state, gst_number, source_channel, is_active, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+                "INSERT INTO customers (concern_id, name, phone, email, address, city, state, gst_number, source_channel, is_active, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
                 [
+                    $concernId,
                     $name,
                     $phone,
                     $email ?: null,
@@ -4443,17 +4498,18 @@ class ShopService {
             AuditService::log('SHOP', 'CREATE_CUSTOMER', 'customers', $customerId, null, ['name' => $name, 'phone' => $phone]);
         }
 
-        return Database::fetchOne("SELECT * FROM customers WHERE id = ?", [$customerId]);
+        return Database::fetchOne("SELECT * FROM customers WHERE id = ? AND concern_id = ?", [$customerId, $concernId]);
     }
 
     /**
      * Toggle Customer Active Status
      */
     public static function toggleCustomerStatus(int $customerId): bool {
-        $cust = Database::fetchOne("SELECT is_active FROM customers WHERE id = ?", [$customerId]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $cust = Database::fetchOne("SELECT is_active FROM customers WHERE id = ? AND concern_id = ?", [$customerId, $concernId]);
         if (!$cust) return false;
         $newStatus = $cust['is_active'] ? 0 : 1;
-        Database::execute("UPDATE customers SET is_active = ?, updated_at = NOW() WHERE id = ?", [$newStatus, $customerId]);
+        Database::execute("UPDATE customers SET is_active = ?, updated_at = NOW() WHERE id = ? AND concern_id = ?", [$newStatus, $customerId, $concernId]);
         AuditService::log('SHOP', 'TOGGLE_CUSTOMER_STATUS', 'customers', $customerId, null, ['new_status' => $newStatus]);
         return (bool)$newStatus;
     }

@@ -4,9 +4,14 @@
  * Line items for return receipts and QC inspection classification.
  */
 
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
+
 class WarehouseReturnItem {
 
     public static function getByReturnId(int $returnId): array {
+        if (!ConcernTransactionService::findOwned('warehouse_returns', $returnId)) {
+            return [];
+        }
         return Database::fetchAll(
             "SELECT wri.*, 
                     pv.sku, pv.qr_code as barcode, pv.mrp, pv.selling_price,
@@ -35,6 +40,7 @@ class WarehouseReturnItem {
     }
 
     public static function create(array $data): int {
+        ConcernTransactionService::assertOwned('warehouse_returns', (int)$data['warehouse_return_id']);
         Database::execute(
             "INSERT INTO warehouse_return_items 
              (warehouse_return_id, variant_id, returned_qty, good_qty, damaged_qty, defective_qty, classification)
@@ -54,15 +60,17 @@ class WarehouseReturnItem {
 
     public static function updateClassification(int $itemId, array $classificationData): bool {
         return Database::execute(
-            "UPDATE warehouse_return_items 
+            "UPDATE warehouse_return_items wri
+             JOIN warehouse_returns wr ON wr.id = wri.warehouse_return_id
              SET good_qty = ?, damaged_qty = ?, defective_qty = ?, classification = ? 
-             WHERE id = ?",
+             WHERE wri.id = ? AND wr.concern_id = ?",
             [
                 $classificationData['good_qty'] ?? 0,
                 $classificationData['damaged_qty'] ?? 0,
                 $classificationData['defective_qty'] ?? 0,
                 $classificationData['classification'] ?? 'GOOD',
-                $itemId
+                $itemId,
+                ConcernTransactionService::activeConcernId()
             ]
         );
     }

@@ -27,23 +27,17 @@ class TransferItem {
     public static function create(array $data): int {
         Database::execute(
             "INSERT INTO transfer_items 
-             (transfer_id, variant_id, quantity, received_qty, damaged_qty)
-             VALUES (?, ?, ?, ?, ?)",
+             (transfer_id, concern_id, variant_id, quantity, requested_qty, transferred_qty, received_qty, damaged_qty, discrepancy_qty)
+             VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0)",
             [
                 $data['transfer_id'],
+                $data['concern_id'],
                 $data['variant_id'],
                 $data['quantity'],
-                $data['received_qty'] ?? 0,
-                $data['damaged_qty'] ?? 0
+                $data['requested_qty'] ?? $data['quantity'],
             ]
         );
         return (int)Database::lastInsertId();
     }
 
-    public static function updateReceivedQty(int $itemId, int $receivedQty, int $damagedQty = 0): bool {
-        return Database::execute(
-            "UPDATE transfer_items SET received_qty = ?, damaged_qty = ? WHERE id = ?",
-            [$receivedQty, $damagedQty, $itemId]
-        );
-    }
 }

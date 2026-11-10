@@ -13,8 +13,21 @@ require_once BASE_PATH . '/app/Services/ProductionInwardService.php';
 require_once BASE_PATH . '/app/Models/QCBatch.php';
 require_once BASE_PATH . '/app/Models/QCItem.php';
 require_once BASE_PATH . '/app/Models/LabelBatch.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ProductionController {
+    private function activeConcernProductionUnitId(): int {
+        $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if (!$unitId) {
+            $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+            $unitId = isset($units[0]['id']) ? (int)$units[0]['id'] : null;
+        }
+        if (!$unitId) {
+            throw new RuntimeException('No production unit is available in the active concern.');
+        }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$unitId);
+        return (int)$unitId;
+    }
 
     /**
      * Production Dashboard.
@@ -371,11 +384,15 @@ class ProductionController {
     }
 
     public function productionPurchaseList(): void {
+        $unitId = $this->activeConcernProductionUnitId();
+        $concernId = ConcernTransactionService::activeConcernId();
         $purchases = Database::fetchAll(
             "SELECT pp.*, s.name AS seller_name, s.company
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
+             WHERE pp.concern_id = ? AND pp.production_unit_id = ?
              ORDER BY pp.purchase_date DESC, pp.id DESC"
+            , [$concernId, $unitId]
         );
         foreach ($purchases as &$purchase) {
             $purchase['items'] = Database::fetchAll(
@@ -390,14 +407,17 @@ class ProductionController {
         unset($purchase);
 
         $totalPurchaseValue = (float)(Database::fetchOne(
-            "SELECT COALESCE(SUM(total_amount), 0) AS total FROM production_purchases"
+            "SELECT COALESCE(SUM(total_amount), 0) AS total FROM production_purchases WHERE concern_id = ? AND production_unit_id = ?",
+            [$concernId, $unitId]
         )['total'] ?? 0);
         $supplyStock = Database::fetchAll(
             "SELECT item_name, unit, SUM(quantity) AS total_quantity, COUNT(*) AS purchase_lines
              FROM production_purchase_items
              WHERE item_type = 'GENERAL_SUPPLY'
+               AND purchase_id IN (SELECT id FROM production_purchases WHERE concern_id = ? AND production_unit_id = ?)
              GROUP BY item_name, unit
-             ORDER BY item_name, unit"
+             ORDER BY item_name, unit",
+            [$concernId, $unitId]
         );
         $fabricRollInventory = Database::fetchAll(
             "SELECT sr.*, s.name AS seller_name, s.company,
@@ -411,7 +431,7 @@ class ProductionController {
                  SELECT ppr.seller_roll_id, SUM(ppr.roll_qty) AS used_quantity
                  FROM production_program_rolls ppr
                  JOIN production_programs pp ON pp.id = ppr.production_program_id
-                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
+                 WHERE pp.production_unit_id = ? AND pp.is_active = 1 AND pp.status != 'CANCELLED'
                  GROUP BY ppr.seller_roll_id
              ) u ON u.seller_roll_id = sr.id
              LEFT JOIN (
@@ -421,7 +441,13 @@ class ProductionController {
                  GROUP BY rd.seller_roll_id
              ) dmg ON dmg.seller_roll_id = sr.id
              WHERE s.seller_type = 'MATERIAL_SUPPLIER'
-             ORDER BY sr.id DESC"
+               AND sr.id IN (
+                   SELECT ppi.seller_roll_id FROM production_purchase_items ppi
+                   JOIN production_purchases purchase ON purchase.id = ppi.purchase_id
+                   WHERE purchase.concern_id = ? AND purchase.production_unit_id = ? AND ppi.seller_roll_id IS NOT NULL
+               )
+             ORDER BY sr.id DESC",
+            [$unitId, $concernId, $unitId]
         );
 
         Response::view('production.purchases.index', [
@@ -454,14 +480,15 @@ class ProductionController {
     }
 
     public function printProductionPurchase(string $id): void {
+        $unitId = $this->activeConcernProductionUnitId();
         $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
                     s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
-             WHERE pp.id = ?",
-            [(int)$id]
+             WHERE pp.id = ? AND pp.concern_id = ? AND pp.production_unit_id = ?",
+            [(int)$id, ConcernTransactionService::activeConcernId(), $unitId]
         );
         if (!$purchase) {
             Response::error(404, 'Purchase record not found.');
@@ -502,14 +529,15 @@ class ProductionController {
     }
 
     private function getProductionPurchase(int $purchaseId): ?array {
+        $unitId = $this->activeConcernProductionUnitId();
         return Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
                     s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
-             WHERE pp.id = ?",
-            [$purchaseId]
+             WHERE pp.id = ? AND pp.concern_id = ? AND pp.production_unit_id = ?",
+            [$purchaseId, ConcernTransactionService::activeConcernId(), $unitId]
         );
     }
 
@@ -577,7 +605,9 @@ class ProductionController {
         }
 
         $purchaseId = (int)$id;
-        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ?", [$purchaseId]);
+        $unitId = $this->activeConcernProductionUnitId();
+        $concernId = ConcernTransactionService::activeConcernId();
+        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$purchaseId, $concernId, $unitId]);
         if (!$purchase) {
             Session::flash('error', 'Purchase record not found.');
             Response::redirect(url('production/purchases'));
@@ -845,9 +875,9 @@ class ProductionController {
                 "UPDATE production_purchases
                  SET purchase_date = ?, invoice_number = ?, document_url = COALESCE(?, document_url),
                      notes = ?, total_amount = ?, updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
                 [$purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null, $documentUrl,
-                    trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId]
+                    trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId, $concernId, $unitId]
             );
             Database::commit();
             AuditService::log('production', 'UPDATE', 'production_purchases', $purchaseId, $purchase, [
@@ -872,7 +902,9 @@ class ProductionController {
             return;
         }
         $purchaseId = (int)$id;
-        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ?", [$purchaseId]);
+        $unitId = $this->activeConcernProductionUnitId();
+        $concernId = ConcernTransactionService::activeConcernId();
+        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$purchaseId, $concernId, $unitId]);
         if (!$purchase) {
             Session::flash('error', 'Purchase record not found.');
             Response::redirect(url('production/purchases'));
@@ -908,7 +940,7 @@ class ProductionController {
                 [$purchaseId]
             );
             $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
-            Database::execute("DELETE FROM production_purchases WHERE id = ?", [$purchaseId]);
+            Database::execute("DELETE FROM production_purchases WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$purchaseId, $concernId, $unitId]);
             Database::commit();
             AuditService::log('production', 'DELETE', 'production_purchases', $purchaseId, $purchase, null);
             Session::flash('success', "Purchase {$purchase['purchase_number']} deleted.");
@@ -1144,22 +1176,24 @@ class ProductionController {
         $invoiceNumber = trim((string)($_POST['invoice_number'] ?? ''));
         $notes = trim((string)($_POST['notes'] ?? ''));
         $userId = (int)(Session::get('user_id') ?? 0);
+        $unitId = $this->activeConcernProductionUnitId();
+        $concernId = ConcernTransactionService::activeConcernId();
 
         try {
             Database::beginTransaction();
             $temporaryNumber = 'TMP-PP-' . bin2hex(random_bytes(12));
             Database::execute(
                 "INSERT INTO production_purchases
-                    (purchase_number, seller_id, purchase_date, invoice_number, document_url, notes, total_amount, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [$temporaryNumber, $sellerId, $purchaseDate, $invoiceNumber !== '' ? $invoiceNumber : null,
+                    (purchase_number, concern_id, production_unit_id, seller_id, purchase_date, invoice_number, document_url, notes, total_amount, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [$temporaryNumber, $concernId, $unitId, $sellerId, $purchaseDate, $invoiceNumber !== '' ? $invoiceNumber : null,
                     $documentUrl, $notes !== '' ? $notes : null, $totalAmount, $userId ?: null]
             );
             $purchaseId = (int)Database::lastInsertId();
             $purchaseNumber = 'PP-' . date('Y', strtotime($purchaseDate)) . '-' . sprintf('%06d', $purchaseId);
             Database::execute(
-                "UPDATE production_purchases SET purchase_number = ? WHERE id = ?",
-                [$purchaseNumber, $purchaseId]
+                "UPDATE production_purchases SET purchase_number = ? WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
+                [$purchaseNumber, $purchaseId, $concernId, $unitId]
             );
 
             foreach ($items as $item) {
@@ -1228,8 +1262,9 @@ class ProductionController {
             "SELECT ppi.id, pp.purchase_number
              FROM production_purchase_items ppi
              JOIN production_purchases pp ON pp.id = ppi.purchase_id
-             WHERE ppi.seller_roll_id = ? LIMIT 1",
-            [(int)$id]
+             WHERE ppi.seller_roll_id = ? AND pp.concern_id = ? AND pp.production_unit_id = ?
+             LIMIT 1",
+            [(int)$id, ConcernTransactionService::activeConcernId(), $this->activeConcernProductionUnitId()]
         );
         if ($purchaseItem) {
             Session::flash('error', 'This fabric roll is part of purchase ' . $purchaseItem['purchase_number'] . '. It cannot be deleted from stock; retain its purchase history.');
@@ -9289,6 +9324,8 @@ class ProductionController {
     // =========================================================================
 
     public function wastageList(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
+        $unitId = $this->activeConcernProductionUnitId();
         $search = trim($_GET['search'] ?? '');
         $type = trim($_GET['type'] ?? '');
         $batchFilter = trim($_GET['cutting_batch_id'] ?? '');
@@ -9307,9 +9344,9 @@ class ProductionController {
                 LEFT JOIN cutting_batches cb ON ws.cutting_batch_id = cb.id
                 LEFT JOIN production_programs pp ON ws.program_id = pp.id
                 LEFT JOIN users u ON ws.created_by = u.id
-                WHERE 1=1";
+                WHERE ws.concern_id = ? AND ws.production_unit_id = ?";
         
-        $params = [];
+        $params = [$concernId, $unitId];
 
         if ($search !== '') {
             $sql .= " AND (
@@ -9350,7 +9387,11 @@ class ProductionController {
         $sales = Database::fetchAll($sql, $params);
 
         // Overall summary stats
-        $allSales = Database::fetchAll("SELECT weight, total_amount, paid_amount, payment_status, wastage_type FROM wastage_sales");
+        $allSales = Database::fetchAll(
+            "SELECT weight, total_amount, paid_amount, payment_status, wastage_type
+             FROM wastage_sales WHERE concern_id = ? AND production_unit_id = ?",
+            [$concernId, $unitId]
+        );
         $totalWeight = (float)array_sum(array_column($allSales, 'weight'));
         $totalAmount = (float)array_sum(array_column($allSales, 'total_amount'));
         $totalPaid = (float)array_sum(array_column($allSales, 'paid_amount'));
@@ -9385,13 +9426,21 @@ class ProductionController {
             LEFT JOIN (
                 SELECT cutting_batch_id, SUM(weight) as sold_weight
                 FROM wastage_sales
-                WHERE cutting_batch_id IS NOT NULL
+                WHERE cutting_batch_id IS NOT NULL AND concern_id = ? AND production_unit_id = ?
                 GROUP BY cutting_batch_id
             ) sold ON cb.id = sold.cutting_batch_id
+            WHERE cb.production_unit_id = ?
             ORDER BY cb.id DESC
-        ");
+        ", [$concernId, $unitId, $unitId]);
 
-        $programs = Database::fetchAll("SELECT id, program_number, name FROM production_programs ORDER BY id DESC LIMIT 50");
+        $programs = Database::fetchAll(
+            "SELECT pp.id, pp.program_number, pp.name
+             FROM production_programs pp
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE pu.concern_id = ? AND pp.production_unit_id = ?
+             ORDER BY pp.id DESC LIMIT 50",
+            [$concernId, $unitId]
+        );
 
         Response::view('production.wastage.index', [
             'pageTitle'      => 'Fabric & Cutting Wastage Selling',
@@ -9420,6 +9469,7 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $cuttingBatchId = !empty($_POST['cutting_batch_id']) ? (int)$_POST['cutting_batch_id'] : null;
         if (!$cuttingBatchId || $cuttingBatchId <= 0) {
             Session::flash('error', 'Select Cutting Module Wastage / Scrap Batch is required.');
@@ -9471,16 +9521,24 @@ class ProductionController {
         }
 
         // Validate cutting batch available wastage balance (excluding current sale)
-        $cb = Database::fetchOne("SELECT id, batch_number, name, program_id, wastage_weight FROM cutting_batches WHERE id = ?", [$cuttingBatchId]);
+        $cb = Database::fetchOne(
+            "SELECT cb.id, cb.batch_number, cb.name, cb.program_id, cb.wastage_weight, cb.production_unit_id
+             FROM cutting_batches cb
+             JOIN production_units pu ON pu.id = cb.production_unit_id
+             WHERE cb.id = ? AND pu.concern_id = ?",
+            [$cuttingBatchId, $concernId]
+        );
         if (!$cb) {
             Session::flash('error', 'Selected cutting batch not found.');
             Response::back();
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$cb['production_unit_id']);
+        $programId = !empty($cb['program_id']) ? (int)$cb['program_id'] : null;
 
         $soldRow = Database::fetchOne(
-            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ? AND id != ?",
-            [$cuttingBatchId, $saleId]
+            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ? AND concern_id = ?",
+            [$cuttingBatchId, $concernId]
         );
         $alreadySold = (float)($soldRow['sold_weight'] ?? 0.0);
         $totalWastage = (float)($cb['wastage_weight'] ?? 0.0);
@@ -9499,7 +9557,13 @@ class ProductionController {
         }
 
         // Validate cutting batch available wastage balance
-        $cb = Database::fetchOne("SELECT id, batch_number, name, program_id, wastage_weight FROM cutting_batches WHERE id = ?", [$cuttingBatchId]);
+        $cb = Database::fetchOne(
+            "SELECT cb.id, cb.batch_number, cb.name, cb.program_id, cb.wastage_weight, cb.production_unit_id
+             FROM cutting_batches cb
+             JOIN production_units pu ON pu.id = cb.production_unit_id
+             WHERE cb.id = ? AND pu.concern_id = ?",
+            [$cuttingBatchId, $concernId]
+        );
         if (!$cb) {
             Session::flash('error', 'Selected cutting batch not found.');
             Response::back();
@@ -9507,8 +9571,8 @@ class ProductionController {
         }
 
         $soldRow = Database::fetchOne(
-            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ?",
-            [$cuttingBatchId]
+            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ? AND concern_id = ?",
+            [$cuttingBatchId, $concernId]
         );
         $alreadySold = (float)($soldRow['sold_weight'] ?? 0.0);
         $totalWastage = (float)($cb['wastage_weight'] ?? 0.0);
@@ -9580,13 +9644,7 @@ class ProductionController {
         $invoiceNumber = !empty($_POST['invoice_number']) ? trim($_POST['invoice_number']) : null;
         $notes = !empty($_POST['notes']) ? trim($_POST['notes']) : null;
 
-        $programId = !empty($_POST['program_id']) ? (int)$_POST['program_id'] : null;
-        if ($cuttingBatchId && !$programId) {
-            $cb = Database::fetchOne("SELECT program_id FROM cutting_batches WHERE id = ?", [$cuttingBatchId]);
-            if ($cb && !empty($cb['program_id'])) {
-                $programId = (int)$cb['program_id'];
-            }
-        }
+        $programId = !empty($cb['program_id']) ? (int)$cb['program_id'] : null;
 
         // Handle photo / bill upload (Cloudinary Cloud Storage)
         $photoUrl = null;
@@ -9603,11 +9661,13 @@ class ProductionController {
 
         try {
             Database::execute(
-                "INSERT INTO wastage_sales 
-                    (sale_number, buyer_name, buyer_phone, buyer_company, cutting_batch_id, program_id, wastage_type, weight, rate_per_kg, total_amount, paid_amount, payment_status, payment_method, payment_reference, invoice_number, sale_date, photo_url, notes, created_by, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                "INSERT INTO wastage_sales
+                    (sale_number, concern_id, production_unit_id, buyer_name, buyer_phone, buyer_company, cutting_batch_id, program_id, wastage_type, weight, rate_per_kg, total_amount, paid_amount, payment_status, payment_method, payment_reference, invoice_number, sale_date, photo_url, notes, created_by, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
                 [
                     $saleNumber,
+                    $concernId,
+                    (int)$cb['production_unit_id'],
                     $buyerName,
                     $buyerPhone,
                     $buyerCompany,
@@ -9652,13 +9712,15 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $saleId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM wastage_sales WHERE id = ?", [$saleId]);
+        $existing = Database::fetchOne("SELECT * FROM wastage_sales WHERE id = ? AND concern_id = ?", [$saleId, $concernId]);
         if (!$existing) {
             Session::flash('error', 'Wastage sale record not found.');
             Response::back();
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$existing['production_unit_id']);
 
         $cuttingBatchId = !empty($_POST['cutting_batch_id']) ? (int)$_POST['cutting_batch_id'] : null;
         if (!$cuttingBatchId || $cuttingBatchId <= 0) {
@@ -9711,16 +9773,24 @@ class ProductionController {
         }
 
         // Validate cutting batch available wastage balance (excluding current sale)
-        $cb = Database::fetchOne("SELECT id, batch_number, name, program_id, wastage_weight FROM cutting_batches WHERE id = ?", [$cuttingBatchId]);
+        $cb = Database::fetchOne(
+            "SELECT cb.id, cb.batch_number, cb.name, cb.program_id, cb.wastage_weight, cb.production_unit_id
+             FROM cutting_batches cb
+             JOIN production_units pu ON pu.id = cb.production_unit_id
+             WHERE cb.id = ? AND pu.concern_id = ?",
+            [$cuttingBatchId, $concernId]
+        );
         if (!$cb) {
             Session::flash('error', 'Selected cutting batch not found.');
             Response::back();
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$cb['production_unit_id']);
+        $programId = !empty($cb['program_id']) ? (int)$cb['program_id'] : null;
 
         $soldRow = Database::fetchOne(
-            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ? AND id != ?",
-            [$cuttingBatchId, $saleId]
+            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ? AND concern_id = ? AND id != ?",
+            [$cuttingBatchId, $concernId, $saleId]
         );
         $alreadySold = (float)($soldRow['sold_weight'] ?? 0.0);
         $totalWastage = (float)($cb['wastage_weight'] ?? 0.0);
@@ -9739,7 +9809,13 @@ class ProductionController {
         }
 
         // Validate cutting batch available wastage balance
-        $cb = Database::fetchOne("SELECT id, batch_number, name, program_id, wastage_weight FROM cutting_batches WHERE id = ?", [$cuttingBatchId]);
+        $cb = Database::fetchOne(
+            "SELECT cb.id, cb.batch_number, cb.name, cb.program_id, cb.wastage_weight, cb.production_unit_id
+             FROM cutting_batches cb
+             JOIN production_units pu ON pu.id = cb.production_unit_id
+             WHERE cb.id = ? AND pu.concern_id = ?",
+            [$cuttingBatchId, $concernId]
+        );
         if (!$cb) {
             Session::flash('error', 'Selected cutting batch not found.');
             Response::back();
@@ -9747,8 +9823,8 @@ class ProductionController {
         }
 
         $soldRow = Database::fetchOne(
-            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ?",
-            [$cuttingBatchId]
+            "SELECT COALESCE(SUM(weight), 0.0) as sold_weight FROM wastage_sales WHERE cutting_batch_id = ? AND concern_id = ?",
+            [$cuttingBatchId, $concernId]
         );
         $alreadySold = (float)($soldRow['sold_weight'] ?? 0.0);
         $totalWastage = (float)($cb['wastage_weight'] ?? 0.0);
@@ -9820,13 +9896,7 @@ class ProductionController {
         $invoiceNumber = !empty($_POST['invoice_number']) ? trim($_POST['invoice_number']) : ($existing['invoice_number'] ?? null);
         $notes = !empty($_POST['notes']) ? trim($_POST['notes']) : ($existing['notes'] ?? null);
 
-        $programId = !empty($_POST['program_id']) ? (int)$_POST['program_id'] : null;
-        if ($cuttingBatchId && !$programId) {
-            $cb = Database::fetchOne("SELECT program_id FROM cutting_batches WHERE id = ?", [$cuttingBatchId]);
-            if ($cb && !empty($cb['program_id'])) {
-                $programId = (int)$cb['program_id'];
-            }
-        }
+        $programId = !empty($cb['program_id']) ? (int)$cb['program_id'] : null;
 
         $photoUrl = $existing['photo_url'];
         if (!empty($_FILES['photo']['name']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
@@ -9843,6 +9913,7 @@ class ProductionController {
                     buyer_phone = ?,
                     buyer_company = ?,
                     cutting_batch_id = ?,
+                    production_unit_id = ?,
                     program_id = ?,
                     wastage_type = ?,
                     weight = ?,
@@ -9857,12 +9928,13 @@ class ProductionController {
                     photo_url = ?,
                     notes = ?,
                     updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ?",
                 [
                     $buyerName,
                     $buyerPhone,
                     $buyerCompany,
                     $cuttingBatchId,
+                    (int)$cb['production_unit_id'],
                     $programId,
                     $wastageType,
                     $weight,
@@ -9876,7 +9948,8 @@ class ProductionController {
                     $saleDate,
                     $photoUrl,
                     $notes ?: null,
-                    $saleId
+                    $saleId,
+                    $concernId
                 ]
             );
 
@@ -9902,16 +9975,18 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $saleId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM wastage_sales WHERE id = ?", [$saleId]);
+        $existing = Database::fetchOne("SELECT * FROM wastage_sales WHERE id = ? AND concern_id = ?", [$saleId, $concernId]);
         if (!$existing) {
             Session::flash('error', 'Wastage sale record not found.');
             Response::back();
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$existing['production_unit_id']);
 
         try {
-            Database::execute("DELETE FROM wastage_sales WHERE id = ?", [$saleId]);
+            Database::execute("DELETE FROM wastage_sales WHERE id = ? AND concern_id = ?", [$saleId, $concernId]);
             AuditService::log('production', 'delete', 'wastage_sales', $saleId, $existing, null);
             Session::flash('success', "Wastage sale #{$existing['sale_number']} deleted successfully.");
             Response::redirect(url('production/wastage'));
@@ -9922,6 +9997,7 @@ class ProductionController {
     }
 
     public function wastageReceipt(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $saleId = (int)$id;
         $sale = Database::fetchOne(
             "SELECT ws.*, 
@@ -9934,14 +10010,15 @@ class ProductionController {
              LEFT JOIN cutting_batches cb ON ws.cutting_batch_id = cb.id
              LEFT JOIN production_programs pp ON ws.program_id = pp.id
              LEFT JOIN users u ON ws.created_by = u.id
-             WHERE ws.id = ?",
-            [$saleId]
+             WHERE ws.id = ? AND ws.concern_id = ?",
+            [$saleId, $concernId]
         );
 
         if (!$sale) {
             Response::error(404, 'Wastage sale record not found.');
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$sale['production_unit_id']);
 
         Response::json([
             'success' => true,
@@ -9954,6 +10031,8 @@ class ProductionController {
     // =========================================================================
 
     public function stitchingWastageList(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
+        $unitId = $this->activeConcernProductionUnitId();
         $search = trim($_GET['search'] ?? '');
         $type = trim($_GET['type'] ?? '');
         $status = trim($_GET['payment_status'] ?? '');
@@ -9971,9 +10050,9 @@ class ProductionController {
                 LEFT JOIN stitching_batches sb ON sws.stitching_batch_id = sb.id
                 LEFT JOIN production_programs pp ON sws.program_id = pp.id
                 LEFT JOIN users u ON sws.created_by = u.id
-                WHERE 1=1";
+                WHERE sws.concern_id = ? AND sws.production_unit_id = ?";
         
-        $params = [];
+        $params = [$concernId, $unitId];
 
         if ($search !== '') {
             $sql .= " AND (
@@ -10019,7 +10098,11 @@ class ProductionController {
         $sales = Database::fetchAll($sql, $params);
 
         // Overall summary stats
-        $allSales = Database::fetchAll("SELECT quantity, unit_type, total_amount, paid_amount, payment_status, waste_type FROM stitching_wastage_sales");
+        $allSales = Database::fetchAll(
+            "SELECT quantity, unit_type, total_amount, paid_amount, payment_status, waste_type
+             FROM stitching_wastage_sales WHERE concern_id = ? AND production_unit_id = ?",
+            [$concernId, $unitId]
+        );
         $totalQty = (float)array_sum(array_column($allSales, 'quantity'));
         $totalAmount = (float)array_sum(array_column($allSales, 'total_amount'));
         $totalPaid = (float)array_sum(array_column($allSales, 'paid_amount'));
@@ -10058,13 +10141,21 @@ class ProductionController {
                        MAX(sale_number) as latest_sale_number,
                        MAX(unit_type) as latest_unit_type
                 FROM stitching_wastage_sales
-                WHERE stitching_batch_id IS NOT NULL
+                WHERE stitching_batch_id IS NOT NULL AND concern_id = ? AND production_unit_id = ?
                 GROUP BY stitching_batch_id
             ) sold ON sb.id = sold.stitching_batch_id
+            WHERE sb.production_unit_id = ?
             ORDER BY sb.id DESC
-        ");
+        ", [$concernId, $unitId, $unitId]);
 
-        $programs = Database::fetchAll("SELECT id, program_number, name FROM production_programs ORDER BY id DESC LIMIT 50");
+        $programs = Database::fetchAll(
+            "SELECT pp.id, pp.program_number, pp.name
+             FROM production_programs pp
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE pu.concern_id = ? AND pp.production_unit_id = ?
+             ORDER BY pp.id DESC LIMIT 50",
+            [$concernId, $unitId]
+        );
 
         Response::view('production.stitching_wastage.index', [
             'pageTitle'        => 'Stitching Scrap & Wastage Selling',
@@ -10094,6 +10185,7 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $stitchingBatchId = !empty($_POST['stitching_batch_id']) ? (int)$_POST['stitching_batch_id'] : null;
         $buyerName = trim($_POST['buyer_name'] ?? '');
         $buyerPhone = trim($_POST['buyer_phone'] ?? '');
@@ -10117,12 +10209,26 @@ class ProductionController {
             return;
         }
 
+        $stitchingBatch = Database::fetchOne(
+            "SELECT sb.id, sb.program_id, sb.production_unit_id
+             FROM stitching_batches sb
+             JOIN production_units pu ON pu.id = sb.production_unit_id
+             WHERE sb.id = ? AND pu.concern_id = ?",
+            [$stitchingBatchId, $concernId]
+        );
+        if (!$stitchingBatch) {
+            Session::flash('error', 'Selected stitching batch does not belong to the active concern.');
+            Response::back();
+            return;
+        }
+        $programId = !empty($stitchingBatch['program_id']) ? (int)$stitchingBatch['program_id'] : null;
+
         // Validation: Prevent duplicate selling of already sold stitching batch scrap
         $alreadySold = Database::fetchOne(
             "SELECT id, sale_number, quantity, unit_type, sale_date 
              FROM stitching_wastage_sales 
-             WHERE stitching_batch_id = ?",
-            [$stitchingBatchId]
+             WHERE stitching_batch_id = ? AND concern_id = ?",
+            [$stitchingBatchId, $concernId]
         );
         if ($alreadySold) {
             $sb = Database::fetchOne("SELECT batch_number, name FROM stitching_batches WHERE id = ?", [$stitchingBatchId]);
@@ -10182,9 +10288,22 @@ class ProductionController {
         }
 
         if ($stitchingBatchId && !$programId) {
-            $sb = Database::fetchOne("SELECT program_id FROM stitching_batches WHERE id = ?", [$stitchingBatchId]);
-            if ($sb && !empty($sb['program_id'])) {
-                $programId = (int)$sb['program_id'];
+            if (!empty($stitchingBatch['program_id'])) {
+                $programId = (int)$stitchingBatch['program_id'];
+            }
+        }
+        if ($programId > 0) {
+            $program = Database::fetchOne(
+                "SELECT pp.id
+                 FROM production_programs pp
+                 JOIN production_units pu ON pu.id = pp.production_unit_id
+                 WHERE pp.id = ? AND pu.concern_id = ?",
+                [$programId, $concernId]
+            );
+            if (!$program) {
+                Session::flash('error', 'Selected production program does not belong to the active concern.');
+                Response::back();
+                return;
             }
         }
 
@@ -10222,11 +10341,13 @@ class ProductionController {
 
         try {
             Database::execute(
-                "INSERT INTO stitching_wastage_sales 
-                    (sale_number, buyer_name, buyer_phone, buyer_company, stitching_batch_id, program_id, waste_type, unit_type, quantity, rate_per_unit, total_amount, paid_amount, payment_status, payment_method, payment_reference, invoice_number, sale_date, photo_url, notes, created_by, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                "INSERT INTO stitching_wastage_sales
+                    (sale_number, concern_id, production_unit_id, buyer_name, buyer_phone, buyer_company, stitching_batch_id, program_id, waste_type, unit_type, quantity, rate_per_unit, total_amount, paid_amount, payment_status, payment_method, payment_reference, invoice_number, sale_date, photo_url, notes, created_by, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
                 [
                     $saleNumber,
+                    $concernId,
+                    (int)$stitchingBatch['production_unit_id'],
                     $buyerName,
                     $buyerPhone ?: null,
                     $buyerCompany ?: null,
@@ -10272,13 +10393,15 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $saleId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM stitching_wastage_sales WHERE id = ?", [$saleId]);
+        $existing = Database::fetchOne("SELECT * FROM stitching_wastage_sales WHERE id = ? AND concern_id = ?", [$saleId, $concernId]);
         if (!$existing) {
             Session::flash('error', 'Stitching wastage sale record not found.');
             Response::back();
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$existing['production_unit_id']);
 
         $stitchingBatchId = !empty($_POST['stitching_batch_id']) ? (int)$_POST['stitching_batch_id'] : (int)($existing['stitching_batch_id'] ?? 0);
         $buyerName = trim($_POST['buyer_name'] ?? $existing['buyer_name']);
@@ -10302,13 +10425,27 @@ class ProductionController {
             Response::back();
             return;
         }
+        $stitchingBatch = Database::fetchOne(
+            "SELECT sb.id, sb.program_id, sb.production_unit_id
+             FROM stitching_batches sb
+             JOIN production_units pu ON pu.id = sb.production_unit_id
+             WHERE sb.id = ? AND pu.concern_id = ?",
+            [$stitchingBatchId, $concernId]
+        );
+        if (!$stitchingBatch) {
+            Session::flash('error', 'Selected stitching batch does not belong to the active concern.');
+            Response::back();
+            return;
+        }
+        $programId = !empty($stitchingBatch['program_id']) ? (int)$stitchingBatch['program_id'] : null;
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$stitchingBatch['production_unit_id']);
 
         // Validation: Prevent updating to another stitching batch whose scrap has already been sold
         $alreadySold = Database::fetchOne(
             "SELECT id, sale_number, quantity, unit_type, sale_date 
              FROM stitching_wastage_sales 
-             WHERE stitching_batch_id = ? AND id != ?",
-            [$stitchingBatchId, $saleId]
+             WHERE stitching_batch_id = ? AND concern_id = ? AND id != ?",
+            [$stitchingBatchId, $concernId, $saleId]
         );
         if ($alreadySold) {
             $sb = Database::fetchOne("SELECT batch_number, name FROM stitching_batches WHERE id = ?", [$stitchingBatchId]);
@@ -10368,9 +10505,8 @@ class ProductionController {
         }
 
         if ($stitchingBatchId && !$programId) {
-            $sb = Database::fetchOne("SELECT program_id FROM stitching_batches WHERE id = ?", [$stitchingBatchId]);
-            if ($sb && !empty($sb['program_id'])) {
-                $programId = (int)$sb['program_id'];
+            if (!empty($stitchingBatch['program_id'])) {
+                $programId = (int)$stitchingBatch['program_id'];
             }
         }
 
@@ -10408,6 +10544,7 @@ class ProductionController {
                     buyer_phone = ?,
                     buyer_company = ?,
                     stitching_batch_id = ?,
+                    production_unit_id = ?,
                     program_id = ?,
                     waste_type = ?,
                     unit_type = ?,
@@ -10423,12 +10560,13 @@ class ProductionController {
                     photo_url = ?,
                     notes = ?,
                     updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ?",
                 [
                     $buyerName,
                     $buyerPhone ?: null,
                     $buyerCompany ?: null,
                     $stitchingBatchId,
+                    (int)$stitchingBatch['production_unit_id'],
                     $programId,
                     $wasteType,
                     $unitType,
@@ -10443,7 +10581,8 @@ class ProductionController {
                     $saleDate,
                     $photoUrl,
                     $notes ?: null,
-                    $saleId
+                    $saleId,
+                    $concernId
                 ]
             );
 
@@ -10469,16 +10608,18 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $saleId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM stitching_wastage_sales WHERE id = ?", [$saleId]);
+        $existing = Database::fetchOne("SELECT * FROM stitching_wastage_sales WHERE id = ? AND concern_id = ?", [$saleId, $concernId]);
         if (!$existing) {
             Session::flash('error', 'Stitching wastage sale record not found.');
             Response::back();
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$existing['production_unit_id']);
 
         try {
-            Database::execute("DELETE FROM stitching_wastage_sales WHERE id = ?", [$saleId]);
+            Database::execute("DELETE FROM stitching_wastage_sales WHERE id = ? AND concern_id = ?", [$saleId, $concernId]);
             AuditService::log('production', 'delete', 'stitching_wastage_sales', $saleId, $existing, null);
             Session::flash('success', "Stitching wastage sale #{$existing['sale_number']} deleted successfully.");
             Response::redirect(url('production/stitching-wastage'));
@@ -10489,6 +10630,7 @@ class ProductionController {
     }
 
     public function stitchingWastageReceipt(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $saleId = (int)$id;
         $sale = Database::fetchOne(
             "SELECT sws.*, 
@@ -10501,14 +10643,15 @@ class ProductionController {
              LEFT JOIN stitching_batches sb ON sws.stitching_batch_id = sb.id
              LEFT JOIN production_programs pp ON sws.program_id = pp.id
              LEFT JOIN users u ON sws.created_by = u.id
-             WHERE sws.id = ?",
-            [$saleId]
+             WHERE sws.id = ? AND sws.concern_id = ?",
+            [$saleId, $concernId]
         );
 
         if (!$sale) {
             Response::error(404, 'Stitching wastage sale record not found.');
             return;
         }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$sale['production_unit_id']);
 
         Response::json([
             'success' => true,
@@ -10521,6 +10664,8 @@ class ProductionController {
     // =========================================================================
 
     public function expensesList(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
+        $productionUnitId = $this->activeConcernProductionUnitId();
         $search = trim($_GET['search'] ?? '');
         $unitFilter = trim($_GET['production_unit'] ?? '');
         $categoryFilter = trim($_GET['category'] ?? '');
@@ -10535,8 +10680,8 @@ class ProductionController {
                 FROM production_expenses pe
                 LEFT JOIN production_programs pp ON pe.program_id = pp.id
                 LEFT JOIN users u ON pe.created_by = u.id
-                WHERE 1=1";
-        $params = [];
+                WHERE pe.concern_id = ? AND pe.production_unit_id = ?";
+        $params = [$concernId, $productionUnitId];
 
         if ($search !== '') {
             $sql .= " AND (
@@ -10581,7 +10726,7 @@ class ProductionController {
         $expenses = Database::fetchAll($sql, $params);
 
         $productionUnitOptions = [];
-        foreach (ProductionUnit::getAll() as $unit) {
+        foreach (getScopedProductionUnits() as $unit) {
             $code = trim((string)($unit['code'] ?? ''));
             if ($code !== '') {
                 $productionUnitOptions[$code] = trim((string)$unit['name']);
@@ -10591,8 +10736,10 @@ class ProductionController {
         $savedProductionUnits = Database::fetchAll(
             "SELECT DISTINCT production_unit
              FROM production_expenses
-             WHERE production_unit IS NOT NULL AND TRIM(production_unit) != ''
-             ORDER BY production_unit ASC"
+             WHERE concern_id = ? AND production_unit_id = ?
+               AND production_unit IS NOT NULL AND TRIM(production_unit) != ''
+             ORDER BY production_unit ASC",
+            [$concernId, $productionUnitId]
         );
         $legacyUnitLabels = [
             'PRODUCTION_1' => 'Production Unit 1',
@@ -10610,12 +10757,14 @@ class ProductionController {
         $savedExpenseCategories = Database::fetchAll(
             "SELECT category AS value
              FROM production_expenses
-             WHERE category IS NOT NULL AND TRIM(category) != ''
+             WHERE concern_id = ? AND production_unit_id = ?
+               AND category IS NOT NULL AND TRIM(category) != ''
              UNION
              SELECT category AS value
              FROM production_expense_items
              WHERE category IS NOT NULL AND TRIM(category) != ''
-             ORDER BY value ASC"
+             ORDER BY value ASC",
+            [$concernId, $productionUnitId]
         );
         $expenseCategoryOptions = [];
         $knownCategoryLabels = [
@@ -10634,7 +10783,11 @@ class ProductionController {
         }
 
         // Overall stats
-        $allExpenses = Database::fetchAll("SELECT production_unit, category, total_cost, paid_amount, payment_status FROM production_expenses");
+        $allExpenses = Database::fetchAll(
+            "SELECT production_unit, category, total_cost, paid_amount, payment_status
+             FROM production_expenses WHERE concern_id = ? AND production_unit_id = ?",
+            [$concernId, $productionUnitId]
+        );
         $totalCost = (float)array_sum(array_column($allExpenses, 'total_cost'));
         $totalPaid = (float)array_sum(array_column($allExpenses, 'paid_amount'));
         $totalPending = max(0.0, $totalCost - $totalPaid);
@@ -10741,6 +10894,8 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
+        $productionUnitId = $this->activeConcernProductionUnitId();
         $productionUnit = trim($_POST['production_unit'] ?? 'PRODUCTION_1');
         $category = 'GENERAL';
         $unitType = 'PCS';
@@ -10786,12 +10941,14 @@ class ProductionController {
                 $expenseNumber = 'EXP-' . date('Y') . '-' . sprintf("%04d", $nextSeq++);
                 Database::execute(
                     "INSERT INTO production_expenses
-                        (expense_number, production_unit, category, item_name,
+                        (expense_number, concern_id, production_unit_id, production_unit, category, item_name,
                          quantity, unit_type, unit_cost, total_cost, paid_amount, payment_status,
                          payment_method, vendor_name, expense_date, photo_url, created_by, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
                     [
                         $expenseNumber,
+                        $concernId,
+                        $productionUnitId,
                         $productionUnit,
                         $category,
                         $line['item_name'],
@@ -10837,8 +10994,13 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
+        $productionUnitId = $this->activeConcernProductionUnitId();
         $expenseId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM production_expenses WHERE id = ?", [$expenseId]);
+        $existing = Database::fetchOne(
+            "SELECT * FROM production_expenses WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
+            [$expenseId, $concernId, $productionUnitId]
+        );
         if (!$existing) {
             Session::flash('error', 'Expense record not found.');
             Response::back();
@@ -10895,7 +11057,7 @@ class ProductionController {
                     paid_amount = ?,
                     photo_url = ?,
                     updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
                 [
                     $itemName,
                     $quantity,
@@ -10903,7 +11065,9 @@ class ProductionController {
                     $totalCost,
                     $totalCost,
                     $photoUrl,
-                    $expenseId
+                    $expenseId,
+                    $concernId,
+                    $productionUnitId
                 ]
             );
 
@@ -10922,8 +11086,13 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
+        $productionUnitId = $this->activeConcernProductionUnitId();
         $expenseId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM production_expenses WHERE id = ?", [$expenseId]);
+        $existing = Database::fetchOne(
+            "SELECT * FROM production_expenses WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
+            [$expenseId, $concernId, $productionUnitId]
+        );
         if (!$existing) {
             Session::flash('error', 'Expense record not found.');
             Response::back();
@@ -10931,7 +11100,10 @@ class ProductionController {
         }
 
         try {
-            Database::execute("DELETE FROM production_expenses WHERE id = ?", [$expenseId]);
+            Database::execute(
+                "DELETE FROM production_expenses WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
+                [$expenseId, $concernId, $productionUnitId]
+            );
             AuditService::log('production', 'delete', 'production_expenses', $expenseId, $existing, null);
             Session::flash('success', "Production expense #{$existing['expense_number']} deleted successfully.");
             Response::redirect(url('production/expenses'));
@@ -10942,6 +11114,8 @@ class ProductionController {
     }
 
     public function expenseReceipt(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
+        $productionUnitId = $this->activeConcernProductionUnitId();
         $expenseId = (int)$id;
         $expense = Database::fetchOne(
             "SELECT pe.*,
@@ -10951,8 +11125,8 @@ class ProductionController {
              FROM production_expenses pe
              LEFT JOIN production_programs pp ON pe.program_id = pp.id
              LEFT JOIN users u ON pe.created_by = u.id
-             WHERE pe.id = ?",
-            [$expenseId]
+             WHERE pe.id = ? AND pe.concern_id = ? AND pe.production_unit_id = ?",
+            [$expenseId, $concernId, $productionUnitId]
         );
 
         if (!$expense) {

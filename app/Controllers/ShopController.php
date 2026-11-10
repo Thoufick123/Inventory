@@ -131,9 +131,9 @@ class ShopController {
         $customers = Database::fetchAll(
             "SELECT id, name, phone, email, address, city, state, gst_number
              FROM customers 
-             WHERE phone LIKE ? OR name LIKE ? 
+             WHERE concern_id = ? AND (phone LIKE ? OR name LIKE ?)
              ORDER BY id DESC LIMIT 10",
-            ['%' . $query . '%', '%' . $query . '%']
+            [ConcernTransactionService::activeConcernId(), '%' . $query . '%', '%' . $query . '%']
         );
 
         Response::jsonSuccess("Customers found", $customers);
@@ -430,10 +430,10 @@ class ShopController {
                     COALESCE(c.phone, s.customer_phone, '-') as customer_phone
              FROM sale_items si
              JOIN sales s ON si.sale_id = s.id
-             LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE si.variant_id = ? AND s.shop_id = ? AND s.sale_type = 'SHOP'
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE si.variant_id = ? AND s.shop_id = ? AND s.concern_id = ? AND s.sale_type = 'SHOP'
              ORDER BY s.created_at DESC",
-            [$variantId, $shopId]
+            [$variantId, $shopId, (int)currentConcernId()]
         );
 
         // 4. Shop Damage History
@@ -454,11 +454,12 @@ class ShopController {
                     COALESCE(c.phone, s.customer_phone, '-') as customer_phone
              FROM return_items ri
              JOIN returns r ON ri.return_id = r.id
-             LEFT JOIN sales s ON r.sale_id = s.id
-             LEFT JOIN customers c ON r.customer_id = c.id
-             WHERE ri.variant_id = ? AND r.source_type = 'SHOP'
+             JOIN sales s ON r.sale_id = s.id AND s.concern_id = r.concern_id
+             LEFT JOIN customers c ON r.customer_id = c.id AND c.concern_id = r.concern_id
+             WHERE ri.variant_id = ? AND r.source_type = 'SHOP' AND r.concern_id = ?
+               AND s.sale_type = 'SHOP' AND s.shop_id = ?
              ORDER BY r.created_at DESC",
-            [$variantId]
+            [$variantId, (int)currentConcernId(), $shopId]
         );
 
         // 6. Shop Customer Exchanges History for this variant (strictly SHOP exchanges)
@@ -469,12 +470,12 @@ class ShopController {
                     COALESCE(c.phone, s.customer_phone, '-') as customer_phone
              FROM exchange_items ei
              JOIN exchanges e ON ei.exchange_id = e.id
-             LEFT JOIN returns r ON e.return_id = r.id
-             LEFT JOIN sales s ON e.sale_id = s.id
-             LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE ei.variant_id = ? AND e.source_type = 'SHOP'
+             JOIN returns r ON e.return_id = r.id AND r.concern_id = e.concern_id AND r.source_type = 'SHOP'
+             JOIN sales s ON e.sale_id = s.id AND s.concern_id = e.concern_id AND s.sale_type = 'SHOP'
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE ei.variant_id = ? AND e.source_type = 'SHOP' AND e.concern_id = ? AND s.shop_id = ?
              ORDER BY e.created_at DESC",
-            [$variantId]
+            [$variantId, (int)currentConcernId(), $shopId]
         );
 
         // 7. Warehouse Returns History (dispatched back to Central Warehouse)
@@ -483,12 +484,12 @@ class ShopController {
                     w.name as destination_warehouse_name
              FROM warehouse_return_items wri
              JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id
-             LEFT JOIN warehouses w ON wr.destination_warehouse_id = w.id
+             LEFT JOIN warehouses w ON wr.destination_warehouse_id = w.id AND w.concern_id = wr.concern_id
              WHERE wri.variant_id = ?
-               AND (wr.source_type = 'SHOP' OR wr.source_id = ?)
+               AND wr.concern_id = ? AND wr.source_type = 'SHOP' AND wr.source_id = ?
                AND wr.status NOT IN ('CANCELLED')
              ORDER BY wr.id DESC",
-            [$variantId, $shopId]
+            [$variantId, (int)currentConcernId(), $shopId]
         );
 
         // Piece tags resolution
@@ -693,6 +694,7 @@ class ShopController {
 
         $shop = ShopService::getActiveShop();
         $shopId = (int)($shop['id'] ?? 1);
+        $concernId = ConcernTransactionService::activeConcernId();
 
         $search = trim($_GET['search'] ?? '');
         $status = trim($_GET['status'] ?? '');
@@ -700,8 +702,13 @@ class ShopController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
-        $where = ["(s.sale_type = 'SHOP' OR (s.sale_type IS NULL AND s.shop_id = {$shopId}))"];
-        $where[] = "(r.source_type = 'SHOP' OR r.source_type IS NULL)";
+        $where = [
+            "s.concern_id = {$concernId}",
+            "r.concern_id = {$concernId}",
+            "s.shop_id = {$shopId}",
+            "s.sale_type = 'SHOP'",
+            "r.source_type = 'SHOP'",
+        ];
         $params = [];
 
         if (!empty($search)) {
@@ -751,8 +758,8 @@ class ShopController {
                     e.payment_action
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
-             LEFT JOIN customers c ON s.customer_id = c.id
-             LEFT JOIN exchanges e ON e.return_id = r.id
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             LEFT JOIN exchanges e ON e.return_id = r.id AND e.concern_id = r.concern_id
              WHERE {$whereClause}
              ORDER BY r.created_at DESC",
             $params
@@ -920,6 +927,7 @@ class ShopController {
 
         $shop = ShopService::getActiveShop();
         $shopId = (int)($shop['id'] ?? 1);
+        $concernId = ConcernTransactionService::activeConcernId();
 
         $saleSql = "SELECT s.*,
                     COALESCE(c.name, s.customer_name, 'Shop Customer') as customer_name,
@@ -930,17 +938,18 @@ class ShopController {
                         FROM returns r
                         LEFT JOIN exchanges e ON e.return_id = r.id
                         WHERE r.sale_id = s.id
+                          AND r.concern_id = s.concern_id
                           AND r.source_type = 'SHOP'
                           AND r.status <> 'CANCELLED'
                           AND (e.id IS NULL OR e.status <> 'CANCELLED')
                     ) as return_exchange_used
              FROM sales s
-             LEFT JOIN customers c ON s.customer_id = c.id
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
         ";
         if ($requestedSaleId > 0) {
             $sales = Database::fetchAll(
-                $saleSql . " WHERE s.id = ? AND s.sale_type = 'SHOP' AND s.shop_id = ? LIMIT 1",
-                [$requestedSaleId, $shopId]
+                $saleSql . " WHERE s.id = ? AND s.sale_type = 'SHOP' AND s.shop_id = ? AND s.concern_id = ? LIMIT 1",
+                [$requestedSaleId, $shopId, $concernId]
             );
         } else {
             $sales = Database::fetchAll(
@@ -961,7 +970,7 @@ class ShopController {
                            OR si_sub.qr_code = ?
                     )
                 )
-                AND s.sale_type = 'SHOP' AND s.shop_id = ?
+                AND s.sale_type = 'SHOP' AND s.shop_id = ? AND s.concern_id = ?
                 ORDER BY s.id DESC",
                 [
                     $term, "%{$term}%",
@@ -970,7 +979,7 @@ class ShopController {
                     "%{$term}%", "%{$term}%",
                     "%{$term}%", $term,
                     "%{$term}%", $term,
-                    $shopId
+                    $shopId, $concernId
                 ]
             );
         }
@@ -1109,8 +1118,8 @@ class ShopController {
             $scanCandidates = array_values(array_unique(array_filter($scanCandidates)));
 
             $sale = Database::fetchOne(
-                "SELECT id FROM sales WHERE id = ? AND sale_type = 'SHOP' AND shop_id = ?",
-                [$saleId, $shopId]
+                "SELECT id FROM sales WHERE id = ? AND sale_type = 'SHOP' AND shop_id = ? AND concern_id = ?",
+                [$saleId, $shopId, (int)currentConcernId()]
             );
             if (!$sale) {
                 Response::jsonError('The selected invoice is not available in the active shop.');
@@ -1320,6 +1329,7 @@ class ShopController {
 
         $shop = ShopService::getActiveShop();
         $shopId = (int)($shop['id'] ?? 1);
+        $concernId = ConcernTransactionService::activeConcernId();
         $userId = Auth::id() ?? Session::userId() ?? 1;
 
         $saleId = (int)($_POST['sale_id'] ?? 0);
@@ -1348,9 +1358,9 @@ class ShopController {
             }
             $sale = Database::fetchOne(
                 "SELECT * FROM sales
-                 WHERE id = ? AND sale_type = 'SHOP' AND shop_id = ?
+                 WHERE id = ? AND sale_type = 'SHOP' AND shop_id = ? AND concern_id = ?
                  FOR UPDATE",
-                [$saleId, $shopId]
+                [$saleId, $shopId, $concernId]
             );
             if (!$sale) {
                 throw new RuntimeException('Shop sale record was not found in the active shop.');
@@ -1360,12 +1370,13 @@ class ShopController {
                 "SELECT r.return_number
                  FROM returns r
                  LEFT JOIN exchanges e ON e.return_id = r.id
-                 WHERE r.sale_id = ? AND r.source_type = 'SHOP'
+                 WHERE r.sale_id = ? AND r.concern_id = ? AND r.source_type = 'SHOP'
+                   AND (e.id IS NULL OR e.concern_id = r.concern_id)
                    AND r.status <> 'CANCELLED'
                    AND (e.id IS NULL OR e.status <> 'CANCELLED')
                  ORDER BY r.id DESC
                  LIMIT 1",
-                [$saleId]
+                [$saleId, $concernId]
             );
             if ($previousReturn) {
                 throw new RuntimeException('This invoice has already been used for a return or exchange. Each invoice can be processed only once.');
@@ -1568,11 +1579,12 @@ class ShopController {
 
         $returnNumber = 'RET-SH-' . date('Ymd') . '-' . mt_rand(1000, 9999);
         Database::execute(
-            "INSERT INTO returns (return_number, source_type, sale_id, customer_id, return_type, reason, inspection_status, 
+            "INSERT INTO returns (return_number, concern_id, source_type, sale_id, customer_id, return_type, reason, inspection_status,
                                  refund_amount, refund_mode, refund_status, total_amount, status, processed_by, approved_by, inspected_by, notes, created_at, updated_at)
-             VALUES (?, 'SHOP', ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+             VALUES (?, ?, 'SHOP', ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, NOW(), NOW())",
             [
                 $returnNumber,
+                (int)currentConcernId(),
                 $saleId,
                 $sale['customer_id'] ?? null,
                 $dbReturnType,
@@ -1634,10 +1646,11 @@ class ShopController {
             $exchNumber = 'EXC-SH-' . date('Ymd') . '-' . mt_rand(1000, 9999);
             $payAction = $differenceAmount > 0 ? 'COLLECT' : ($differenceAmount < 0 ? 'REFUND' : 'NONE');
             Database::execute(
-                "INSERT INTO exchanges (exchange_number, return_id, source_type, sale_id, original_amount, new_amount, difference_amount, settlement_mode, payment_action, status, payment_status, notes, created_at, updated_at)
-                 VALUES (?, ?, 'SHOP', ?, ?, ?, ?, ?, ?, 'COMPLETED', 'PAID', ?, NOW(), NOW())",
+                "INSERT INTO exchanges (exchange_number, concern_id, return_id, source_type, sale_id, original_amount, new_amount, difference_amount, settlement_mode, payment_action, status, payment_status, notes, created_at, updated_at)
+                 VALUES (?, ?, ?, 'SHOP', ?, ?, ?, ?, ?, ?, 'COMPLETED', 'PAID', ?, NOW(), NOW())",
                 [
                     $exchNumber,
+                    (int)currentConcernId(),
                     $returnId,
                     $saleId,
                     $totalReturnVal,
@@ -1727,6 +1740,7 @@ class ShopController {
         }
 
         $shop = ShopService::getActiveShop();
+        $shopId = (int)$shop['id'];
         $return = Database::fetchOne(
             "SELECT r.*, 
                     s.invoice_number as sale_invoice,
@@ -1745,11 +1759,12 @@ class ShopController {
                     u.full_name as processor_name
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
-             LEFT JOIN customers c ON s.customer_id = c.id
-             LEFT JOIN exchanges e ON e.return_id = r.id
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             LEFT JOIN exchanges e ON e.return_id = r.id AND e.concern_id = r.concern_id
              LEFT JOIN users u ON COALESCE(r.approved_by, r.processed_by) = u.id
-             WHERE r.id = ? OR r.return_number = ?",
-            [$id, (string)$id]
+             WHERE (r.id = ? OR r.return_number = ?) AND r.concern_id = ? AND s.concern_id = ?
+               AND r.source_type = 'SHOP' AND s.sale_type = 'SHOP' AND s.shop_id = ?",
+            [$id, (string)$id, (int)currentConcernId(), (int)currentConcernId(), $shopId]
         );
 
         if (!$return) {
@@ -1764,11 +1779,11 @@ class ShopController {
              FROM return_items ri
              JOIN product_variants pv ON ri.variant_id = pv.id
              JOIN products p ON pv.product_id = p.id
-             LEFT JOIN sale_items si ON ri.sale_item_id = si.id
+             LEFT JOIN sale_items si ON ri.sale_item_id = si.id AND si.sale_id = ?
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors clr ON pv.color_id = clr.id
              WHERE ri.return_id = ?",
-            [(int)$return['id']]
+            [(int)$return['sale_id'], (int)$return['id']]
         );
 
         $exchangeItems = [];
@@ -1805,13 +1820,21 @@ class ShopController {
      * AJAX Endpoint: Get Return Details for Modal
      */
     public function ajaxGetReturnDetails(string|int $id): void {
+        if (!hasPermission('shop_returns', 'view')) {
+            Response::jsonError('Access denied: You do not have permission to view shop returns.', [], 403);
+            return;
+        }
+
+        $shop = ShopService::getActiveShop();
+        $shopId = (int)$shop['id'];
         $return = Database::fetchOne(
             "SELECT r.*, s.invoice_number as sale_invoice, c.name as customer_name, c.phone as customer_phone
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
-             LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE r.id = ? OR r.return_number = ?",
-            [$id, (string)$id]
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE (r.id = ? OR r.return_number = ?) AND r.concern_id = ? AND s.concern_id = ?
+               AND r.source_type = 'SHOP' AND s.sale_type = 'SHOP' AND s.shop_id = ?",
+            [$id, (string)$id, (int)currentConcernId(), (int)currentConcernId(), $shopId]
         );
 
         if (!$return) {

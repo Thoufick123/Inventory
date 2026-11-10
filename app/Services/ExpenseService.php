@@ -7,6 +7,7 @@
 
 require_once BASE_PATH . '/app/Services/AuditService.php';
 require_once BASE_PATH . '/app/Services/CloudinaryService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ExpenseService {
 
@@ -15,6 +16,7 @@ class ExpenseService {
      * Format: {PREFIX}-YYYYMMDD-XXXX (e.g. WH-EXP-20260929-0001, WA-EXP-20260929-0001)
      */
     public static function generateVoucherNumber(string $locationType = 'WAREHOUSE', ?string $customPrefix = null): string {
+        $concernId = ConcernTransactionService::activeConcernId();
         $prefix = $customPrefix;
         if (!$prefix) {
             $prefix = match (strtoupper($locationType)) {
@@ -29,8 +31,8 @@ class ExpenseService {
         $today = date('Ymd');
         $searchPattern = "{$prefix}-{$today}-%";
         $lastRecord = Database::fetchOne(
-            "SELECT expense_number FROM expenses WHERE expense_number LIKE ? ORDER BY id DESC LIMIT 1",
-            [$searchPattern]
+            "SELECT expense_number FROM expenses WHERE expense_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+            [$searchPattern, $concernId]
         );
 
         $seq = 1;
@@ -112,7 +114,7 @@ class ExpenseService {
         $locationType = strtoupper(trim($payload['location_type'] ?? 'WAREHOUSE'));
         $locationId = (int)($payload['location_id'] ?? 0);
         $locationName = trim($payload['location_name'] ?? '');
-        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $concernId = ConcernTransactionService::activeConcernId();
         $facilityTables = [
             'PRODUCTION' => 'production_units',
             'WAREHOUSE' => 'warehouses',
@@ -125,6 +127,7 @@ class ExpenseService {
             if ($concernId === null || $locationId <= 0) {
                 throw new InvalidArgumentException('Choose a facility belonging to the active concern.');
             }
+            ConcernTransactionService::assertFacility($locationType, $locationId);
             $facility = Database::fetchOne(
                 "SELECT name, code FROM {$facilityTables[$locationType]} WHERE id = ? AND concern_id = ?",
                 [$locationId, $concernId]
@@ -270,19 +273,20 @@ class ExpenseService {
         try {
             Database::execute(
                 "INSERT INTO expenses (
-                    expense_number, location_type, location_id, location_name,
+                    concern_id, expense_number, location_type, location_id, location_name,
                     category, item_name, description, quantity, unit_type, unit_cost, tax_amount,
                     total_cost, paid_amount, payment_status, payment_method, payment_reference,
                     paid_to, vendor_phone, vendor_company, invoice_number, expense_date,
                     receipt_url, notes, created_by, approved_by, created_at, updated_at
                 ) VALUES (
-                    ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?,
                     ?, ?, ?, 1.00, 'unit', ?, 0.00,
                     ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, NOW(), NOW()
                 )",
                 [
+                    $concernId,
                     $voucherNumber,
                     $locationType,
                     $locationId,
@@ -341,10 +345,11 @@ class ExpenseService {
      * Retrieve scoped expense records for a module/location.
      */
     public static function getExpenses(string $locationType, ?int $locationId = null, array $filters = []): array {
-        $where = ["e.location_type = ?"];
-        $params = [strtoupper(trim($locationType))];
+        $where = ["e.location_type = ?", "e.concern_id = ?"];
+        $params = [strtoupper(trim($locationType)), ConcernTransactionService::activeConcernId()];
 
         if ($locationId !== null && $locationId > 0) {
+            ConcernTransactionService::assertFacility(strtoupper(trim($locationType)), $locationId);
             $where[] = "e.location_id = ?";
             $params[] = $locationId;
         }
@@ -398,10 +403,11 @@ class ExpenseService {
      * Compute Grand KPI Summary and Category Distributions for a Location/Module.
      */
     public static function getSummary(string $locationType, ?int $locationId = null, ?string $startDate = null, ?string $endDate = null): array {
-        $baseWhere = ["location_type = ?"];
-        $baseParams = [strtoupper(trim($locationType))];
+        $baseWhere = ["location_type = ?", "concern_id = ?"];
+        $baseParams = [strtoupper(trim($locationType)), ConcernTransactionService::activeConcernId()];
 
         if ($locationId !== null && $locationId > 0) {
+            ConcernTransactionService::assertFacility(strtoupper(trim($locationType)), $locationId);
             $baseWhere[] = "location_id = ?";
             $baseParams[] = $locationId;
         }
@@ -507,25 +513,34 @@ class ExpenseService {
      * Get Complete Voucher Details for Printing.
      */
     public static function getVoucherDetails(int $id): ?array {
-        return Database::fetchOne(
+        $concernId = ConcernTransactionService::activeConcernId();
+        $expense = Database::fetchOne(
             "SELECT e.*, u.full_name as created_by_name, au.full_name as approved_by_name,
                     u.email as creator_email
              FROM expenses e
              LEFT JOIN users u ON e.created_by = u.id
              LEFT JOIN users au ON e.approved_by = au.id
-             WHERE e.id = ?",
-            [$id]
+             WHERE e.id = ? AND e.concern_id = ?",
+            [$id, $concernId]
         );
+        if ($expense && !empty($expense['location_id'])) {
+            ConcernTransactionService::assertFacility((string)$expense['location_type'], (int)$expense['location_id']);
+        }
+        return $expense;
     }
 
     /**
      * Delete / Cancel an expense record.
      */
     public static function deleteExpense(int $id, int $userId): bool {
-        $exp = Database::fetchOne("SELECT * FROM expenses WHERE id = ?", [$id]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $exp = Database::fetchOne("SELECT * FROM expenses WHERE id = ? AND concern_id = ?", [$id, $concernId]);
         if (!$exp) return false;
+        if (!empty($exp['location_id'])) {
+            ConcernTransactionService::assertFacility((string)$exp['location_type'], (int)$exp['location_id']);
+        }
 
-        Database::execute("DELETE FROM expenses WHERE id = ?", [$id]);
+        Database::execute("DELETE FROM expenses WHERE id = ? AND concern_id = ?", [$id, $concernId]);
 
         AuditService::log('expense_management', 'DELETE_EXPENSE', 'expenses', $id, $exp, [
             'deleted_by' => $userId,

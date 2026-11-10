@@ -81,10 +81,13 @@ Concern isolation design and the current module/data ownership map are documente
       php database/migrations/create_production_return_inventory.php
       php database/migrations/create_staff_concerns.php
       php database/migrations/add_concern_ownership_to_inventory.php
+      php database/migrations/add_concern_ownership_to_business_transactions.php
+      php database/migrations/add_concern_to_concern_transfer_workflow.php
        php database/seed_permissions.php
      ```
    - Hostinger Git deployment updates application files, but does not update the production database. After deploying a release that adds a migration, run that migration against the Hostinger database using Hostinger's PHP terminal/SSH before using the affected feature. Then assign any new permissions to the intended roles/staff in the application.
-   - Concern ownership migrations leave existing operational records unassigned; they are not copied into new concerns. Non-admin operational workflows remain unavailable until each module's concern scoping is completed.
+   - Concern ownership migrations leave existing operational records unassigned; they are not copied into new concerns. Super Admin can review unassigned versus concern-owned counts and selectively assign legacy rows from **Staff → Legacy Concern Data** after the ownership migrations have been applied. Assignments are audited; linked records with their own ownership must be reviewed separately. Most non-admin operational workflows remain unavailable until their module scoping is completed. Concern-to-concern transfers are separately scoped to the source and destination concerns after the transfer migration is applied.
+   - Run the database-independent concern route regression check with `php tests/concern_isolation_rollout_test.php`. It verifies operational routes stay blocked for staff until explicitly enabled; it does not replace database-backed isolation tests.
 
 4. Launch Application:
    - Navigate to: **[http://localhost/grm-inventory/](http://localhost/grm-inventory/)**

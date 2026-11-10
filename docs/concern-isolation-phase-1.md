@@ -141,3 +141,29 @@ Phase 1 is complete as a reviewed implementation map. The open policies and gaps
 - [x] Inward batch/allocation lookup and sales-channel stock resolution no longer use global/demo facility IDs; they validate active concern and assigned warehouse/channel scope.
 
 PHP syntax checks and `git diff --check` passed for the implementation. Database-backed workflow tests were not run in this environment; the checklist records implemented guards and does not claim verification against live records. Phase 3 does not complete the separate end-to-end concern scoping of every operational transaction, report, or cross-concern transfer workflow described in the gap list.
+
+## Phase 7 — legacy and unassigned data
+
+- Existing rows with `concern_id IS NULL` remain unassigned; concern creation does not backfill or copy operational data.
+- Super Admin can use **Staff → Legacy Concern Data** (`/admin/legacy-data`) to compare unassigned counts, total counts, and per-concern counts for ownership-enabled operational tables.
+- The console lists only rows that remain unassigned. Super Admin may deliberately assign up to 50 selected row IDs at a time to an active concern. Each assignment is conditional on the row still having a null concern, performed transactionally, and written to the audit log.
+- The tool only updates the selected table rows. Related records with their own `concern_id` must be reviewed and assigned separately; source/destination transfer workflow data is excluded from generic assignment.
+- No migration or backfill is required for Phase 7. The ownership migrations must already be applied for their tables to appear as available.
+
+## Phase 8 — gradual operational module rollout
+
+- Staff operational routes pass through the central router rollout gate after authentication and role/active-concern module checks. The gate covers routes with explicit `PermissionMiddleware`, the scoped concern-transfer middleware, and routes whose permissions are inferred by the router. An authenticated operational route without a resolvable module policy remains fail-closed.
+- The temporary blanket lockout is now a module allowlist in `config/concern_module_rollout.php`. A module is enabled for staff only when it is listed there **and** the existing route permission checks confirm that the active concern selected it and the staff role grants the requested action.
+- The allowlist is intentionally empty. The isolation map records outstanding unscoped workflows, and database-backed end-to-end checks have not been performed, so no operational module currently meets the release criterion. This leaves staff operational routes unavailable while Super Admin retains the existing administrative access.
+- The prior special bypasses for `/production/dashboard` and concern transfers have been removed for staff. Dashboards, APIs, quick actions, writes, reports, and prints do not become available based on navigation visibility alone.
+- To roll out a module, first complete and test its whole route/API/action/report workflow, then add its exact selectable module key to the allowlist. Keep incomplete related module keys disabled. Do not add a key based solely on a successful syntax check or a scoped list page.
+- Global staff/system administration routes remain governed by their existing global permissions and are not operational module rollout entries.
+
+## Phase 9 — regression verification status
+
+- [x] Added a dependency-free route regression harness at `tests/concern_isolation_rollout_test.php`. It dispatches every authenticated non-global operational route through the real router and asserts the route cannot reach a controller while operational modules remain disabled.
+- [x] The harness checks direct production URLs under different active concern module selections, denied role permissions, an altered transfer receipt ID, and AJAX requests.
+- [ ] Database-backed two-concern tests remain required for facility ownership, stock mutations, billing, returns, transfer receipt/discrepancies, linked-row integrity, unassigned legacy visibility, reports/search/export/print, and refresh/replay behavior.
+- [ ] No operational module should be added to the rollout allowlist until its complete database-backed isolation suite passes against an isolated test database. The current allowlist stays empty and staff operations remain locked out.
+
+Phase 9 is **not fully complete**: the staff lockout and route-gate behavior are regression tested, but the repository has no safe test database or existing fixture framework configured here. The full cross-concern data-path acceptance criteria cannot be verified without a dedicated test database and representative fixtures; no production or developer database was modified.

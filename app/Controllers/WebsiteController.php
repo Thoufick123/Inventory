@@ -8,6 +8,7 @@
 
 require_once BASE_PATH . '/app/Services/StockService.php';
 require_once BASE_PATH . '/app/Services/ShopService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 require_once BASE_PATH . '/app/Models/ChannelDamage.php';
 require_once BASE_PATH . '/app/Models/WarehouseReturn.php';
 require_once BASE_PATH . '/app/Models/WarehouseReturnItem.php';
@@ -76,6 +77,7 @@ class WebsiteController {
             return;
         }
         $chan = $this->getChannel();
+        $concernId = ConcernTransactionService::activeConcernId();
         list($allocWhereSql, $allocWhereParams) = $this->buildWebsiteAllocWhere('wa');
 
         $search = trim($_GET['search'] ?? '');
@@ -184,7 +186,9 @@ class WebsiteController {
                     COALESCE(SUM((SELECT SUM(quantity) FROM sale_items WHERE sale_id = s.id)), 0) as sold_qty
              FROM sales s
              WHERE (s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%')
-               AND s.status != 'CANCELLED'"
+               AND s.concern_id = ?
+               AND s.status != 'CANCELLED'",
+            [$concernId]
         );
 
         $orderCount   = (int)($salesStats['order_count'] ?? 0);
@@ -226,8 +230,10 @@ class WebsiteController {
                     s.created_at as date
              FROM sales s
              LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%'
-             ORDER BY s.created_at DESC LIMIT 10"
+             WHERE s.concern_id = ?
+               AND (s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%')
+             ORDER BY s.created_at DESC LIMIT 10",
+            [$concernId]
         );
 
         Response::view('website_orders.index', [
@@ -2049,8 +2055,8 @@ class WebsiteController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
-        $where = ["(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%')"];
-        $params = [];
+        $where = ["s.concern_id = ?", "(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%')"];
+        $params = [ConcernTransactionService::activeConcernId()];
 
         if (!empty($search)) {
             $where[] = "(s.invoice_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ? OR s.notes LIKE ? OR s.biller_name LIKE ? OR c.address LIKE ? OR s.customer_address LIKE ?)";
@@ -2496,9 +2502,9 @@ class WebsiteController {
              LEFT JOIN warehouses w ON wr.warehouse_id = w.id
              LEFT JOIN sales_channels sc ON wr.source_id = sc.id
              LEFT JOIN users u ON wr.received_by = u.id
-             WHERE wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)
+             WHERE wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders) AND wr.concern_id = ?
              ORDER BY wr.created_at DESC",
-            $channelIds
+            array_merge($channelIds, [ConcernTransactionService::activeConcernId()])
         );
 
         Response::view('website_orders.damage.outward_list', [
@@ -2550,6 +2556,8 @@ class WebsiteController {
         $userId = Session::get('user_id') ?? 1;
 
         $warehouseId = (int)($_POST['warehouse_id'] ?? 1);
+        ConcernTransactionService::assertFacility('WEBSITE', $channelId);
+        ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
         $vehicleNo   = trim($_POST['vehicle_number'] ?? '');
         $driverName  = trim($_POST['driver_name'] ?? '');
         $driverPhone = trim($_POST['driver_phone'] ?? '');
@@ -2564,7 +2572,7 @@ class WebsiteController {
         }
 
         $today = date('Ymd');
-        $lastBatch = Database::fetchOne("SELECT return_number FROM warehouse_returns WHERE return_number LIKE 'RET-WEB-{$today}-%' ORDER BY id DESC LIMIT 1");
+        $lastBatch = Database::fetchOne("SELECT return_number FROM warehouse_returns WHERE return_number LIKE 'RET-WEB-{$today}-%' AND concern_id = ?", [ConcernTransactionService::activeConcernId()]);
         $seq = 1;
         if ($lastBatch && !empty($lastBatch['return_number'])) {
             $parts = explode('-', $lastBatch['return_number']);
@@ -2582,10 +2590,11 @@ class WebsiteController {
 
         Database::execute(
             "INSERT INTO warehouse_returns 
-             (return_number, source_type, source_id, warehouse_id, destination_id, status, notes, received_by, created_at, updated_at)
-             VALUES (?, 'CHANNEL', ?, ?, ?, 'DISPATCHED', ?, ?, NOW(), NOW())",
+             (return_number, concern_id, source_type, source_id, warehouse_id, destination_id, status, notes, received_by, created_at, updated_at)
+             VALUES (?, ?, 'CHANNEL', ?, ?, ?, 'DISPATCHED', ?, ?, NOW(), NOW())",
             [
                 $returnNumber,
+                ConcernTransactionService::activeConcernId(),
                 $channelId,
                 $warehouseId,
                 $warehouseId,
@@ -2651,8 +2660,8 @@ class WebsiteController {
              LEFT JOIN warehouses w ON wr.warehouse_id = w.id
              LEFT JOIN sales_channels sc ON wr.source_id = sc.id
              LEFT JOIN users u ON wr.received_by = u.id
-             WHERE wr.id = ?",
-            [$id]
+             WHERE wr.id = ? AND wr.concern_id = ?",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$batch) return null;
@@ -3091,8 +3100,8 @@ class WebsiteController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
-        $where = ["r.source_type = 'WEBSITE'", "(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')"];
-        $params = [];
+        $where = ["r.concern_id = ?", "s.concern_id = r.concern_id", "r.source_type = 'WEBSITE'", "(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')"];
+        $params = [ConcernTransactionService::activeConcernId()];
 
         if (!empty($search)) {
             $where[] = "(r.return_number LIKE ? OR s.invoice_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ?)";
@@ -3140,7 +3149,7 @@ class WebsiteController {
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
              LEFT JOIN customers c ON s.customer_id = c.id
-             LEFT JOIN exchanges e ON e.return_id = r.id
+             LEFT JOIN exchanges e ON e.return_id = r.id AND e.concern_id = r.concern_id
              WHERE {$whereClause}
              ORDER BY r.created_at DESC",
             $params
@@ -3200,6 +3209,7 @@ class WebsiteController {
     }
 
     public function websiteReturnsLookup(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $term = trim($_REQUEST['q'] ?? $_REQUEST['query'] ?? $_REQUEST['term'] ?? $_REQUEST['invoice_number'] ?? $_REQUEST['search'] ?? '');
         if (empty($term)) {
             Response::jsonError("Please provide an invoice number, customer phone, or piece QR tag.");
@@ -3213,10 +3223,10 @@ class WebsiteController {
                     "SELECT s.*, COALESCE(c.name, s.customer_name, 'Website Customer') as customer_name,
                             COALESCE(c.phone, s.customer_phone, '-') as customer_phone, c.email as customer_email
                      FROM sales s LEFT JOIN customers c ON s.customer_id = c.id
-                     WHERE (c.phone LIKE ? OR s.customer_phone LIKE ?)
+                     WHERE s.concern_id = ? AND (c.phone LIKE ? OR s.customer_phone LIKE ?)
                        AND (s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')
                      ORDER BY s.id DESC LIMIT 50",
-                    ["%{$phoneTerm}%", "%{$phoneTerm}%"]
+                    [$concernId, "%{$phoneTerm}%", "%{$phoneTerm}%"]
                 );
                 $phoneOrders = [];
                 foreach ($phoneSales as $phoneSale) {
@@ -3249,8 +3259,8 @@ class WebsiteController {
                     }
                     unset($phoneItem);
                     $existingInvoiceReturn = Database::fetchOne(
-                        "SELECT id, return_number FROM returns WHERE sale_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
-                        [(int)$phoneSale['id']]
+                        "SELECT id, return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
+                        [(int)$phoneSale['id'], $concernId]
                     );
                     $phoneOrders[] = [
                         'sale' => $phoneSale,
@@ -3289,6 +3299,7 @@ class WebsiteController {
                        OR si_sub.qr_code = ?
                 )
              )
+             AND s.concern_id = ?
              AND (s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')
              ORDER BY s.id DESC LIMIT 1",
             [
@@ -3297,7 +3308,8 @@ class WebsiteController {
                 $term, "%{$term}%", 
                 "%{$term}%", "%{$term}%", 
                 "%{$term}%", $term,
-                "%{$term}%", $term
+                "%{$term}%", $term,
+                $concernId
             ]
         );
 
@@ -3342,8 +3354,8 @@ class WebsiteController {
         unset($it);
 
         $existingInvoiceReturn = Database::fetchOne(
-            "SELECT id, return_number FROM returns WHERE sale_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
-            [(int)$sale['id']]
+            "SELECT id, return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
+            [(int)$sale['id'], $concernId]
         );
 
         Response::jsonSuccess("Website Sale record loaded successfully", [
@@ -3650,7 +3662,13 @@ class WebsiteController {
             return;
         }
 
-        $sale = Database::fetchOne("SELECT * FROM sales WHERE id = ?", [$saleId]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $sale = Database::fetchOne(
+            "SELECT * FROM sales
+             WHERE id = ? AND concern_id = ?
+               AND (sales_channel = 'WEBSITE' OR sale_type = 'WEBSITE' OR notes LIKE '%Website%' OR invoice_number LIKE 'WEB-%')",
+            [$saleId, $concernId]
+        );
         if (!$sale) {
             Session::flash('error', 'Website sale record not found.');
             Response::redirect(url('warehouse/website-orders/returns'));
@@ -3670,8 +3688,8 @@ class WebsiteController {
         }
 
         $existingInvoiceReturn = Database::fetchOne(
-            "SELECT return_number FROM returns WHERE sale_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
-            [$saleId]
+            "SELECT return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
+            [$saleId, $concernId]
         );
         if ($existingInvoiceReturn) {
             Session::flash('error', "Invoice {$sale['invoice_number']} was already returned/exchanged under {$existingInvoiceReturn['return_number']}.");
@@ -3681,6 +3699,9 @@ class WebsiteController {
 
         $chan = $this->getChannel();
         $channelId = (int)$chan['id'];
+        if (!empty($sale['sales_channel_id'])) {
+            ConcernTransactionService::assertFacility('WEBSITE', (int)$sale['sales_channel_id']);
+        }
         $websiteChannelIds = $this->getWebsiteChannelIds();
         $validatedItems = [];
         $replacementQtyByVariant = [];
@@ -3926,10 +3947,10 @@ class WebsiteController {
                 throw new RuntimeException('Unable to start Website return transaction.');
             }
 
-            Database::fetchOne("SELECT id FROM sales WHERE id = ? FOR UPDATE", [$saleId]);
+            Database::fetchOne("SELECT id FROM sales WHERE id = ? AND concern_id = ? FOR UPDATE", [$saleId, $concernId]);
             $lockedInvoiceReturn = Database::fetchOne(
-                "SELECT return_number FROM returns WHERE sale_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
-                [$saleId]
+                "SELECT return_number FROM returns WHERE sale_id = ? AND concern_id = ? AND source_type = 'WEBSITE' ORDER BY id DESC LIMIT 1",
+                [$saleId, $concernId]
             );
             if ($lockedInvoiceReturn) {
                 Database::rollback();
@@ -3940,11 +3961,12 @@ class WebsiteController {
 
             $returnNumber = 'RET-WEB-' . date('Ymd') . '-' . mt_rand(1000, 9999);
             Database::execute(
-                "INSERT INTO returns (return_number, source_type, sale_id, customer_id, return_type, reason, inspection_status,
+                "INSERT INTO returns (return_number, concern_id, source_type, sale_id, customer_id, return_type, reason, inspection_status,
                                      refund_amount, refund_mode, refund_status, total_amount, status, processed_by, approved_by, notes, created_at, updated_at)
-                 VALUES (?, 'WEBSITE', ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, NOW(), NOW())",
+                 VALUES (?, ?, 'WEBSITE', ?, ?, ?, ?, 'APPROVED', ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, NOW(), NOW())",
                 [
                     $returnNumber,
+                    $concernId,
                     $saleId,
                     $sale['customer_id'] ?? null,
                     $dbReturnType,
@@ -4005,10 +4027,11 @@ class WebsiteController {
                 $exchNumber = 'EXC-WEB-' . date('Ymd') . '-' . mt_rand(1000, 9999);
                 $payAction = $differenceAmount > 0 ? 'COLLECT' : ($differenceAmount < 0 ? 'REFUND' : 'NONE');
                 Database::execute(
-                    "INSERT INTO exchanges (exchange_number, return_id, source_type, sale_id, original_amount, new_amount, difference_amount, settlement_mode, payment_action, status, payment_status, notes, created_at, updated_at)
-                     VALUES (?, ?, 'WEBSITE', ?, ?, ?, ?, ?, ?, 'COMPLETED', 'PAID', ?, NOW(), NOW())",
+                    "INSERT INTO exchanges (exchange_number, concern_id, return_id, source_type, sale_id, original_amount, new_amount, difference_amount, settlement_mode, payment_action, status, payment_status, notes, created_at, updated_at)
+                     VALUES (?, ?, ?, 'WEBSITE', ?, ?, ?, ?, ?, ?, 'COMPLETED', 'PAID', ?, NOW(), NOW())",
                     [
                         $exchNumber,
+                        $concernId,
                         $returnId,
                         $saleId,
                         $totalReturnVal,
@@ -4123,10 +4146,10 @@ class WebsiteController {
              FROM returns r
              JOIN sales s ON r.sale_id = s.id
              LEFT JOIN customers c ON s.customer_id = c.id
-             LEFT JOIN exchanges e ON e.return_id = r.id
+             LEFT JOIN exchanges e ON e.return_id = r.id AND e.concern_id = r.concern_id
              LEFT JOIN users u ON r.processed_by = u.id
-             WHERE r.id = ?",
-            [$id]
+             WHERE r.id = ? AND r.concern_id = ? AND r.source_type = 'WEBSITE'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$return) {
@@ -4179,8 +4202,8 @@ class WebsiteController {
      */
     public function websiteCustomers(): void {
         $search = trim($_GET['search'] ?? '');
-        $where = ["(s.sales_channel = 'WEBSITE' OR s.notes LIKE '%Website%')"];
-        $params = [];
+        $where = ["s.concern_id = ?", "(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%')"];
+        $params = [ConcernTransactionService::activeConcernId()];
 
         if (!empty($search)) {
             $where[] = "(c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)";
@@ -4698,10 +4721,10 @@ class WebsiteController {
                 FROM warehouse_returns wr
                 JOIN warehouses w ON wr.warehouse_id = w.id
                 LEFT JOIN users u ON wr.inspected_by = u.id
-                WHERE (wr.source_type = 'WEBSITE' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders))) 
+                WHERE wr.concern_id = ? AND (wr.source_type = 'WEBSITE' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)))
                   AND wr.source_id IN ($placeholders)";
         
-        $params = array_merge($chanIds, $chanIds);
+        $params = array_merge([ConcernTransactionService::activeConcernId()], $chanIds, $chanIds);
 
         if (!empty($filters['status']) && $filters['status'] !== 'ALL') {
             $sql .= " AND wr.status = ?";
@@ -4723,9 +4746,9 @@ class WebsiteController {
                           SUM(CASE WHEN wr.status IN ('RECEIVED', 'INSPECTING') THEN 1 ELSE 0 END) as in_transit_count,
                           SUM(CASE WHEN wr.status IN ('CLASSIFIED', 'COMPLETED') THEN 1 ELSE 0 END) as completed_count
                    FROM warehouse_returns wr
-                   WHERE (wr.source_type = 'WEBSITE' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)))
+                   WHERE wr.concern_id = ? AND (wr.source_type = 'WEBSITE' OR (wr.source_type = 'CHANNEL' AND wr.source_id IN ($placeholders)))
                      AND wr.source_id IN ($placeholders)";
-        $kpis = Database::fetchOne($kpiSql, array_merge($chanIds, $chanIds)) ?: [
+        $kpis = Database::fetchOne($kpiSql, array_merge([ConcernTransactionService::activeConcernId()], $chanIds, $chanIds)) ?: [
             'total_dispatches'     => 0,
             'total_units_returned' => 0,
             'in_transit_count'     => 0,
@@ -4743,6 +4766,8 @@ class WebsiteController {
      */
     private function createWebsiteWarehouseReturn(int $channelId, array $payload, int $userId): array {
         $warehouseId = (int)($payload['warehouse_id'] ?? 0);
+        ConcernTransactionService::assertFacility('WEBSITE', $channelId);
+        ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
         if ($warehouseId <= 0) {
             throw new InvalidArgumentException("Please select a destination warehouse.");
         }
@@ -4801,8 +4826,8 @@ class WebsiteController {
             $today = date('Ymd');
             $prefix = 'RET-WEB-' . $today . '-';
             $last = Database::fetchOne(
-                "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT return_number FROM warehouse_returns WHERE return_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', ConcernTransactionService::activeConcernId()]
             );
             $seq = 1;
             if ($last && !empty($last['return_number'])) {
@@ -4825,9 +4850,9 @@ class WebsiteController {
             $serializedNotes = json_encode($notesData);
 
             Database::execute(
-                "INSERT INTO warehouse_returns (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, created_at, updated_at)
-                 VALUES (?, 'WEBSITE', ?, ?, ?, ?, 'RECEIVED', ?, NOW(), NOW())",
-                [$returnNumber, $channelId, $warehouseId, $warehouseId, $reason, $serializedNotes]
+                "INSERT INTO warehouse_returns (return_number, concern_id, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes, created_at, updated_at)
+                 VALUES (?, ?, 'WEBSITE', ?, ?, ?, ?, 'RECEIVED', ?, NOW(), NOW())",
+                [$returnNumber, ConcernTransactionService::activeConcernId(), $channelId, $warehouseId, $warehouseId, $reason, $serializedNotes]
             );
             $returnId = (int)Database::lastInsertId();
 
@@ -4945,8 +4970,8 @@ class WebsiteController {
             }
             $notesData['item_qr_codes'] = $itemQrCodes;
             Database::execute(
-                "UPDATE warehouse_returns SET notes = ? WHERE id = ?",
-                [json_encode($notesData), $returnId]
+                "UPDATE warehouse_returns SET notes = ? WHERE id = ? AND concern_id = ?",
+                [json_encode($notesData), $returnId, ConcernTransactionService::activeConcernId()]
             );
 
             if (class_exists('AuditService')) {
@@ -4984,8 +5009,8 @@ class WebsiteController {
              JOIN warehouses w ON wr.warehouse_id = w.id
              LEFT JOIN sales_channels sc ON (wr.source_id = sc.id)
              LEFT JOIN users u ON wr.inspected_by = u.id
-             WHERE wr.id = ? OR wr.return_number = ?",
-            [$returnId, (string)$returnId]
+             WHERE (wr.id = ? OR wr.return_number = ?) AND wr.concern_id = ?",
+            [$returnId, (string)$returnId, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$ret) return null;

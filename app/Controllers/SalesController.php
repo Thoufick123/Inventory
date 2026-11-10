@@ -8,6 +8,7 @@ require_once BASE_PATH . '/app/Services/StockService.php';
 require_once BASE_PATH . '/app/Services/CloudinaryService.php';
 require_once BASE_PATH . '/app/Models/ShopDamage.php';
 require_once BASE_PATH . '/app/Models/ChannelDamage.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class SalesController {
 
@@ -57,9 +58,10 @@ class SalesController {
              FROM sale_items si
              JOIN sales s ON s.id = si.sale_id
              WHERE COALESCE(s.status, '') != 'CANCELLED'
+               AND s.concern_id = ?
                AND FIND_IN_SET(?, REPLACE(si.scanned_qr_codes, ', ', ',')) > 0
              LIMIT 1",
-            [$tag]
+            [ConcernTransactionService::activeConcernId(), $tag]
         );
     }
 
@@ -127,9 +129,9 @@ class SalesController {
             "SELECT ai.selected_qr_codes, ai.received_qr_codes, ai.received_qty, ai.damaged_qty
              FROM allocation_items ai
              JOIN warehouse_allocations wa ON wa.id = ai.allocation_id
-             WHERE ai.variant_id = ? AND wa.status != 'CANCELLED'
+             WHERE ai.variant_id = ? AND wa.status != 'CANCELLED' AND wa.concern_id = ?
                AND (" . implode(' OR ', $scopeParts) . ")",
-            $params
+            array_merge([$variantId, ConcernTransactionService::activeConcernId()], array_slice($params, 1))
         );
 
         $availableReceivedTags = [];
@@ -552,7 +554,7 @@ class SalesController {
             return;
         }
 
-        $customers = Database::fetchAll("SELECT * FROM customers ORDER BY name ASC");
+        $customers = Database::fetchAll("SELECT * FROM customers WHERE concern_id = ? ORDER BY name ASC", [ConcernTransactionService::activeConcernId()]);
         $users = Database::fetchAll("SELECT id, full_name, username FROM users WHERE is_active = 1 ORDER BY full_name ASC");
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.product_id, pv.sku, pv.qr_code, pv.mrp, pv.selling_price, pv.qr_type, pv.pack_quantity,
@@ -703,16 +705,19 @@ class SalesController {
             }
         }
 
+        if ($customerId > 0) {
+            ConcernTransactionService::assertCustomer($customerId);
+        }
         if (!$customerId && !empty($customerName) && !empty($customerPhone)) {
             Database::execute(
-                "INSERT INTO customers (name, phone, address, state, pincode, source_channel, created_at) VALUES (?, ?, ?, ?, ?, 'WEBSITE', NOW())",
-                [$customerName, $customerPhone, $customerAddress, $customerState, $customerPincode]
+                "INSERT INTO customers (name, phone, address, state, pincode, source_channel, concern_id, created_at) VALUES (?, ?, ?, ?, ?, 'WEBSITE', ?, NOW())",
+                [$customerName, $customerPhone, $customerAddress, $customerState, $customerPincode, ConcernTransactionService::activeConcernId()]
             );
             $customerId = (int)Database::lastInsertId();
         } elseif ($customerId > 0) {
             Database::execute(
-                "UPDATE customers SET address = ?, state = ?, pincode = ? WHERE id = ?",
-                [$customerAddress, $customerState, $customerPincode, $customerId]
+                "UPDATE customers SET address = ?, state = ?, pincode = ? WHERE id = ? AND concern_id = ?",
+                [$customerAddress, $customerState, $customerPincode, $customerId, ConcernTransactionService::activeConcernId()]
             );
         }
 
@@ -745,7 +750,7 @@ class SalesController {
         }
 
         $prefix = 'WEB-' . date('Ymd') . '-';
-        $last = Database::fetchOne("SELECT invoice_number FROM sales WHERE invoice_number LIKE ? ORDER BY id DESC LIMIT 1", [$prefix . '%']);
+        $last = Database::fetchOne("SELECT invoice_number FROM sales WHERE invoice_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1", [$prefix . '%', ConcernTransactionService::activeConcernId()]);
         $seq = $last ? ((int)substr($last['invoice_number'], -4) + 1) : 1;
         $invoiceNumber = $prefix . str_pad((string)$seq, 4, '0', STR_PAD_LEFT);
 
@@ -823,6 +828,11 @@ class SalesController {
         $shops = function_exists('getScopedShops') ? getScopedShops() : [];
         $shop = $shops[0] ?? null;
         $shopId = $shop ? (int)$shop['id'] : null;
+        $channelId = (int)(function_exists('currentChannelId') ? (currentChannelId() ?: 0) : 0);
+        if ($channelId <= 0) {
+            $channelId = (int)($channelIds[0] ?? 0);
+        }
+        ConcernTransactionService::assertFacility('WEBSITE', $channelId);
 
         $stockUserId = $billerId > 0 && Database::fetchOne("SELECT id FROM users WHERE id = ?", [$billerId])
             ? $billerId
@@ -830,9 +840,9 @@ class SalesController {
         try {
             Database::beginTransaction();
             Database::execute(
-                "INSERT INTO sales (invoice_number, sale_type, shop_id, customer_id, customer_address, subtotal, discount_amount, taxable_amount, gst_percentage, gst_amount, cgst_amount, sgst_amount, shipping_cost, total_amount, paid_amount, payment_mode, payment_status, status, sales_channel, biller_id, billing_staff_id, employee_name, employee_code, biller_name, notes, created_at)
-                 VALUES (?, 'WEBSITE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DELIVERED', 'WEBSITE', ?, ?, ?, ?, ?, ?, NOW())",
-                [$invoiceNumber, $shopId, $customerId ?: null, $fullAddress, $taxableSubtotal, $discountAmount, $taxableSubtotal, $gstPercentage, $gstAmount, $cgstAmount, $sgstAmount, $shippingCost, $grandTotalAmount, ($paymentStatus === 'PAID' ? $grandTotalAmount : 0.0), $paymentMode, $paymentStatus, $billerId ?: null, $billingStaffId ?: null, $employeeName, $employeeCode, $billerName, $notes]
+                "INSERT INTO sales (invoice_number, sale_type, shop_id, sales_channel_id, concern_id, customer_id, customer_address, subtotal, discount_amount, taxable_amount, gst_percentage, gst_amount, cgst_amount, sgst_amount, shipping_cost, total_amount, paid_amount, payment_mode, payment_status, status, sales_channel, biller_id, billing_staff_id, employee_name, employee_code, biller_name, notes, created_at)
+                 VALUES (?, 'WEBSITE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DELIVERED', 'WEBSITE', ?, ?, ?, ?, ?, ?, NOW())",
+                [$invoiceNumber, $shopId, $channelId, ConcernTransactionService::activeConcernId(), $customerId ?: null, $fullAddress, $taxableSubtotal, $discountAmount, $taxableSubtotal, $gstPercentage, $gstAmount, $cgstAmount, $sgstAmount, $shippingCost, $grandTotalAmount, ($paymentStatus === 'PAID' ? $grandTotalAmount : 0.0), $paymentMode, $paymentStatus, $billerId ?: null, $billingStaffId ?: null, $employeeName, $employeeCode, $billerName, $notes]
             );
             $saleId = (int)Database::lastInsertId();
 
@@ -885,13 +895,20 @@ class SalesController {
         $sale = Database::fetchOne(
             "SELECT s.*, c.name as customer_name, c.phone as customer_phone, c.address as customer_db_address
              FROM sales s
-             LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE s.id = ?",
-            [$id]
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE s.id = ? AND s.concern_id = ? AND s.sale_type = 'WEBSITE'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$sale) {
             Session::flash('error', 'Website order not found.');
+            Response::redirect(url('warehouse/website-orders'));
+            return;
+        }
+        try {
+            ConcernTransactionService::assertFacility('WEBSITE', (int)$sale['sales_channel_id']);
+        } catch (InvalidArgumentException $e) {
+            Session::flash('error', 'Website order not found in the active sales channel.');
             Response::redirect(url('warehouse/website-orders'));
             return;
         }
@@ -905,8 +922,9 @@ class SalesController {
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN categories c ON p.category_id = c.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
-             WHERE si.sale_id = ?",
-            [$id]
+             JOIN sales s ON s.id = si.sale_id
+             WHERE si.sale_id = ? AND s.concern_id = ? AND s.sale_type = 'WEBSITE'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         Response::view('sales.website.view', [
@@ -931,7 +949,26 @@ class SalesController {
 
         CSRF::verify();
         $status = trim($_POST['status'] ?? 'COMPLETED');
-        Database::execute("UPDATE sales SET status = ?, payment_status = ? WHERE id = ?", [$status, $status === 'CANCELLED' ? 'REFUNDED' : 'PAID', $id]);
+        $sale = Database::fetchOne(
+            "SELECT id, sales_channel_id FROM sales WHERE id = ? AND concern_id = ? AND sale_type = 'WEBSITE'",
+            [$id, ConcernTransactionService::activeConcernId()]
+        );
+        if (!$sale) {
+            Session::flash('error', 'Website order not found in the active concern.');
+            Response::redirect(url('warehouse/website-orders'));
+            return;
+        }
+        try {
+            ConcernTransactionService::assertFacility('WEBSITE', (int)$sale['sales_channel_id']);
+        } catch (InvalidArgumentException $e) {
+            Session::flash('error', 'Website order not found in the active sales channel.');
+            Response::redirect(url('warehouse/website-orders'));
+            return;
+        }
+        Database::execute(
+            "UPDATE sales SET status = ?, payment_status = ? WHERE id = ? AND concern_id = ? AND sales_channel_id = ?",
+            [$status, $status === 'CANCELLED' ? 'REFUNDED' : 'PAID', $id, ConcernTransactionService::activeConcernId(), (int)$sale['sales_channel_id']]
+        );
         Session::flash('success', "Website Order updated to {$status}.");
         Response::redirect(url('sales/website/view/' . $id));
     }
@@ -951,7 +988,7 @@ class SalesController {
             return;
         }
 
-        $customers = Database::fetchAll("SELECT * FROM customers ORDER BY name ASC");
+        $customers = Database::fetchAll("SELECT * FROM customers WHERE concern_id = ? ORDER BY name ASC", [ConcernTransactionService::activeConcernId()]);
         $users = Database::fetchAll("SELECT id, full_name, username FROM users WHERE is_active = 1 ORDER BY full_name ASC");
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.product_id, pv.sku, pv.qr_code, pv.mrp, pv.selling_price, pv.qr_type, pv.pack_quantity,
@@ -1034,10 +1071,10 @@ class SalesController {
         $customers = Database::fetchAll(
             "SELECT id, name, phone, address, state, pincode
              FROM customers
-             WHERE phone LIKE ? OR name LIKE ?
+             WHERE concern_id = ? AND (phone LIKE ? OR name LIKE ?)
              ORDER BY CASE WHEN phone = ? THEN 0 ELSE 1 END, id DESC
              LIMIT 10",
-            [$wild, $wild, $query]
+            [ConcernTransactionService::activeConcernId(), $wild, $wild, $query]
         );
         Response::jsonSuccess('Customer matches loaded', $customers);
     }
@@ -1052,10 +1089,10 @@ class SalesController {
         $customers = Database::fetchAll(
             "SELECT id, name, phone, address, state, pincode
              FROM customers
-             WHERE phone LIKE ? OR name LIKE ?
+             WHERE concern_id = ? AND (phone LIKE ? OR name LIKE ?)
              ORDER BY CASE WHEN phone = ? THEN 0 ELSE 1 END, id DESC
              LIMIT 10",
-            [$wild, $wild, $query]
+            [ConcernTransactionService::activeConcernId(), $wild, $wild, $query]
         );
         Response::jsonSuccess('Customer matches loaded', $customers);
     }
@@ -1132,8 +1169,8 @@ class SalesController {
             return;
         }
 
-        if ($customerId > 0 && !Database::fetchOne("SELECT id FROM customers WHERE id = ?", [$customerId])) {
-            $customerId = 0;
+        if ($customerId > 0) {
+            ConcernTransactionService::assertCustomer($customerId);
         }
 
         $channelIds = $this->getSalesChannelLocationIds('WHATSAPP');
@@ -1152,14 +1189,14 @@ class SalesController {
 
         if (!$customerId && !empty($customerName) && !empty($customerPhone)) {
             Database::execute(
-                "INSERT INTO customers (name, phone, address, state, pincode, source_channel, created_at) VALUES (?, ?, ?, ?, ?, 'WHATSAPP', NOW())",
-                [$customerName, $customerPhone, $customerAddress, $customerState, $customerPincode]
+                "INSERT INTO customers (name, phone, address, state, pincode, source_channel, concern_id, created_at) VALUES (?, ?, ?, ?, ?, 'WHATSAPP', ?, NOW())",
+                [$customerName, $customerPhone, $customerAddress, $customerState, $customerPincode, ConcernTransactionService::activeConcernId()]
             );
             $customerId = (int)Database::lastInsertId();
         } elseif ($customerId > 0) {
             Database::execute(
-                "UPDATE customers SET address = ?, state = ?, pincode = ? WHERE id = ?",
-                [$customerAddress, $customerState, $customerPincode, $customerId]
+                "UPDATE customers SET address = ?, state = ?, pincode = ? WHERE id = ? AND concern_id = ?",
+                [$customerAddress, $customerState, $customerPincode, $customerId, ConcernTransactionService::activeConcernId()]
             );
         }
 
@@ -1192,7 +1229,7 @@ class SalesController {
         }
 
         $prefix = 'WA-' . date('Ymd') . '-';
-        $last = Database::fetchOne("SELECT invoice_number FROM sales WHERE invoice_number LIKE ? ORDER BY id DESC LIMIT 1", [$prefix . '%']);
+        $last = Database::fetchOne("SELECT invoice_number FROM sales WHERE invoice_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1", [$prefix . '%', ConcernTransactionService::activeConcernId()]);
         $seq = $last ? ((int)substr($last['invoice_number'], -4) + 1) : 1;
         $invoiceNumber = $prefix . str_pad((string)$seq, 4, '0', STR_PAD_LEFT);
 
@@ -1266,6 +1303,11 @@ class SalesController {
         $shops = function_exists('getScopedShops') ? getScopedShops() : [];
         $shop = $shops[0] ?? null;
         $shopId = $shop ? (int)$shop['id'] : null;
+        $channelId = (int)(function_exists('currentChannelId') ? (currentChannelId() ?: 0) : 0);
+        if ($channelId <= 0) {
+            $channelId = (int)($channelIds[0] ?? 0);
+        }
+        ConcernTransactionService::assertFacility('WHATSAPP', $channelId);
 
         $stockUserId = $billerId > 0 && Database::fetchOne("SELECT id FROM users WHERE id = ?", [$billerId])
             ? $billerId
@@ -1273,9 +1315,9 @@ class SalesController {
         try {
             Database::beginTransaction();
             Database::execute(
-                "INSERT INTO sales (invoice_number, sale_type, shop_id, customer_id, customer_address, subtotal, discount_amount, taxable_amount, gst_percentage, gst_amount, cgst_amount, sgst_amount, shipping_cost, total_amount, paid_amount, payment_mode, payment_status, status, sales_channel, biller_id, billing_staff_id, employee_name, employee_code, biller_name, notes, created_at)
-                 VALUES (?, 'WHATSAPP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DELIVERED', 'WHATSAPP', ?, ?, ?, ?, ?, ?, NOW())",
-                [$invoiceNumber, $shopId, $customerId ?: null, $fullAddress, $taxableSubtotal, $discountAmount, $taxableSubtotal, $gstPercentage, $gstAmount, $cgstAmount, $sgstAmount, $shippingCost, $grandTotalAmount, ($paymentStatus === 'PAID' ? $grandTotalAmount : 0.0), $paymentMode, $paymentStatus, $billerId ?: null, $billingStaffId ?: null, $employeeName, $employeeCode, $billerName, $notes]
+                "INSERT INTO sales (invoice_number, sale_type, shop_id, sales_channel_id, concern_id, customer_id, customer_address, subtotal, discount_amount, taxable_amount, gst_percentage, gst_amount, cgst_amount, sgst_amount, shipping_cost, total_amount, paid_amount, payment_mode, payment_status, status, sales_channel, biller_id, billing_staff_id, employee_name, employee_code, biller_name, notes, created_at)
+                 VALUES (?, 'WHATSAPP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DELIVERED', 'WHATSAPP', ?, ?, ?, ?, ?, ?, NOW())",
+                [$invoiceNumber, $shopId, $channelId, ConcernTransactionService::activeConcernId(), $customerId ?: null, $fullAddress, $taxableSubtotal, $discountAmount, $taxableSubtotal, $gstPercentage, $gstAmount, $cgstAmount, $sgstAmount, $shippingCost, $grandTotalAmount, ($paymentStatus === 'PAID' ? $grandTotalAmount : 0.0), $paymentMode, $paymentStatus, $billerId ?: null, $billingStaffId ?: null, $employeeName, $employeeCode, $billerName, $notes]
             );
             $saleId = (int)Database::lastInsertId();
 
@@ -1328,13 +1370,20 @@ class SalesController {
         $sale = Database::fetchOne(
             "SELECT s.*, c.name as customer_name, c.phone as customer_phone, c.address as customer_db_address
              FROM sales s
-             LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE s.id = ?",
-            [$id]
+             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
+             WHERE s.id = ? AND s.concern_id = ? AND s.sale_type = 'WHATSAPP'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$sale) {
             Session::flash('error', 'WhatsApp order not found.');
+            Response::redirect(url('warehouse/whatsapp-orders'));
+            return;
+        }
+        try {
+            ConcernTransactionService::assertFacility('WHATSAPP', (int)$sale['sales_channel_id']);
+        } catch (InvalidArgumentException $e) {
+            Session::flash('error', 'WhatsApp order not found in the active sales channel.');
             Response::redirect(url('warehouse/whatsapp-orders'));
             return;
         }
@@ -1348,8 +1397,9 @@ class SalesController {
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN categories c ON p.category_id = c.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
-             WHERE si.sale_id = ?",
-            [$id]
+             JOIN sales s ON s.id = si.sale_id
+             WHERE si.sale_id = ? AND s.concern_id = ? AND s.sale_type = 'WHATSAPP'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         Response::view('sales.whatsapp.view', [
@@ -1375,7 +1425,26 @@ class SalesController {
         CSRF::verify();
         $status = trim($_POST['status'] ?? 'DELIVERED');
         if ($status === 'COMPLETED') $status = 'DELIVERED';
-        Database::execute("UPDATE sales SET status = ?, payment_status = ? WHERE id = ?", [$status, $status === 'CANCELLED' ? 'REFUNDED' : 'PAID', $id]);
+        $sale = Database::fetchOne(
+            "SELECT id, sales_channel_id FROM sales WHERE id = ? AND concern_id = ? AND sale_type = 'WHATSAPP'",
+            [$id, ConcernTransactionService::activeConcernId()]
+        );
+        if (!$sale) {
+            Session::flash('error', 'WhatsApp order not found in the active concern.');
+            Response::redirect(url('warehouse/whatsapp-orders'));
+            return;
+        }
+        try {
+            ConcernTransactionService::assertFacility('WHATSAPP', (int)$sale['sales_channel_id']);
+        } catch (InvalidArgumentException $e) {
+            Session::flash('error', 'WhatsApp order not found in the active sales channel.');
+            Response::redirect(url('warehouse/whatsapp-orders'));
+            return;
+        }
+        Database::execute(
+            "UPDATE sales SET status = ?, payment_status = ? WHERE id = ? AND concern_id = ? AND sales_channel_id = ?",
+            [$status, $status === 'CANCELLED' ? 'REFUNDED' : 'PAID', $id, ConcernTransactionService::activeConcernId(), (int)$sale['sales_channel_id']]
+        );
         Session::flash('success', "WhatsApp Order updated to {$status}.");
         Response::redirect(url('sales/whatsapp/view/' . $id));
     }

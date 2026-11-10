@@ -4,13 +4,16 @@
  * Handles supplier goods receipt notes, verification, and warehouse intake.
  */
 
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
+
 class PurchaseInward {
 
     /**
      * Find purchase inward by ID.
      */
     public static function find(int $id): ?array {
-        return Database::fetchOne(
+        $concernId = ConcernTransactionService::activeConcernId();
+        $inward = Database::fetchOne(
             "SELECT pi.*, 
                     po.po_number, po.order_date,
                     s.name as seller_name, s.company as seller_company,
@@ -23,15 +26,20 @@ class PurchaseInward {
              JOIN warehouses w ON pi.warehouse_id = w.id
              LEFT JOIN users u_rec ON pi.received_by = u_rec.id
              LEFT JOIN users u_ver ON pi.verified_by = u_ver.id
-             WHERE pi.id = ?",
-            [$id]
+             WHERE pi.id = ? AND pi.concern_id = ? AND po.concern_id = ? AND w.concern_id = ?",
+            [$id, $concernId, $concernId, $concernId]
         );
+        if ($inward) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', (int)$inward['warehouse_id']);
+        }
+        return $inward;
     }
 
     /**
      * Get all purchase inwards with filters.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sql = "SELECT pi.*, 
                        po.po_number,
                        s.name as seller_name,
@@ -42,12 +50,21 @@ class PurchaseInward {
                 JOIN sellers s ON po.seller_id = s.id
                 JOIN warehouses w ON pi.warehouse_id = w.id
                 LEFT JOIN users u_rec ON pi.received_by = u_rec.id
-                WHERE 1=1";
-        $params = [];
+                WHERE pi.concern_id = ? AND po.concern_id = ? AND w.concern_id = ?";
+        $params = [$concernId, $concernId, $concernId];
 
         if (!empty($filters['warehouse_id'])) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', (int)$filters['warehouse_id']);
             $sql .= " AND pi.warehouse_id = ?";
             $params[] = (int)$filters['warehouse_id'];
+        } else {
+            $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+            $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+            if (!$warehouseIds) {
+                return [];
+            }
+            $sql .= " AND pi.warehouse_id IN (" . implode(',', array_fill(0, count($warehouseIds), '?')) . ")";
+            $params = array_merge($params, $warehouseIds);
         }
 
         if (!empty($filters['purchase_order_id'])) {
@@ -74,14 +91,26 @@ class PurchaseInward {
      * Create purchase inward record.
      */
     public static function create(array $data): int {
+        $concernId = ConcernTransactionService::activeConcernId();
+        $purchaseOrderId = (int)$data['purchase_order_id'];
+        $warehouseId = (int)$data['warehouse_id'];
+        ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
+        ConcernTransactionService::assertOwned('purchase_orders', $purchaseOrderId);
+        if (!Database::fetchOne(
+            'SELECT id FROM purchase_orders WHERE id = ? AND concern_id = ? AND warehouse_id = ?',
+            [$purchaseOrderId, $concernId, $warehouseId]
+        )) {
+            throw new InvalidArgumentException('Purchase order and warehouse must belong to the active concern.');
+        }
         Database::execute(
             "INSERT INTO purchase_inwards 
-             (purchase_order_id, grn_number, warehouse_id, received_date, received_by, verified_by, notes, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())",
+             (concern_id, purchase_order_id, grn_number, warehouse_id, received_date, received_by, verified_by, notes, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
-                (int)$data['purchase_order_id'],
+                $concernId,
+                $purchaseOrderId,
                 $data['grn_number'],
-                (int)$data['warehouse_id'],
+                $warehouseId,
                 $data['received_date'] ?? date('Y-m-d'),
                 $data['received_by'] ?? null,
                 $data['verified_by'] ?? null,

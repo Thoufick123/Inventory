@@ -69,16 +69,19 @@ class Router {
 
                 $hasAuthMiddleware = in_array('AuthMiddleware', $route['middleware'], true);
                 if ($hasAuthMiddleware && !$this->hasPermissionMiddleware($route['middleware'])) {
-                    $this->enforceInferredPermission($url, $method, $route);
+                    if (!$this->hasConcernTransferPermissionMiddleware($route['middleware'])) {
+                        $this->enforceInferredPermission($url, $method, $route);
+                    }
                 }
 
                 $allowedStaffPaths = [
                     'admin/staff',
+                    'admin/legacy-data',
                     'admin/roles',
+                    'admin/dashboard',
                     'admin/concern/select',
                     'concern/activate',
                     'admin/change-password',
-                    'production/dashboard',
                     'logout',
                 ];
                 $normalizedUrl = trim($url, '/');
@@ -92,8 +95,29 @@ class Router {
                     }
                 }
                 if ($hasAuthMiddleware && !isSuperAdmin() && !$isStaffAdminPath) {
-                    Response::error(503, 'This module is temporarily unavailable while its concern-specific data isolation is being completed.');
-                    return;
+                    $modules = $this->getEligibleRouteModules($normalizedUrl, $method, $route);
+                    if (!in_array('__global__', $modules, true)) {
+                        if (!$modules) {
+                            Response::error(503, 'This workflow remains unavailable to staff until its isolation policy is verified.');
+                            return;
+                        }
+
+                        $moduleEnabled = false;
+                        foreach ($modules as $module) {
+                            if (ConcernModuleRollout::isEnabled($module)) {
+                                $moduleEnabled = true;
+                                break;
+                            }
+                        }
+                        if (!$moduleEnabled) {
+                            $moduleNames = implode(', ', array_map(
+                                static fn(string $module): string => ucwords(str_replace('_', ' ', $module)),
+                                $modules
+                            ));
+                            Response::error(503, $moduleNames . ' is not enabled for staff yet. It will be available after its complete concern-isolation checks pass.');
+                            return;
+                        }
+                    }
                 }
 
                 // Load and instantiate controller
@@ -130,6 +154,62 @@ class Router {
         return false;
     }
 
+    private function hasConcernTransferPermissionMiddleware(array $middleware): bool {
+        foreach ($middleware as $mw) {
+            if (is_array($mw) && ($mw[0] ?? null) === 'ConcernTransferPermissionMiddleware') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function getEligibleRouteModules(string $path, string $method, array $route): array {
+        foreach ($route['middleware'] as $mw) {
+            if (!is_array($mw)) {
+                continue;
+            }
+
+            if (($mw[0] ?? null) === 'PermissionMiddleware' && !empty($mw[1])) {
+                $module = (string)$mw[1];
+                return isGlobalConcernModule($module) ? ['__global__'] : [$module];
+            }
+            if (($mw[0] ?? null) === 'ConcernTransferPermissionMiddleware') {
+                return ['warehouse'];
+            }
+        }
+
+        $access = $this->inferRoutePermission($path, $method, $route['action']);
+        if ($access === null) {
+            return [];
+        }
+
+        $requirements = $access['requirements'] ?? array_map(
+            static fn(string $module): array => ['module' => $module, 'action' => $access['action']],
+            $access['modules']
+        );
+        $eligibleModules = [];
+        $hasEligibleGlobalModule = false;
+        foreach ($requirements as $requirement) {
+            $module = (string)$requirement['module'];
+            if (!hasRolePermission($module, (string)$requirement['action'])) {
+                continue;
+            }
+            if (isGlobalConcernModule($module)) {
+                $hasEligibleGlobalModule = true;
+                continue;
+            }
+            if (!concernHasModule($module)) {
+                continue;
+            }
+            $eligibleModules[] = $module;
+        }
+
+        if ($eligibleModules) {
+            return array_values(array_unique($eligibleModules));
+        }
+        return $hasEligibleGlobalModule ? ['__global__'] : [];
+    }
+
     private function enforceInferredPermission(string $url, string $method, array $route): void {
         $path = trim($url, '/');
 
@@ -137,9 +217,6 @@ class Router {
             return;
         }
         if ($path === 'admin/dashboard') {
-            if (!isSuperAdmin()) {
-                Response::error(503, 'The dashboard is temporarily unavailable until its concern-specific data isolation is completed.');
-            }
             return;
         }
 
@@ -512,6 +589,8 @@ class Router {
         $this->post('admin/staff/concerns/store', 'AdminController', 'storeConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'create']]);
         $this->post('admin/staff/concerns/update/{id}', 'AdminController', 'updateConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
         $this->post('admin/staff/concerns/delete/{id}', 'AdminController', 'deleteConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'delete']]);
+        $this->get('admin/legacy-data', 'AdminController', 'legacyConcernData', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'view']]);
+        $this->post('admin/legacy-data/assign', 'AdminController', 'assignLegacyConcernData', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
         $this->get('admin/roles', 'AdminController', 'roles', ['AuthMiddleware', ['PermissionMiddleware', 'roles', 'view']]);
         $this->get('admin/roles/create', 'AdminController', 'createRole', ['AuthMiddleware', ['PermissionMiddleware', 'roles', 'create']]);
         $this->post('admin/roles/store', 'AdminController', 'storeRole', ['AuthMiddleware', ['PermissionMiddleware', 'roles', 'create']]);
@@ -1143,11 +1222,11 @@ class Router {
         $this->post('warehouse/delivery/confirm/{id}', 'WarehouseController', 'confirmDelivery', ['AuthMiddleware', ['PermissionMiddleware', 'allocation_outward', 'deliver']]);
 
         // Transfers
-        $this->get('warehouse/transfers', 'WarehouseController', 'transferList', ['AuthMiddleware', ['PermissionMiddleware', 'warehouse', 'view']]);
-        $this->get('warehouse/transfers/create', 'WarehouseController', 'createTransfer', ['AuthMiddleware', ['PermissionMiddleware', 'warehouse', 'create']]);
-        $this->post('warehouse/transfers/store', 'WarehouseController', 'storeTransfer', ['AuthMiddleware', ['PermissionMiddleware', 'warehouse', 'create']]);
-        $this->post('warehouse/transfers/approve/{id}', 'WarehouseController', 'approveTransfer', ['AuthMiddleware', ['PermissionMiddleware', 'warehouse', 'approve']]);
-        $this->post('warehouse/transfers/receive/{id}', 'WarehouseController', 'receiveTransfer', ['AuthMiddleware', ['PermissionMiddleware', 'warehouse', 'receive']]);
+        $this->get('warehouse/transfers', 'WarehouseController', 'transferList', ['AuthMiddleware', ['ConcernTransferPermissionMiddleware', 'view']]);
+        $this->get('warehouse/transfers/create', 'WarehouseController', 'createTransfer', ['AuthMiddleware', ['ConcernTransferPermissionMiddleware', 'create']]);
+        $this->post('warehouse/transfers/store', 'WarehouseController', 'storeTransfer', ['AuthMiddleware', ['ConcernTransferPermissionMiddleware', 'create']]);
+        $this->post('warehouse/transfers/approve/{id}', 'WarehouseController', 'approveTransfer', ['AuthMiddleware', ['ConcernTransferPermissionMiddleware', 'approve']]);
+        $this->post('warehouse/transfers/receive/{id}', 'WarehouseController', 'receiveTransfer', ['AuthMiddleware', ['ConcernTransferPermissionMiddleware', 'receive']]);
 
         // Stock Adjustments
         $this->get('warehouse/adjustments', 'WarehouseController', 'adjustmentList', ['AuthMiddleware', ['PermissionMiddleware', 'stock', 'view']]);

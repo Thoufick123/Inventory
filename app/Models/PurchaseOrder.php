@@ -5,6 +5,7 @@
  */
 
 require_once __DIR__ . '/PurchaseItem.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class PurchaseOrder {
     private static bool $productEditTrackingReady = false;
@@ -13,7 +14,7 @@ class PurchaseOrder {
      * Find purchase order by ID.
      */
     public static function find(int $id): ?array {
-        return Database::fetchOne(
+        $purchase = Database::fetchOne(
             "SELECT po.*, 
                     c.name as customer_name, c.phone as customer_phone, c.email as customer_email, 
                     c.city as customer_city, c.state as customer_state, c.gst_number as customer_gst,
@@ -24,30 +25,38 @@ class PurchaseOrder {
                     w.name as warehouse_name, w.code as warehouse_code,
                     u.full_name as created_by_name
              FROM purchase_orders po
-             LEFT JOIN customers c ON po.customer_id = c.id
+             LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
              LEFT JOIN sellers s ON po.seller_id = s.id
              JOIN warehouses w ON po.warehouse_id = w.id
              LEFT JOIN users u ON po.created_by = u.id
-             WHERE po.id = ?",
-            [$id]
+             WHERE po.id = ? AND po.concern_id = ? AND w.concern_id = ?",
+            [$id, ConcernTransactionService::activeConcernId(), ConcernTransactionService::activeConcernId()]
         );
+        if ($purchase) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', (int)$purchase['warehouse_id']);
+        }
+        return $purchase;
     }
 
     /**
      * Find purchase order by PO / Order number.
      */
     public static function findByNumber(string $poNumber): ?array {
-        return Database::fetchOne(
+        $purchase = Database::fetchOne(
             "SELECT po.*, 
                     COALESCE(c.name, s.name, 'Direct Customer') as display_customer_name,
                     w.name as warehouse_name
              FROM purchase_orders po
-             LEFT JOIN customers c ON po.customer_id = c.id
+             LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
              LEFT JOIN sellers s ON po.seller_id = s.id
              JOIN warehouses w ON po.warehouse_id = w.id
-             WHERE po.po_number = ?",
-            [$poNumber]
+             WHERE po.po_number = ? AND po.concern_id = ? AND w.concern_id = ?",
+            [$poNumber, ConcernTransactionService::activeConcernId(), ConcernTransactionService::activeConcernId()]
         );
+        if ($purchase) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', (int)$purchase['warehouse_id']);
+        }
+        return $purchase;
     }
 
     /**
@@ -65,7 +74,7 @@ class PurchaseOrder {
                        COALESCE(pi_count.total_ordered_qty, 0) as total_ordered_qty,
                        COALESCE(cust_orders.cust_order_count, 1) as customer_total_orders
                 FROM purchase_orders po
-                LEFT JOIN customers c ON po.customer_id = c.id
+                LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
                 LEFT JOIN sellers s ON po.seller_id = s.id
                 JOIN warehouses w ON po.warehouse_id = w.id
                 LEFT JOIN users u ON po.created_by = u.id
@@ -77,11 +86,13 @@ class PurchaseOrder {
                 LEFT JOIN (
                     SELECT customer_id, COUNT(*) as cust_order_count
                     FROM purchase_orders
-                    WHERE customer_id IS NOT NULL AND warehouse_supplier_id IS NULL AND seller_id IS NULL
+                    WHERE concern_id = " . (int)ConcernTransactionService::activeConcernId() . "
+                      AND customer_id IS NOT NULL AND warehouse_supplier_id IS NULL AND seller_id IS NULL
                     GROUP BY customer_id
                 ) cust_orders ON po.customer_id = cust_orders.customer_id
-                WHERE 1=1";
-        $params = [];
+                WHERE po.concern_id = ? AND w.concern_id = ?";
+        $concernId = ConcernTransactionService::activeConcernId();
+        $params = [$concernId, $concernId];
 
         if (!empty($filters['only_direct'])) {
             $sql .= " AND (po.warehouse_supplier_id IS NULL AND po.seller_id IS NULL)";
@@ -93,8 +104,17 @@ class PurchaseOrder {
         }
 
         if (!empty($filters['warehouse_id'])) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', (int)$filters['warehouse_id']);
             $sql .= " AND po.warehouse_id = ?";
             $params[] = (int)$filters['warehouse_id'];
+        } else {
+            $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+            $warehouseIds = array_map('intval', array_column($warehouses, 'id'));
+            if (!$warehouseIds) {
+                return [];
+            }
+            $sql .= " AND po.warehouse_id IN (" . implode(',', array_fill(0, count($warehouseIds), '?')) . ")";
+            $params = array_merge($params, $warehouseIds);
         }
 
         if (!empty($filters['customer_id'])) {
@@ -131,16 +151,20 @@ class PurchaseOrder {
      * Create purchase order.
      */
     public static function create(array $data): int {
+        $concernId = ConcernTransactionService::activeConcernId();
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)($data['warehouse_id'] ?? 0));
+        ConcernTransactionService::assertCustomer((int)($data['customer_id'] ?? 0));
         Database::execute(
             "INSERT INTO purchase_orders 
-             (po_number, customer_id, seller_id, warehouse_supplier_id, warehouse_id, order_date, expected_date, subtotal, discount_amount, cgst_amount, sgst_amount, igst_amount, tax_amount, total_amount, payment_status, payment_method, payment_screenshot_url, payment_screenshot_public_id, status, notes, created_by, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+             (po_number, customer_id, seller_id, warehouse_supplier_id, warehouse_id, concern_id, order_date, expected_date, subtotal, discount_amount, cgst_amount, sgst_amount, igst_amount, tax_amount, total_amount, payment_status, payment_method, payment_screenshot_url, payment_screenshot_public_id, status, notes, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
                 $data['po_number'],
                 !empty($data['customer_id']) ? (int)$data['customer_id'] : null,
                 !empty($data['seller_id']) ? (int)$data['seller_id'] : null,
                 !empty($data['warehouse_supplier_id']) ? (int)$data['warehouse_supplier_id'] : (!empty($data['seller_id']) ? (int)$data['seller_id'] : null),
                 (int)$data['warehouse_id'],
+                $concernId,
                 $data['order_date'] ?? date('Y-m-d'),
                 $data['expected_date'] ?? null,
                 $data['subtotal'] ?? 0.00,
@@ -166,12 +190,16 @@ class PurchaseOrder {
      * Update purchase order.
      */
     public static function update(int $id, array $data): bool {
+        $existing = ConcernTransactionService::assertOwned('purchase_orders', $id);
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)$existing['warehouse_id']);
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)($data['warehouse_id'] ?? 0));
+        ConcernTransactionService::assertCustomer((int)($data['customer_id'] ?? 0));
         return Database::execute(
             "UPDATE purchase_orders 
              SET customer_id = ?, seller_id = ?, warehouse_id = ?, order_date = ?, expected_date = ?,
                  subtotal = ?, discount_amount = ?, cgst_amount = ?, sgst_amount = ?, igst_amount = ?, tax_amount = ?, total_amount = ?,
                  payment_status = ?, payment_method = ?, status = ?, notes = ?, updated_at = NOW()
-             WHERE id = ?",
+             WHERE id = ? AND concern_id = ?",
             [
                 !empty($data['customer_id']) ? (int)$data['customer_id'] : null,
                 !empty($data['seller_id']) ? (int)$data['seller_id'] : null,
@@ -189,7 +217,8 @@ class PurchaseOrder {
                 $data['payment_method'] ?? 'CASH',
                 $data['status'] ?? 'CONFIRMED',
                 $data['notes'] ?? null,
-                $id
+                $id,
+                ConcernTransactionService::activeConcernId()
             ]
         ) >= 0;
     }
@@ -198,9 +227,11 @@ class PurchaseOrder {
      * Update PO status.
      */
     public static function updateStatus(int $id, string $status): bool {
+        $existing = ConcernTransactionService::assertOwned('purchase_orders', $id);
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)$existing['warehouse_id']);
         return Database::execute(
-            "UPDATE purchase_orders SET status = ?, updated_at = NOW() WHERE id = ?",
-            [$status, $id]
+            "UPDATE purchase_orders SET status = ?, updated_at = NOW() WHERE id = ? AND concern_id = ?",
+            [$status, $id, ConcernTransactionService::activeConcernId()]
         ) > 0;
     }
 
@@ -208,6 +239,9 @@ class PurchaseOrder {
      * Get all itemized products for a purchase order.
      */
     public static function getItems(int $id): array {
+        if (!self::find($id)) {
+            return [];
+        }
         return PurchaseItem::getByPurchaseOrder($id);
     }
 
@@ -240,8 +274,8 @@ class PurchaseOrder {
         $purchase = Database::fetchOne(
             "SELECT product_edit_count
              FROM purchase_orders
-             WHERE id = ?",
-            [$id]
+             WHERE id = ? AND concern_id = ?",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         return (int)($purchase['product_edit_count'] ?? 0) > 0;

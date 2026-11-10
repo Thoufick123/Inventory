@@ -16,6 +16,7 @@ require_once BASE_PATH . '/app/Models/ProductionBatch.php';
 require_once BASE_PATH . '/app/Models/ProductionOutward.php';
 require_once BASE_PATH . '/app/Services/StockService.php';
 require_once BASE_PATH . '/app/Services/AuditService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class WarehouseService {
 
@@ -1165,10 +1166,11 @@ class WarehouseService {
                         OR UPPER(TRIM(COALESCE(pi.batch_lot_no, ''))) = ?
                         OR pi.notes LIKE ?
                    )
+                   AND po.concern_id = ? AND po.warehouse_id = ?
                    AND po.status NOT IN ('CANCELLED', 'VOID')
                  ORDER BY po.id DESC, pi.id DESC
                  LIMIT 1",
-                [$tag, $tag, '%' . $tag . '%']
+                [$tag, $tag, '%' . $tag . '%', (int)currentConcernId(), $warehouseId]
             );
             if ($sold) {
                 $restocked = Database::fetchOne(
@@ -1177,9 +1179,10 @@ class WarehouseService {
                      JOIN `returns` r ON r.id = ri.return_id
                      WHERE ri.variant_id = ? AND ri.reason LIKE ?
                        AND ri.item_condition = 'GOOD' AND ri.destination = 'AVAILABLE'
+                       AND r.concern_id = ? AND r.warehouse_id = ?
                        AND r.status NOT IN ('CANCELLED', 'REJECTED')
                      ORDER BY r.id DESC LIMIT 1",
-                    [(int)$sold['variant_id'], '%' . $tag . '%']
+                    [(int)$sold['variant_id'], '%' . $tag . '%', (int)currentConcernId(), $warehouseId]
                 );
                 if (!$restocked) {
                     throw new RuntimeException("QR code '{$tag}' was sold in direct purchase #{$sold['po_number']} and cannot be removed from warehouse stock.");
@@ -1429,10 +1432,12 @@ class WarehouseService {
                         SUM(si.total_amount) as sold_revenue,
                         COUNT(DISTINCT si.sale_id) as order_cnt
                  FROM sale_items si
+                 JOIN sales s ON s.id = si.sale_id
                  JOIN product_variants pv ON si.variant_id = pv.id
                  LEFT JOIN products p ON pv.product_id = p.id
                  LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
-                 WHERE (COALESCE(p.is_complementary, 0) = 1 OR COALESCE(pv.is_complementary, 0) = 1 OR COALESCE(wc.category_type, '') = 'COMPLEMENTARY')
+                 WHERE s.concern_id = {$concernId}
+                   AND (COALESCE(p.is_complementary, 0) = 1 OR COALESCE(pv.is_complementary, 0) = 1 OR COALESCE(wc.category_type, '') = 'COMPLEMENTARY')
                  UNION ALL
                  SELECT SUM(pi.quantity) as sold_qty,
                         SUM(pi.total_amount) as sold_revenue,
@@ -1442,7 +1447,7 @@ class WarehouseService {
                  JOIN product_variants pv ON pi.variant_id = pv.id
                  LEFT JOIN products p ON pv.product_id = p.id
                  LEFT JOIN warehouse_categories wc ON p.warehouse_category_id = wc.id
-                 WHERE po.customer_id IS NOT NULL
+                 WHERE po.concern_id = {$concernId} AND po.customer_id IS NOT NULL
                    AND (COALESCE(p.is_complementary, 0) = 1 OR COALESCE(pv.is_complementary, 0) = 1 OR COALESCE(wc.category_type, '') = 'COMPLEMENTARY')
              ) as comp_summary"
         );
@@ -1472,8 +1477,7 @@ class WarehouseService {
     public static function lookupPurchaseForReturn(string $query, int $warehouseId = 1): ?array {
         $query = trim($query);
         if (empty($query)) return null;
-        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if ($concernId === null) return null;
+        $concernId = ConcernTransactionService::activeConcernId();
         StockService::assertLocationBelongsToActiveConcern('WAREHOUSE', $warehouseId);
 
         if (str_starts_with($query, '{') && str_ends_with($query, '}')) {
@@ -1490,20 +1494,24 @@ class WarehouseService {
                     c.address as customer_address, c.city as customer_city, c.state as customer_state,
                     w.name as warehouse_name, w.code as warehouse_code
              FROM purchase_orders po
-             LEFT JOIN customers c ON po.customer_id = c.id
-             JOIN warehouses w ON po.warehouse_id = w.id
-             WHERE w.id = ? AND w.concern_id = ?
+             LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
+             JOIN warehouses w ON po.warehouse_id = w.id AND w.concern_id = po.concern_id
+             WHERE po.concern_id = ? AND w.id = ? AND w.concern_id = ?
+               AND po.seller_id IS NULL AND po.warehouse_supplier_id IS NULL
                AND (po.po_number = ? OR c.phone = ? OR po.id = ?)
              ORDER BY po.id DESC LIMIT 1",
-            [$warehouseId, $concernId, $query, $query, is_numeric($query) ? (int)$query : 0]
+            [$concernId, $warehouseId, $concernId, $query, $query, is_numeric($query) ? (int)$query : 0]
         );
 
         if (!$po) return null;
+        if (!empty($po['customer_id'])) {
+            ConcernTransactionService::assertCustomer((int)$po['customer_id']);
+        }
 
         // Validation: If this invoice/PO has already been scanned and processed for return/exchange, block scanning it again
         $existingReturn = Database::fetchOne(
-            "SELECT return_number, created_at FROM returns WHERE purchase_order_id = ? ORDER BY id DESC LIMIT 1",
-            [$po['id']]
+            "SELECT return_number, created_at FROM returns WHERE purchase_order_id = ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+            [$po['id'], $concernId]
         );
         if ($existingReturn) {
             throw new \InvalidArgumentException("This Invoice/PO ({$po['po_number']}) has already been processed for Return/Exchange ({$existingReturn['return_number']}). This invoice cannot be scanned again.");
@@ -1519,7 +1527,8 @@ class WarehouseService {
                     COALESCE((SELECT SUM(ri.quantity) 
                               FROM return_items ri 
                               JOIN returns r ON ri.return_id = r.id 
-                              WHERE r.purchase_order_id = pi.purchase_order_id 
+                              WHERE r.purchase_order_id = pi.purchase_order_id
+                                AND r.concern_id = po.concern_id
                                 AND ri.variant_id = pi.variant_id), 0) as already_returned_qty
              FROM purchase_items pi
              JOIN product_variants pv ON pi.variant_id = pv.id
@@ -1575,8 +1584,9 @@ class WarehouseService {
                  JOIN customers c ON c.id = po.customer_id
                  WHERE c.phone = ?
                    AND po.seller_id IS NULL
-                   AND po.warehouse_supplier_id IS NULL",
-                [$query]
+                   AND po.warehouse_supplier_id IS NULL
+                   AND po.concern_id = ?",
+                [$query, $concernId]
             )['invoice_count'] ?? 0);
         }
 
@@ -1591,6 +1601,7 @@ class WarehouseService {
      * Process Customer Return / Exchange for Warehouse Direct Purchase.
      */
     public static function processPurchaseReturn(array $payload, int $userId): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $poId = (int)($payload['purchase_order_id'] ?? $payload['po_id'] ?? 0);
         $warehouseId = (int)($payload['warehouse_id'] ?? 1);
         $items = $payload['items'] ?? [];
@@ -1610,35 +1621,39 @@ class WarehouseService {
             throw new InvalidArgumentException("Please select items to return or exchange.");
         }
 
+        Database::beginTransaction();
+        try {
         $po = Database::fetchOne(
             "SELECT po.*, c.name as customer_name, c.phone as customer_phone 
              FROM purchase_orders po 
-             LEFT JOIN customers c ON po.customer_id = c.id 
-             WHERE po.id = ?",
-            [$poId]
+             LEFT JOIN customers c ON po.customer_id = c.id AND c.concern_id = po.concern_id
+             WHERE po.id = ? AND po.concern_id = ? FOR UPDATE",
+            [$poId, $concernId]
         );
 
         if (!$po) {
             throw new InvalidArgumentException("Direct purchase order #$poId not found.");
         }
+        if (!empty($po['customer_id'])) {
+            ConcernTransactionService::assertCustomer((int)$po['customer_id']);
+        }
 
         $existingReturn = Database::fetchOne(
-            "SELECT return_number FROM returns WHERE purchase_order_id = ? ORDER BY id DESC LIMIT 1",
-            [$poId]
+            "SELECT return_number FROM returns WHERE purchase_order_id = ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+            [$poId, $concernId]
         );
         if ($existingReturn) {
             throw new InvalidArgumentException("This Invoice/PO ({$po['po_number']}) has already been processed for return/exchange ({$existingReturn['return_number']}).");
         }
 
         $targetWarehouseId = (int)($po['warehouse_id'] ?: $warehouseId);
+        ConcernTransactionService::assertFacility('WAREHOUSE', $targetWarehouseId);
 
-        Database::beginTransaction();
-        try {
             $today = date('Ymd');
             $prefix = ($returnType === 'EXCHANGE' ? 'EXC-WH-' : 'RET-WH-') . $today . '-';
             $lastRet = Database::fetchOne(
-                "SELECT return_number FROM returns WHERE return_number LIKE ? ORDER BY id DESC LIMIT 1",
-                [$prefix . '%']
+                "SELECT return_number FROM returns WHERE return_number LIKE ? AND concern_id = ? ORDER BY id DESC LIMIT 1",
+                [$prefix . '%', $concernId]
             );
             $seq = 1;
             if ($lastRet && !empty($lastRet['return_number'])) {
@@ -1649,6 +1664,7 @@ class WarehouseService {
 
             $totalRefund = 0.0;
             $processedItems = [];
+            $requestedReturnQtyByVariant = [];
 
             foreach ($items as $it) {
                 if (isset($it['selected']) && empty($it['selected'])) {
@@ -1660,27 +1676,41 @@ class WarehouseService {
 
                 $purchaseItemId = !empty($it['purchase_item_id']) ? (int)$it['purchase_item_id'] : null;
                 $variantId = (int)($it['variant_id'] ?? 0);
-
-                // Determine accurate unit price (tax-inclusive effective price)
-                $unitPrice = 0.0;
-                if ($purchaseItemId) {
-                    $pi = Database::fetchOne("SELECT unit_price, total_amount, quantity FROM purchase_items WHERE id = ? AND purchase_order_id = ?", [$purchaseItemId, $poId]);
-                    if ($pi) {
-                        if ((int)$pi['quantity'] > 0 && (float)($pi['total_amount'] ?? 0) > 0) {
-                            $unitPrice = round((float)$pi['total_amount'] / (int)$pi['quantity'], 2);
-                        } else {
-                            $unitPrice = (float)$pi['unit_price'];
-                        }
-                    }
-                }
-                if ($unitPrice <= 0 && !empty($it['unit_price'])) {
-                    $unitPrice = (float)$it['unit_price'];
-                }
-                if ($unitPrice <= 0 && $variantId > 0) {
-                    $pv = Database::fetchOne("SELECT selling_price FROM product_variants WHERE id = ?", [$variantId]);
-                    $unitPrice = (float)($pv['selling_price'] ?? 0);
+                if (!$purchaseItemId || $variantId <= 0) {
+                    throw new InvalidArgumentException('Each returned item must reference a line from the selected purchase order.');
                 }
 
+                $pi = Database::fetchOne(
+                    "SELECT variant_id, unit_price, total_amount, quantity
+                     FROM purchase_items WHERE id = ? AND purchase_order_id = ?",
+                    [$purchaseItemId, $poId]
+                );
+                if (!$pi || (int)$pi['variant_id'] !== $variantId) {
+                    throw new InvalidArgumentException('A returned item does not match a line from the selected purchase order.');
+                }
+
+                $alreadyReturned = (int)(Database::fetchOne(
+                    "SELECT COALESCE(SUM(ri.quantity), 0) as quantity
+                     FROM return_items ri
+                     JOIN returns r ON ri.return_id = r.id
+                     WHERE ri.variant_id = ? AND r.purchase_order_id = ? AND r.concern_id = ?
+                       AND r.status NOT IN ('CANCELLED', 'REJECTED')",
+                    [$variantId, $poId, $concernId]
+                )['quantity'] ?? 0);
+                $orderedQty = (int)(Database::fetchOne(
+                    "SELECT COALESCE(SUM(quantity), 0) as quantity
+                     FROM purchase_items WHERE purchase_order_id = ? AND variant_id = ?",
+                    [$poId, $variantId]
+                )['quantity'] ?? 0);
+                $alreadyRequested = $requestedReturnQtyByVariant[$variantId] ?? 0;
+                if ($qty > $orderedQty - $alreadyReturned - $alreadyRequested) {
+                    throw new InvalidArgumentException('The return quantity exceeds the unreturned quantity on the original purchase.');
+                }
+                $requestedReturnQtyByVariant[$variantId] = $alreadyRequested + $qty;
+
+                $unitPrice = (int)$pi['quantity'] > 0 && (float)($pi['total_amount'] ?? 0) > 0
+                    ? round((float)$pi['total_amount'] / (int)$pi['quantity'], 2)
+                    : (float)$pi['unit_price'];
                 $itemRefund = $unitPrice * $qty;
                 $totalRefund += $itemRefund;
 
@@ -1713,12 +1743,13 @@ class WarehouseService {
             }
 
             Database::execute(
-                "INSERT INTO returns (return_number, source_type, purchase_order_id, customer_id, warehouse_id, 
+                "INSERT INTO returns (return_number, concern_id, source_type, purchase_order_id, customer_id, warehouse_id,
                                      return_type, reason, inspection_status, refund_amount, total_amount, refund_mode, 
                                      refund_status, status, inspected_by, approved_by, notes, created_at)
-                 VALUES (?, 'WAREHOUSE_PURCHASE', ?, ?, ?, ?, ?, 'APPROVED', ?, ?, ?, 'COMPLETED', 'APPROVED', ?, ?, ?, NOW())",
+                 VALUES (?, ?, 'WAREHOUSE_PURCHASE', ?, ?, ?, ?, ?, 'APPROVED', ?, ?, ?, 'COMPLETED', 'APPROVED', ?, ?, ?, NOW())",
                 [
                     $returnNumber,
+                    $concernId,
                     $poId,
                     $po['customer_id'] ?? null,
                     $targetWarehouseId,
@@ -1891,11 +1922,12 @@ class WarehouseService {
                 $exchangeNumber = 'EXC-WH-' . date('Ymd') . '-' . sprintf('%04d', rand(1000, 9999));
 
                 Database::execute(
-                    "INSERT INTO exchanges (exchange_number, return_id, source_type, purchase_order_id, original_amount, 
+                    "INSERT INTO exchanges (exchange_number, concern_id, return_id, source_type, purchase_order_id, original_amount,
                                            new_amount, difference_amount, payment_action, settlement_mode, status, created_at)
-                     VALUES (?, ?, 'WAREHOUSE_PURCHASE', ?, ?, ?, ?, ?, ?, 'COMPLETED', NOW())",
+                     VALUES (?, ?, ?, 'WAREHOUSE_PURCHASE', ?, ?, ?, ?, ?, ?, 'COMPLETED', NOW())",
                     [
                         $exchangeNumber,
+                        $concernId,
                         $returnId,
                         $poId,
                         $totalRefund,
@@ -1989,7 +2021,26 @@ class WarehouseService {
      * Get Returns & Exchanges KPI Summary for Warehouse Direct Purchases.
      */
     public static function getPurchaseReturnsSummary(int $warehouseId = 0): array {
-        $whClause = $warehouseId ? " AND r.warehouse_id = $warehouseId" : "";
+        $concernId = ConcernTransactionService::activeConcernId();
+        $whClause = " AND r.concern_id = $concernId";
+        if ($warehouseId > 0) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
+            $whClause .= " AND r.warehouse_id = $warehouseId";
+        } else {
+            $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+            if (!$warehouseIds) {
+                return [
+                    'total_transactions' => 0,
+                    'today_transactions' => 0,
+                    'total_refund_amount' => 0,
+                    'total_returns_count' => 0,
+                    'total_exchanges_count' => 0,
+                    'total_items_returned' => 0,
+                    'total_damaged_pcs' => 0,
+                ];
+            }
+            $whClause .= ' AND r.warehouse_id IN (' . implode(',', $warehouseIds) . ')';
+        }
 
         $totalTxn = (int)(Database::fetchOne(
             "SELECT COUNT(*) as count FROM returns r WHERE r.source_type = 'WAREHOUSE_PURCHASE'$whClause"
@@ -2040,12 +2091,19 @@ class WarehouseService {
      * Get list of Warehouse Direct Purchase Returns & Exchanges.
      */
     public static function getPurchaseReturnsList(array $filters = [], int $warehouseId = 0): array {
-        $where = ["r.source_type = 'WAREHOUSE_PURCHASE'"];
-        $params = [];
+        $where = ["r.concern_id = ?", "r.source_type = 'WAREHOUSE_PURCHASE'"];
+        $params = [ConcernTransactionService::activeConcernId()];
 
         if ($warehouseId > 0) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
             $where[] = "r.warehouse_id = ?";
             $params[] = $warehouseId;
+        } else {
+            $warehouseIds = array_map('intval', array_column(getScopedWarehouses(), 'id'));
+            if (!$warehouseIds) {
+                return [];
+            }
+            $where[] = "r.warehouse_id IN (" . implode(',', $warehouseIds) . ")";
         }
 
         $search = trim($filters['search'] ?? '');
@@ -2090,11 +2148,11 @@ class WarehouseService {
                     (SELECT COUNT(DISTINCT variant_id) FROM return_items WHERE return_id = r.id) as distinct_variants_count,
                     e.id as exchange_id, e.new_amount, e.difference_amount, e.payment_action, e.settlement_mode
              FROM returns r
-             LEFT JOIN purchase_orders po ON r.purchase_order_id = po.id
-             LEFT JOIN customers c ON r.customer_id = c.id
-             LEFT JOIN warehouses w ON r.warehouse_id = w.id
+             LEFT JOIN purchase_orders po ON r.purchase_order_id = po.id AND po.concern_id = r.concern_id
+             LEFT JOIN customers c ON r.customer_id = c.id AND c.concern_id = r.concern_id
+             JOIN warehouses w ON r.warehouse_id = w.id AND w.concern_id = r.concern_id
              LEFT JOIN users u ON r.inspected_by = u.id
-             LEFT JOIN exchanges e ON e.return_id = r.id
+             LEFT JOIN exchanges e ON e.return_id = r.id AND e.concern_id = r.concern_id
              WHERE {$whereClause}
              ORDER BY r.created_at DESC",
             $params
@@ -2117,12 +2175,14 @@ class WarehouseService {
              JOIN `returns` r ON r.id = e.return_id
              WHERE ei.item_type = 'NEW'
                AND r.source_type = 'WAREHOUSE_PURCHASE'
+               AND r.concern_id = ?
+               AND e.concern_id = r.concern_id
                AND e.status = 'COMPLETED'
                AND ei.piece_tag IS NOT NULL
                AND FIND_IN_SET(UPPER(?), REPLACE(UPPER(ei.piece_tag), ' ', '')) > 0
              ORDER BY e.id DESC
              LIMIT 1",
-            [$pieceTag]
+            [ConcernTransactionService::activeConcernId(), $pieceTag]
         );
     }
 
@@ -2138,15 +2198,16 @@ class WarehouseService {
                     w.name as warehouse_name, w.code as warehouse_code, w.address as warehouse_address, w.phone as warehouse_phone,
                     u.full_name as inspected_by_name
              FROM returns r
-             LEFT JOIN purchase_orders po ON r.purchase_order_id = po.id
-             LEFT JOIN customers c ON r.customer_id = c.id
+             LEFT JOIN purchase_orders po ON r.purchase_order_id = po.id AND po.concern_id = r.concern_id
+             LEFT JOIN customers c ON r.customer_id = c.id AND c.concern_id = r.concern_id
              LEFT JOIN warehouses w ON r.warehouse_id = w.id
              LEFT JOIN users u ON r.inspected_by = u.id
-             WHERE r.id = ? AND r.source_type = 'WAREHOUSE_PURCHASE'",
-            [$id]
+             WHERE r.id = ? AND r.concern_id = ? AND r.source_type = 'WAREHOUSE_PURCHASE'",
+            [$id, ConcernTransactionService::activeConcernId()]
         );
 
         if (!$return) return null;
+        ConcernTransactionService::assertFacility('WAREHOUSE', (int)$return['warehouse_id']);
 
         $returnItems = Database::fetchAll(
             "SELECT ri.*, 
@@ -2167,8 +2228,8 @@ class WarehouseService {
             "SELECT e.*, 
                     (SELECT COUNT(*) FROM exchange_items WHERE exchange_id = e.id) as item_count
              FROM exchanges e 
-             WHERE e.return_id = ?",
-            [$id]
+             WHERE e.return_id = ? AND e.concern_id = ?",
+            [$id, (int)$return['concern_id']]
         );
 
         $exchangeItems = [];

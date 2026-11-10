@@ -4,12 +4,17 @@
  * Handles itemized variants under a Purchase Order.
  */
 
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
+
 class PurchaseItem {
 
     /**
      * Get all items for a purchase order.
      */
     public static function getByPurchaseOrder(int $purchaseOrderId): array {
+        if (!ConcernTransactionService::findOwned('purchase_orders', $purchaseOrderId)) {
+            return [];
+        }
         return Database::fetchAll(
             "SELECT pi.*, 
                     COALESCE(pi.batch_lot_no, '') as scanned_qr_codes,
@@ -42,6 +47,7 @@ class PurchaseItem {
      * Create purchase item.
      */
     public static function create(array $data): int {
+        ConcernTransactionService::assertOwned('purchase_orders', (int)$data['purchase_order_id']);
         Database::execute(
             "INSERT INTO purchase_items 
              (purchase_order_id, variant_id, quantity, unit_price, discount_percentage, gst_percentage, expiry_date, mfg_date, batch_lot_no, mrp, cgst_amount, sgst_amount, igst_amount, total_amount, notes)
@@ -71,6 +77,7 @@ class PurchaseItem {
      * Delete all items for a purchase order.
      */
     public static function deleteByPurchaseOrder(int $purchaseOrderId): bool {
+        ConcernTransactionService::assertOwned('purchase_orders', $purchaseOrderId);
         return Database::execute(
             "DELETE FROM purchase_items WHERE purchase_order_id = ?",
             [$purchaseOrderId]

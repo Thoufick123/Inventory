@@ -22,6 +22,7 @@ class CashController {
 
         $shop = ShopService::getActiveShop();
         $shopId = (int)$shop['id'];
+        $concernId = ConcernTransactionService::activeConcernId();
 
         $tab = $_GET['tab'] ?? 'overview'; // 'overview', 'ledger', 'expenses', 'deposits', 'shifts'
         $startDate = $_GET['start_date'] ?? date('Y-m-d');
@@ -50,9 +51,9 @@ class CashController {
              FROM cash_registers cr
              LEFT JOIN users u ON cr.cashier_id = u.id
              LEFT JOIN users cu ON cr.closed_by = cu.id
-             WHERE cr.shop_id = ?
+             WHERE cr.shop_id = ? AND cr.concern_id = ?
              ORDER BY cr.id DESC LIMIT 50",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         // 4. Expenses List
@@ -61,9 +62,9 @@ class CashController {
              FROM cash_expenses ce
              LEFT JOIN users u ON ce.created_by = u.id
              LEFT JOIN cash_registers cr ON ce.register_id = cr.id
-             WHERE ce.shop_id = ?
+             WHERE ce.shop_id = ? AND ce.concern_id = ?
              ORDER BY ce.id DESC LIMIT 50",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         // 5. Bank Deposits List
@@ -72,9 +73,9 @@ class CashController {
              FROM bank_deposits bd
              LEFT JOIN users u ON bd.deposited_by = u.id
              LEFT JOIN cash_registers cr ON bd.register_id = cr.id
-             WHERE bd.shop_id = ?
+             WHERE bd.shop_id = ? AND bd.concern_id = ?
              ORDER BY bd.id DESC LIMIT 50",
-            [$shopId]
+            [$shopId, $concernId]
         );
 
         // Current cashier name default

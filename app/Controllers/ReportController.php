@@ -6,6 +6,7 @@
  */
 
 require_once BASE_PATH . '/app/Services/ExpenseService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ReportController {
 
@@ -1072,6 +1073,7 @@ class ReportController {
      * Compute Master Profitability & P&L Metrics
      */
     private function getProfitabilityMetrics(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         // 1. REVENUE
         // A. Direct Customer Purchases in Warehouse
         $whSales = Database::fetchOne(
@@ -1081,9 +1083,9 @@ class ReportController {
                     COALESCE(SUM(paid_amount), 0) as paid,
                     COUNT(id) as count
              FROM purchase_orders
-             WHERE created_at BETWEEN ? AND ?
+             WHERE concern_id = ? AND created_at BETWEEN ? AND ?
                AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         // B. Retail Shop POS Sales
@@ -1094,8 +1096,8 @@ class ReportController {
                     COALESCE(SUM(paid_amount), 0) as paid,
                     COUNT(id) as count
              FROM sales
-             WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             WHERE concern_id = ? AND created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         // C. Wastage Sales (Cutting scrap)
@@ -1104,8 +1106,8 @@ class ReportController {
                     COALESCE(SUM(weight), 0) as total_kg,
                     COUNT(id) as count
              FROM wastage_sales
-             WHERE (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$startDate, $endDate, $startDate, $endDate]
+             WHERE concern_id = ? AND (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         // D. Stitching Wastage Sales
@@ -1114,8 +1116,8 @@ class ReportController {
                     COALESCE(SUM(quantity), 0) as total_qty,
                     COUNT(id) as count
              FROM stitching_wastage_sales
-             WHERE (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$startDate, $endDate, $startDate, $endDate]
+             WHERE concern_id = ? AND (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         $grossRevenue = (float)$whSales['total'] + (float)$shopSales['total'] + (float)$cuttingWastage['total'] + (float)$stitchingWastage['total'];
@@ -1127,18 +1129,20 @@ class ReportController {
         $prodCost = Database::fetchOne(
             "SELECT COALESCE(SUM(total_cost), 0) as total_cost,
                     COALESCE(SUM(total_qty), 0) as total_pieces
-             FROM production_batches
-             WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             FROM production_batches pb
+             JOIN production_programs pp ON pb.program_id = pp.id
+             JOIN production_units pu ON pp.production_unit_id = pu.id
+             WHERE pu.concern_id = ? AND pb.created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         // B. External Supplier Purchases
         $suppPurchases = Database::fetchOne(
             "SELECT COALESCE(SUM(total_amount), 0) as total
              FROM purchase_orders
-             WHERE created_at BETWEEN ? AND ?
+             WHERE concern_id = ? AND created_at BETWEEN ? AND ?
                AND warehouse_supplier_id IS NOT NULL",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         $directCost = (float)$prodCost['total_cost'] + (float)$suppPurchases['total'];
@@ -1149,8 +1153,8 @@ class ReportController {
             "SELECT COALESCE(SUM(total_cost), 0) as total,
                     COUNT(id) as count
              FROM production_expenses
-             WHERE (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$startDate, $endDate, $startDate, $endDate]
+             WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         // B. Shop Cash Expenses
@@ -1158,8 +1162,8 @@ class ReportController {
             "SELECT COALESCE(SUM(amount), 0) as total,
                     COUNT(id) as count
              FROM cash_expenses
-             WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             WHERE concern_id = ? AND created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         // C. Module & Channel Expenses (Warehouse, WhatsApp, Website from unified expenses table)
@@ -1170,8 +1174,8 @@ class ReportController {
                     COALESCE(SUM(CASE WHEN location_type = 'WEBSITE' THEN total_cost ELSE 0 END), 0) as web_total,
                     COUNT(id) as count
              FROM expenses
-             WHERE (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$startDate, $endDate, $startDate, $endDate]
+             WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         // D. Asset Maintenance Costs
@@ -1192,8 +1196,9 @@ class ReportController {
                     COALESCE(SUM(quantity), 0) as total_qty,
                     COUNT(id) as count
              FROM warehouse_damages
-             WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             WHERE warehouse_id IN (SELECT id FROM warehouses WHERE concern_id = ?)
+               AND created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         // B. Fabric Roll Damages
@@ -1213,8 +1218,8 @@ class ReportController {
              FROM warehouse_return_items wri
              JOIN warehouse_returns wr ON wri.warehouse_return_id = wr.id
              LEFT JOIN product_variants pv ON wri.variant_id = pv.id
-             WHERE wr.created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             WHERE wr.concern_id = ? AND wr.created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         $recordedLosses = (float)$whDamage['total_loss'] + (float)$rollDamage['total_loss'] + (float)$returnLoss['return_loss'];
@@ -1260,15 +1265,16 @@ class ReportController {
      * Sales Summary for Dashboard Cards
      */
     private function getSalesSummary(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $wh = Database::fetchOne(
             "SELECT COUNT(id) as orders, COALESCE(SUM(total_amount), 0) as revenue
-             FROM purchase_orders WHERE created_at BETWEEN ? AND ? AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)",
-            [$startDate, $endDate]
+             FROM purchase_orders WHERE concern_id = ? AND created_at BETWEEN ? AND ? AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)",
+            [$concernId, $startDate, $endDate]
         );
         $pos = Database::fetchOne(
             "SELECT COUNT(id) as sales, COALESCE(SUM(total_amount), 0) as revenue
-             FROM sales WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             FROM sales WHERE concern_id = ? AND created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         $totRevenue = (float)$wh['revenue'] + (float)$pos['revenue'];
@@ -1288,20 +1294,28 @@ class ReportController {
      * Production Summary for Dashboard Cards
      */
     private function getProductionSummary(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $prog = Database::fetchOne(
-            "SELECT COUNT(id) as count, COALESCE(SUM(planned_quantity), 0) as planned, COALESCE(SUM(completed_quantity), 0) as completed
-             FROM production_programs WHERE (created_at BETWEEN ? AND ? OR start_date BETWEEN ? AND ?)",
-            [$startDate, $endDate, $startDate, $endDate]
+            "SELECT COUNT(pp.id) as count, COALESCE(SUM(pp.planned_quantity), 0) as planned, COALESCE(SUM(pp.completed_quantity), 0) as completed
+             FROM production_programs pp
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE pu.concern_id = ? AND (pp.created_at BETWEEN ? AND ? OR pp.start_date BETWEEN ? AND ?)",
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
         $cutting = Database::fetchOne(
             "SELECT COALESCE(SUM(cut_qty), 0) as cut, COALESCE(SUM(wastage_weight), 0) as waste_kg
-             FROM cutting_batches WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             FROM cutting_batches cb
+             JOIN production_units pu ON pu.id = cb.production_unit_id
+             WHERE pu.concern_id = ? AND cb.created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
         $qc = Database::fetchOne(
             "SELECT COALESCE(SUM(passed_qty), 0) as passed, COALESCE(SUM(rejected_qty), 0) as rejected
-             FROM qc_batches WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             FROM qc_batches qb
+             JOIN production_programs pp ON pp.id = qb.program_id
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE pu.concern_id = ? AND qb.created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         $totInspected = (int)$qc['passed'] + (int)$qc['rejected'];
@@ -1323,17 +1337,21 @@ class ReportController {
      * Warehouse Summary for Dashboard Cards
      */
     private function getWarehouseSummary(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $alloc = Database::fetchOne(
             "SELECT COUNT(ai.id) as count, COALESCE(SUM(COALESCE(ai.dispatched_qty, ai.approved_qty, ai.requested_qty, 0)), 0) as total_qty
              FROM allocation_items ai
              JOIN warehouse_allocations wa ON ai.allocation_id = wa.id
-             WHERE wa.created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             JOIN warehouses w ON w.id = wa.warehouse_id
+             WHERE w.concern_id = ? AND wa.created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
         $damages = Database::fetchOne(
-            "SELECT COUNT(id) as count, COALESCE(SUM(quantity), 0) as total_qty, COALESCE(SUM(total_loss), 0) as total_loss
-             FROM warehouse_damages WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+            "SELECT COUNT(wd.id) as count, COALESCE(SUM(wd.quantity), 0) as total_qty, COALESCE(SUM(wd.total_loss), 0) as total_loss
+             FROM warehouse_damages wd
+             JOIN warehouses w ON w.id = wd.warehouse_id
+             WHERE w.concern_id = ? AND wd.created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         return [
@@ -1399,6 +1417,7 @@ class ReportController {
      * 12-Month Profitability & Revenue Trend for Year Charts
      */
     private function get12MonthTrend(int $year): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $months = [];
         for ($m = 1; $m <= 12; $m++) {
             $mPadded = sprintf('%02d', $m);
@@ -1409,29 +1428,29 @@ class ReportController {
 
             $salesRev = Database::fetchOne(
                 "SELECT (
-                    COALESCE((SELECT SUM(total_amount) FROM purchase_orders WHERE created_at BETWEEN ? AND ? AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)), 0) +
-                    COALESCE((SELECT SUM(total_amount) FROM sales WHERE created_at BETWEEN ? AND ?), 0) +
-                    COALESCE((SELECT SUM(total_amount) FROM wastage_sales WHERE sale_date BETWEEN ? AND ?), 0) +
-                    COALESCE((SELECT SUM(total_amount) FROM stitching_wastage_sales WHERE sale_date BETWEEN ? AND ?), 0)
+                    COALESCE((SELECT SUM(total_amount) FROM purchase_orders WHERE concern_id = ? AND created_at BETWEEN ? AND ? AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)), 0) +
+                    COALESCE((SELECT SUM(total_amount) FROM sales WHERE concern_id = ? AND created_at BETWEEN ? AND ?), 0) +
+                    COALESCE((SELECT SUM(total_amount) FROM wastage_sales WHERE concern_id = ? AND sale_date BETWEEN ? AND ?), 0) +
+                    COALESCE((SELECT SUM(total_amount) FROM stitching_wastage_sales WHERE concern_id = ? AND sale_date BETWEEN ? AND ?), 0)
                 ) as total_revenue",
-                [$sDate, $eDate, $sDate, $eDate, $sDate, $eDate, $sDate, $eDate]
+                [$concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDate, $eDate]
             );
 
             $expenseVal = Database::fetchOne(
                 "SELECT (
-                    COALESCE((SELECT SUM(total_cost) FROM production_expenses WHERE expense_date BETWEEN ? AND ?), 0) +
-                    COALESCE((SELECT SUM(amount) FROM cash_expenses WHERE created_at BETWEEN ? AND ?), 0) +
-                    COALESCE((SELECT SUM(total_cost) FROM expenses WHERE (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)), 0)
+                    COALESCE((SELECT SUM(total_cost) FROM production_expenses WHERE concern_id = ? AND expense_date BETWEEN ? AND ?), 0) +
+                    COALESCE((SELECT SUM(amount) FROM cash_expenses WHERE concern_id = ? AND created_at BETWEEN ? AND ?), 0) +
+                    COALESCE((SELECT SUM(total_cost) FROM expenses WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)), 0)
                 ) as total_expense",
-                [$sDate, $eDate, $sDate, $eDate, $sDate, $eDate, $sDate, $eDate]
+                [$concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $sDate, $eDate]
             );
 
             $lossVal = Database::fetchOne(
                 "SELECT (
-                    COALESCE((SELECT SUM(total_loss) FROM warehouse_damages WHERE created_at BETWEEN ? AND ?), 0) +
+                    COALESCE((SELECT SUM(total_loss) FROM warehouse_damages WHERE warehouse_id IN (SELECT id FROM warehouses WHERE concern_id = ?) AND created_at BETWEEN ? AND ?), 0) +
                     COALESCE((SELECT SUM(loss_amount) FROM roll_damages WHERE created_at BETWEEN ? AND ?), 0)
                 ) as total_loss",
-                [$sDate, $eDate, $sDate, $eDate]
+                [$concernId, $sDate, $eDate, $sDate, $eDate]
             );
 
             $rev = (float)($salesRev['total_revenue'] ?? 0);
@@ -1455,15 +1474,16 @@ class ReportController {
      * Line Items for P&L Statements
      */
     private function getRevenueLineItems(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $whSales = Database::fetchAll(
             "SELECT po.id, po.po_number as ref_no, 'Direct Customer Sale' as source, c.name as customer_name,
                     po.payment_method, po.total_amount, po.discount_amount, po.tax_amount, po.created_at
              FROM purchase_orders po
              LEFT JOIN customers c ON po.customer_id = c.id
-             WHERE po.created_at BETWEEN ? AND ?
+             WHERE po.concern_id = ? AND po.created_at BETWEEN ? AND ?
                AND (po.customer_id IS NOT NULL OR po.warehouse_supplier_id IS NULL)
              ORDER BY po.id DESC LIMIT 50",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         $posSales = Database::fetchAll(
@@ -1471,76 +1491,81 @@ class ReportController {
                     s.payment_mode as payment_method, s.total_amount, s.discount_amount, s.tax_amount, s.created_at
              FROM sales s
              LEFT JOIN customers c ON s.customer_id = c.id
-             WHERE s.created_at BETWEEN ? AND ?
+             WHERE s.concern_id = ? AND s.created_at BETWEEN ? AND ?
              ORDER BY s.id DESC LIMIT 50",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         $wastage = Database::fetchAll(
             "SELECT ws.id, ws.sale_number as ref_no, 'Cutting Wastage Sale' as source, ws.buyer_name as customer_name,
                     ws.payment_method, ws.total_amount, 0 as discount_amount, 0 as tax_amount, ws.sale_date as created_at
              FROM wastage_sales ws
-             WHERE (ws.sale_date BETWEEN ? AND ? OR ws.created_at BETWEEN ? AND ?)
+             WHERE ws.concern_id = ? AND (ws.sale_date BETWEEN ? AND ? OR ws.created_at BETWEEN ? AND ?)
              ORDER BY ws.id DESC LIMIT 50",
-            [$startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         return array_merge($whSales, $posSales, $wastage);
     }
 
     private function getCostLineItems(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         return Database::fetchAll(
             "SELECT pb.id, pb.batch_number as ref_no, p.name as product_name, pb.total_qty, pb.cost_per_piece, pb.total_cost, pb.created_at
              FROM production_batches pb
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
+             JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN products p ON pp.product_id = p.id
-             WHERE pb.created_at BETWEEN ? AND ?
+             WHERE pu.concern_id = ? AND pb.created_at BETWEEN ? AND ?
              ORDER BY pb.id DESC LIMIT 50",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
     }
 
     private function getExpenseLineItems(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $prodExp = Database::fetchAll(
             "SELECT pe.id, pe.expense_number as ref_no, pe.production_unit as facility, pe.category, pe.item_name,
                     pe.total_cost as amount, pe.payment_status, pe.expense_date
              FROM production_expenses pe
-             WHERE (pe.expense_date BETWEEN ? AND ? OR pe.created_at BETWEEN ? AND ?)
+             WHERE pe.concern_id = ? AND (pe.expense_date BETWEEN ? AND ? OR pe.created_at BETWEEN ? AND ?)
              ORDER BY pe.id DESC LIMIT 30",
-            [$startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         $modExp = Database::fetchAll(
             "SELECT e.id, e.expense_number as ref_no, e.location_name as facility, e.category, e.item_name,
                     e.total_cost as amount, e.payment_status, e.expense_date
              FROM expenses e
-             WHERE (e.expense_date BETWEEN ? AND ? OR e.created_at BETWEEN ? AND ?)
+             WHERE e.concern_id = ? AND (e.expense_date BETWEEN ? AND ? OR e.created_at BETWEEN ? AND ?)
              ORDER BY e.id DESC LIMIT 30",
-            [$startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDate, $endDate, $startDate, $endDate]
         );
 
         return array_merge($prodExp, $modExp);
     }
 
     private function getLossLineItems(string $startDate, string $endDate): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $whLosses = Database::fetchAll(
             "SELECT wd.id, wd.damage_number as ref_no, 'Warehouse Damage' as loss_type, p.name as product_name,
                     wd.quantity, wd.cost_per_unit, wd.total_loss as amount, wd.status, wd.damage_reason as reason, wd.created_at
              FROM warehouse_damages wd
+             JOIN warehouses w ON w.id = wd.warehouse_id
              LEFT JOIN product_variants pv ON wd.variant_id = pv.id
              LEFT JOIN products p ON pv.product_id = p.id
-             WHERE wd.created_at BETWEEN ? AND ?
+             WHERE w.concern_id = ? AND wd.created_at BETWEEN ? AND ?
              ORDER BY wd.id DESC LIMIT 50",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         $rollLosses = Database::fetchAll(
             "SELECT rd.id, rd.damage_number as ref_no, 'Fabric Roll Damage' as loss_type, 'Raw Fabric' as product_name,
                     rd.damaged_quantity as quantity, 0 as cost_per_unit, rd.loss_amount as amount, rd.status, rd.damage_reason as reason, rd.created_at
              FROM roll_damages rd
-             WHERE rd.created_at BETWEEN ? AND ?
+             WHERE rd.concern_id = ? AND rd.created_at BETWEEN ? AND ?
              ORDER BY rd.id DESC LIMIT 50",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         return array_merge($whLosses, $rollLosses);
@@ -1550,6 +1575,7 @@ class ReportController {
      * Detailed Sales Report Builder — Multi-Channel with Per-Channel Breakdown
      */
     private function getDetailedSalesReport(string $startDate, string $endDate, string $channel = 'all', string $paymentMethod = 'all'): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         // ─── 1. Warehouse Direct Customer Sales (purchase_orders with customers) ───
         $sql1 = "SELECT po.id, po.po_number as invoice_no, 'Warehouse POS' as channel,
                         c.name as customer_name, c.phone as customer_phone,
@@ -1559,9 +1585,9 @@ class ReportController {
                  FROM purchase_orders po
                  LEFT JOIN customers c ON po.customer_id = c.id
                  LEFT JOIN warehouses w ON po.warehouse_id = w.id
-                 WHERE po.created_at BETWEEN ? AND ?
+                 WHERE po.concern_id = ? AND po.created_at BETWEEN ? AND ?
                    AND (po.customer_id IS NOT NULL OR po.warehouse_supplier_id IS NULL)";
-        $params1 = [$startDate, $endDate];
+        $params1 = [$concernId, $startDate, $endDate];
         if ($paymentMethod !== 'all') {
             $sql1 .= " AND po.payment_method = ?";
             $params1[] = $paymentMethod;
@@ -1585,8 +1611,8 @@ class ReportController {
                  FROM sales s
                  LEFT JOIN customers c ON s.customer_id = c.id
                  LEFT JOIN shops sh ON s.shop_id = sh.id
-                 WHERE s.created_at BETWEEN ? AND ?";
-        $params2 = [$startDate, $endDate];
+                 WHERE s.concern_id = ? AND s.created_at BETWEEN ? AND ?";
+        $params2 = [$concernId, $startDate, $endDate];
         if ($paymentMethod !== 'all') {
             $sql2 .= " AND s.payment_mode = ?";
             $params2[] = $paymentMethod;
@@ -1705,8 +1731,9 @@ class ReportController {
      * Detailed Website Report Builder
      */
     private function getDetailedWebsiteReport(string $startDate, string $endDate, array $filters = []): array {
-        $where = ["(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')"];
-        $params = [];
+        $concernId = ConcernTransactionService::activeConcernId();
+        $where = ["s.concern_id = ?", "(s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')"];
+        $params = [$concernId];
         $where[] = "s.created_at BETWEEN ? AND ?";
         $params[] = $startDate;
         $params[] = $endDate;
@@ -1785,12 +1812,13 @@ class ReportController {
              LEFT JOIN categories cat ON p.category_id = cat.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors clr ON pv.color_id = clr.id
-             WHERE (s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')
+             WHERE s.concern_id = ?
+               AND (s.sales_channel = 'WEBSITE' OR s.sale_type = 'WEBSITE' OR s.notes LIKE '%Website%' OR s.invoice_number LIKE 'WEB-%')
                AND s.created_at BETWEEN ? AND ?
              GROUP BY pv.id, pv.sku, p.name, p.code, cat.name, sz.name, clr.name
              ORDER BY total_sold_qty DESC, total_revenue DESC
              LIMIT 10",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         // Fetch Line Items for expandable table
@@ -1844,8 +1872,9 @@ class ReportController {
      * Detailed WhatsApp Report Builder
      */
     private function getDetailedWhatsappReport(string $startDate, string $endDate, array $filters = []): array {
-        $where = ["(s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')"];
-        $params = [];
+        $concernId = ConcernTransactionService::activeConcernId();
+        $where = ["s.concern_id = ?", "(s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')"];
+        $params = [$concernId];
         $where[] = "s.created_at BETWEEN ? AND ?";
         $params[] = $startDate;
         $params[] = $endDate;
@@ -1931,12 +1960,13 @@ class ReportController {
              LEFT JOIN categories cat ON p.category_id = cat.id
              LEFT JOIN sizes sz ON pv.size_id = sz.id
              LEFT JOIN colors clr ON pv.color_id = clr.id
-             WHERE (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
+             WHERE s.concern_id = ?
+               AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
                AND s.created_at BETWEEN ? AND ?
              GROUP BY pv.id, pv.sku, p.name, p.code, cat.name, sz.name, clr.name
              ORDER BY total_sold_qty DESC, total_revenue DESC
              LIMIT 10",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         // Staff / Biller Breakdown
@@ -1949,11 +1979,12 @@ class ReportController {
              FROM sales s
              LEFT JOIN users u ON s.biller_id = u.id OR s.billing_staff_id = u.id
              LEFT JOIN (SELECT sale_id, SUM(quantity) as total_qty FROM sale_items GROUP BY sale_id) si_agg ON s.id = si_agg.sale_id
-             WHERE (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
+             WHERE s.concern_id = ?
+               AND (s.sales_channel = 'WHATSAPP' OR s.sale_type = 'WHATSAPP' OR s.notes LIKE '%WhatsApp%' OR s.invoice_number LIKE 'WA-%')
                AND s.created_at BETWEEN ? AND ?
              GROUP BY staff_name
              ORDER BY total_sales DESC",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         // Fetch Line Items for expandable table
@@ -2008,12 +2039,17 @@ class ReportController {
      * Detailed Production Report Builder
      */
     private function getDetailedProductionReport(string $startDate, string $endDate, int $unitId = 0): array {
+        $concernId = ConcernTransactionService::activeConcernId();
+        if ($unitId > 0) {
+            ConcernTransactionService::assertFacility('PRODUCTION', $unitId);
+        }
         $pSql = "SELECT pp.*, p.name as product_name, p.code as product_code, pu.name as unit_name
                  FROM production_programs pp
                  LEFT JOIN products p ON pp.product_id = p.id
                  LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
-                 WHERE (pp.created_at BETWEEN ? AND ? OR pp.start_date BETWEEN ? AND ?)";
-        $pParams = [$startDate, $endDate, $startDate, $endDate];
+                 WHERE pu.concern_id = ?
+                   AND (pp.created_at BETWEEN ? AND ? OR pp.start_date BETWEEN ? AND ?)";
+        $pParams = [$concernId, $startDate, $endDate, $startDate, $endDate];
         if ($unitId > 0) {
             $pSql .= " AND pp.production_unit_id = ?";
             $pParams[] = $unitId;
@@ -2021,48 +2057,64 @@ class ReportController {
         $pSql .= " ORDER BY pp.id DESC";
         $programs = Database::fetchAll($pSql, $pParams);
 
-        $cutting = Database::fetchAll(
-            "SELECT cb.*, pp.program_number, pu.name as unit_name
+        $cuttingSql = "SELECT cb.*, pp.program_number, pu.name as unit_name
              FROM cutting_batches cb
              LEFT JOIN production_programs pp ON cb.program_id = pp.id
              LEFT JOIN production_units pu ON cb.production_unit_id = pu.id
-             WHERE cb.created_at BETWEEN ? AND ?
-             ORDER BY cb.id DESC",
-            [$startDate, $endDate]
-        );
+             WHERE pu.concern_id = ? AND cb.created_at BETWEEN ? AND ?";
+        $cuttingParams = [$concernId, $startDate, $endDate];
+        if ($unitId > 0) {
+            $cuttingSql .= " AND cb.production_unit_id = ?";
+            $cuttingParams[] = $unitId;
+        }
+        $cuttingSql .= " ORDER BY cb.id DESC";
+        $cutting = Database::fetchAll($cuttingSql, $cuttingParams);
 
-        $stitching = Database::fetchAll(
-            "SELECT sb.*, pp.program_number, pu.name as unit_name
+        $stitchingSql = "SELECT sb.*, pp.program_number, pu.name as unit_name
              FROM stitching_batches sb
              LEFT JOIN production_programs pp ON sb.program_id = pp.id
              LEFT JOIN production_units pu ON sb.production_unit_id = pu.id
-             WHERE sb.created_at BETWEEN ? AND ?
-             ORDER BY sb.id DESC",
-            [$startDate, $endDate]
-        );
+             WHERE pu.concern_id = ? AND sb.created_at BETWEEN ? AND ?";
+        $stitchingParams = [$concernId, $startDate, $endDate];
+        if ($unitId > 0) {
+            $stitchingSql .= " AND sb.production_unit_id = ?";
+            $stitchingParams[] = $unitId;
+        }
+        $stitchingSql .= " ORDER BY sb.id DESC";
+        $stitching = Database::fetchAll($stitchingSql, $stitchingParams);
 
-        $qc = Database::fetchAll(
-            "SELECT qb.*, pp.program_number
+        $qcSql = "SELECT qb.*, pp.program_number
              FROM qc_batches qb
              LEFT JOIN production_programs pp ON qb.program_id = pp.id
-             WHERE qb.created_at BETWEEN ? AND ?
-             ORDER BY qb.id DESC",
-            [$startDate, $endDate]
-        );
+             LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
+             WHERE pu.concern_id = ? AND qb.created_at BETWEEN ? AND ?";
+        $qcParams = [$concernId, $startDate, $endDate];
+        if ($unitId > 0) {
+            $qcSql .= " AND pp.production_unit_id = ?";
+            $qcParams[] = $unitId;
+        }
+        $qcSql .= " ORDER BY qb.id DESC";
+        $qc = Database::fetchAll($qcSql, $qcParams);
 
-        $expenses = Database::fetchAll(
-            "SELECT * FROM production_expenses
-             WHERE (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)
-             ORDER BY id DESC",
-            [$startDate, $endDate, $startDate, $endDate]
-        );
+        $expenseSql = "SELECT * FROM production_expenses
+             WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)";
+        $expenseParams = [$concernId, $startDate, $endDate, $startDate, $endDate];
+        if ($unitId > 0) {
+            $expenseSql .= " AND production_unit_id = ?";
+            $expenseParams[] = $unitId;
+        }
+        $expenseSql .= " ORDER BY id DESC";
+        $expenses = Database::fetchAll($expenseSql, $expenseParams);
 
-        $wastageSales = Database::fetchAll(
-            "SELECT * FROM wastage_sales
-             WHERE (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)
-             ORDER BY id DESC",
-            [$startDate, $endDate, $startDate, $endDate]
-        );
+        $wastageSql = "SELECT * FROM wastage_sales
+             WHERE concern_id = ? AND (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)";
+        $wastageParams = [$concernId, $startDate, $endDate, $startDate, $endDate];
+        if ($unitId > 0) {
+            $wastageSql .= " AND production_unit_id = ?";
+            $wastageParams[] = $unitId;
+        }
+        $wastageSql .= " ORDER BY id DESC";
+        $wastageSales = Database::fetchAll($wastageSql, $wastageParams);
 
         return [
             'programs'      => $programs,
@@ -2089,6 +2141,10 @@ class ReportController {
      * Detailed Warehouse Report Builder
      */
     private function getDetailedWarehouseReport(string $startDate, string $endDate, int $warehouseId = 0): array {
+        $concernId = ConcernTransactionService::activeConcernId();
+        if ($warehouseId > 0) {
+            ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
+        }
         // Dispatches / Allocations
         $aSql = "SELECT wa.*, w.name as warehouse_name, s.name as shop_name,
                         COALESCE(ai_agg.item_count, 0) as item_count,
@@ -2101,8 +2157,8 @@ class ReportController {
                      FROM allocation_items
                      GROUP BY allocation_id
                  ) ai_agg ON ai_agg.allocation_id = wa.id
-                 WHERE wa.created_at BETWEEN ? AND ?";
-        $aParams = [$startDate, $endDate];
+                 WHERE w.concern_id = ? AND wa.created_at BETWEEN ? AND ?";
+        $aParams = [$concernId, $startDate, $endDate];
         if ($warehouseId > 0) {
             $aSql .= " AND wa.warehouse_id = ?";
             $aParams[] = $warehouseId;
@@ -2126,9 +2182,9 @@ class ReportController {
                      FROM purchase_items
                      GROUP BY purchase_order_id
                  ) pi_agg ON pi_agg.purchase_order_id = po.id
-                 WHERE po.created_at BETWEEN ? AND ?
+                 WHERE po.concern_id = ? AND po.created_at BETWEEN ? AND ?
                    AND (po.warehouse_supplier_id IS NOT NULL OR po.seller_id IS NOT NULL)";
-        $pParams = [$startDate, $endDate];
+        $pParams = [$concernId, $startDate, $endDate];
         if ($warehouseId > 0) {
             $pSql .= " AND po.warehouse_id = ?";
             $pParams[] = $warehouseId;
@@ -2142,8 +2198,8 @@ class ReportController {
                  LEFT JOIN warehouses w ON wd.warehouse_id = w.id
                  LEFT JOIN product_variants pv ON wd.variant_id = pv.id
                  LEFT JOIN products p ON pv.product_id = p.id
-                 WHERE wd.created_at BETWEEN ? AND ?";
-        $dParams = [$startDate, $endDate];
+                 WHERE w.concern_id = ? AND wd.created_at BETWEEN ? AND ?";
+        $dParams = [$concernId, $startDate, $endDate];
         if ($warehouseId > 0) {
             $dSql .= " AND wd.warehouse_id = ?";
             $dParams[] = $warehouseId;
@@ -2158,9 +2214,9 @@ class ReportController {
              LEFT JOIN warehouses w ON sa.warehouse_id = w.id
              LEFT JOIN product_variants pv ON sa.variant_id = pv.id
              LEFT JOIN products p ON pv.product_id = p.id
-             WHERE sa.created_at BETWEEN ? AND ?
+             WHERE w.concern_id = ? AND sa.created_at BETWEEN ? AND ?
              ORDER BY sa.id DESC",
-            [$startDate, $endDate]
+            [$concernId, $startDate, $endDate]
         );
 
         return [
@@ -2182,6 +2238,7 @@ class ReportController {
      * Detailed Purchase / Supplier Report Builder (Third-Party Buys)
      */
     private function getDetailedPurchaseReport(string $startDate, string $endDate, int $supplierId = 0): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sql = "SELECT po.*, 
                        COALESCE(s.name, sel.name, 'Third-Party Vendor') as supplier_name, 
                        COALESCE(s.company, sel.company, 'External Vendor') as supplier_company,
@@ -2197,9 +2254,9 @@ class ReportController {
                     FROM purchase_items
                     GROUP BY purchase_order_id
                 ) pi_agg ON pi_agg.purchase_order_id = po.id
-                WHERE po.created_at BETWEEN ? AND ?
+                WHERE po.concern_id = ? AND po.created_at BETWEEN ? AND ?
                   AND (po.warehouse_supplier_id IS NOT NULL OR po.seller_id IS NOT NULL)";
-        $params = [$startDate, $endDate];
+        $params = [$concernId, $startDate, $endDate];
         if ($supplierId > 0) {
             $sql .= " AND (po.warehouse_supplier_id = ? OR po.seller_id = ?)";
             $params[] = $supplierId;
@@ -2222,12 +2279,13 @@ class ReportController {
      * Detailed Shop & POS Report Builder
      */
     private function getDetailedShopReport(string $startDate, string $endDate, int $shopId = 0): array {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sSql = "SELECT s.*, sh.name as shop_name, c.name as customer_name
                  FROM sales s
                  LEFT JOIN shops sh ON s.shop_id = sh.id
                  LEFT JOIN customers c ON s.customer_id = c.id
-                 WHERE s.created_at BETWEEN ? AND ?";
-        $sParams = [$startDate, $endDate];
+                 WHERE s.concern_id = ? AND s.created_at BETWEEN ? AND ?";
+        $sParams = [$concernId, $startDate, $endDate];
         if ($shopId > 0) {
             $sSql .= " AND s.shop_id = ?";
             $sParams[] = $shopId;
@@ -2238,8 +2296,8 @@ class ReportController {
         $eSql = "SELECT ce.*, sh.name as shop_name
                  FROM cash_expenses ce
                  LEFT JOIN shops sh ON ce.shop_id = sh.id
-                 WHERE ce.created_at BETWEEN ? AND ?";
-        $eParams = [$startDate, $endDate];
+                 WHERE ce.concern_id = ? AND ce.created_at BETWEEN ? AND ?";
+        $eParams = [$concernId, $startDate, $endDate];
         if ($shopId > 0) {
             $eSql .= " AND ce.shop_id = ?";
             $eParams[] = $shopId;

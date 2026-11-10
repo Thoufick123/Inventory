@@ -4,6 +4,8 @@
  * Consolidates delivery and dispatch tracking across Outwards, Allocations, and Transfers.
  */
 
+require_once BASE_PATH . '/app/Models/WarehouseTransfer.php';
+
 class Delivery {
 
     /**
@@ -65,23 +67,15 @@ class Delivery {
             ];
         }
 
-        // 3. Inter-warehouse transfers
-        $transfers = Database::fetchAll(
-            "SELECT wt.id, wt.transfer_number as reference_number, 'TRANSFER' as type,
-                    wt.source_type, wt.source_id, wt.destination_type, wt.destination_id,
-                    wt.status, wt.created_at,
-                    (SELECT COALESCE(SUM(quantity), 0) FROM transfer_items WHERE transfer_id = wt.id) as item_count
-             FROM warehouse_transfers wt
-             ORDER BY wt.created_at DESC"
-        );
-
+        // 3. Concern-to-concern transfers visible from this concern and facility scope.
+        $transfers = WarehouseTransfer::getAll();
         foreach ($transfers as $t) {
             $deliveries[] = [
                 'id' => $t['id'],
                 'type' => 'Inter-Warehouse Transfer',
-                'reference_number' => $t['reference_number'],
-                'source' => $t['source_type'] . " #" . $t['source_id'],
-                'destination' => $t['destination_type'] . " #" . $t['destination_id'],
+                'reference_number' => $t['transfer_number'],
+                'source' => $t['source_name'],
+                'destination' => $t['destination_name'],
                 'item_count' => (int)$t['item_count'],
                 'status' => $t['status'],
                 'created_at' => $t['created_at'],

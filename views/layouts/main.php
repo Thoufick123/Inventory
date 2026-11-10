@@ -251,6 +251,9 @@ if (!empty($authUser['shop_name'])) {
                             <?php if (hasPermission('allocation', 'view')): ?>
                             <li><a href="<?= url('warehouse/allocation') ?>" class="<?= in_array(($activeMenu ?? ''), ['allocation', 'wh-allocations']) ? 'active' : '' ?>">Allocation</a></li>
                             <?php endif; ?>
+                            <?php if (hasPermission('warehouse', 'view')): ?>
+                            <li><a href="<?= url('warehouse/transfers') ?>" class="<?= ($activeMenu ?? '') === 'wh-transfers' ? 'active' : '' ?>">Concern Transfers</a></li>
+                            <?php endif; ?>
                             <?php if (hasPermission('allocation_outward', 'view')): ?>
                             <li><a href="<?= url('warehouse/allocation/outward') ?>" class="<?= in_array(($activeMenu ?? ''), ['wh-outward', 'allocation-outward']) ? 'active' : '' ?>">Outward</a></li>
                             <?php endif; ?>
@@ -540,6 +543,9 @@ if (!empty($authUser['shop_name'])) {
                             <?php if (hasPermission('staff', 'view')): ?>
                             <li><a href="<?= url('admin/staff?department=all') ?>" class="<?= in_array(($activeMenu ?? ''), ['staff', 'staff-all', 'staff-production', 'staff-warehouse', 'staff-whatsapp', 'staff-website', 'staff-shop', 'staff-reports']) ? 'active' : '' ?>">Total Staffs</a></li>
                             <li><a href="<?= url('admin/staff/concerns') ?>" class="<?= ($activeMenu ?? '') === 'staff-concerns' ? 'active' : '' ?>">Concerns &amp; Modules</a></li>
+                            <?php if (isSuperAdmin()): ?>
+                            <li><a href="<?= url('admin/legacy-data') ?>" class="<?= ($activeMenu ?? '') === 'legacy-data' ? 'active' : '' ?>">Legacy Concern Data</a></li>
+                            <?php endif; ?>
                             <?php endif; ?>
                             <?php if (hasPermission('roles', 'view')): ?>
                             <li><a href="<?= url('admin/roles') ?>" class="<?= ($activeMenu ?? '') === 'roles' ? 'active' : '' ?>">Role Assign / Permissions</a></li>

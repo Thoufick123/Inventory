@@ -1,6 +1,7 @@
 <?php
 
 require_once BASE_PATH . '/app/Services/ProductionBillingReturnsService.php';
+require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ProductionBillingController
 {
@@ -130,11 +131,14 @@ class ProductionBillingController
 
     public function billList(): void
     {
+        $unitId = $this->activeProductionUnitId();
         $bills = Database::fetchAll(
             "SELECT pb.*,
                     (SELECT COUNT(*) FROM production_bill_items pbi WHERE pbi.bill_id = pb.id) AS line_count
              FROM production_bills pb
+             WHERE pb.concern_id = ? AND pb.production_unit_id = ?
              ORDER BY pb.bill_date DESC, pb.id DESC"
+            , [ConcernTransactionService::activeConcernId(), $unitId]
         );
 
         Response::view('production.billing.index', [
@@ -260,12 +264,20 @@ class ProductionBillingController
     public function deleteBill(string $id): void
     {
         $billId = (int)$id;
+        if (!$this->findBill($billId)) {
+            Response::redirect(url('production/billing'), 'error', 'Bill not found in the active production unit.');
+            return;
+        }
         if ($this->billHasReturns($billId)) {
             Response::redirect(url('production/billing/view/' . $billId), 'error', 'A bill with processed returns or exchanges cannot be deleted.');
             return;
         }
         try {
-            Database::execute("DELETE FROM production_bills WHERE id = ?", [$billId]);
+            Database::execute("DELETE FROM production_bills WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [
+                $billId,
+                ConcernTransactionService::activeConcernId(),
+                $this->activeProductionUnitId(),
+            ]);
             Response::redirect('production/billing', 'success', 'Production bill deleted.');
         } catch (Throwable $e) {
             error_log('ProductionBillingController::deleteBill failed: ' . $e->getMessage());
@@ -288,19 +300,19 @@ class ProductionBillingController
     private function findBill(int $id): ?array
     {
         return $id > 0
-            ? Database::fetchOne("SELECT * FROM production_bills WHERE id = ?", [$id])
+            ? Database::fetchOne("SELECT * FROM production_bills WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$id, ConcernTransactionService::activeConcernId(), $this->activeProductionUnitId()])
             : null;
     }
 
     private function billHasReturns(int $billId): bool
     {
-        return (bool)Database::fetchOne('SELECT id FROM production_bill_returns WHERE bill_id = ? LIMIT 1', [$billId]);
+        return (bool)Database::fetchOne('SELECT id FROM production_bill_returns WHERE bill_id = ? AND concern_id = ? LIMIT 1', [$billId, ConcernTransactionService::activeConcernId()]);
     }
 
     private function loadBill(int $id): ?array
     {
         return $id > 0
-            ? Database::fetchOne("SELECT * FROM production_bills WHERE id = ?", [$id])
+            ? Database::fetchOne("SELECT * FROM production_bills WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$id, ConcernTransactionService::activeConcernId(), $this->activeProductionUnitId()])
             : null;
     }
 
@@ -336,6 +348,7 @@ class ProductionBillingController
 
     private function getAvailableInventory(int $excludeBillId = 0): array
     {
+        $unitId = $this->activeProductionUnitId();
         $rows = Database::fetchAll(
             "SELECT qi.id AS qc_item_id, qi.qc_batch_id, qi.variant_id, qi.size_name, qi.color_name,
                     qi.base_price AS qc_base_price, qi.discount_price AS qc_discount_price,
@@ -351,8 +364,9 @@ class ProductionBillingController
              LEFT JOIN product_variants pv ON pv.id = qi.variant_id
              LEFT JOIN colors c ON c.id = pv.color_id
              LEFT JOIN sizes sz ON sz.id = pv.size_id
-             WHERE qi.passed_qty > 0
+             WHERE qi.passed_qty > 0 AND pp.production_unit_id = ?
              ORDER BY qb.created_at DESC, qi.id DESC"
+            , [$unitId]
         );
 
         $batchIds = array_values(array_unique(array_map(
@@ -365,8 +379,16 @@ class ProductionBillingController
         }
 
         $soldRows = $excludeBillId > 0
-            ? Database::fetchAll("SELECT tag_code FROM production_bill_item_tags WHERE status IN ('BILLED', 'DAMAGED') AND bill_id <> ?", [$excludeBillId])
-            : Database::fetchAll("SELECT tag_code FROM production_bill_item_tags WHERE status IN ('BILLED', 'DAMAGED')");
+            ? Database::fetchAll(
+                "SELECT t.tag_code FROM production_bill_item_tags t JOIN production_bills pb ON pb.id = t.bill_id
+                 WHERE pb.concern_id = ? AND t.status IN ('BILLED', 'DAMAGED') AND t.bill_id <> ?",
+                [ConcernTransactionService::activeConcernId(), $excludeBillId]
+            )
+            : Database::fetchAll(
+                "SELECT t.tag_code FROM production_bill_item_tags t JOIN production_bills pb ON pb.id = t.bill_id
+                 WHERE pb.concern_id = ? AND t.status IN ('BILLED', 'DAMAGED')",
+                [ConcernTransactionService::activeConcernId()]
+            );
         $soldTags = array_fill_keys(array_map(
             static fn(array $row): string => strtoupper(trim((string)$row['tag_code'])),
             $soldRows
@@ -414,9 +436,32 @@ class ProductionBillingController
         return $available;
     }
 
+    private function activeProductionUnitId(): int
+    {
+        $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if (!$unitId) {
+            $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+            $unitId = isset($units[0]['id']) ? (int)$units[0]['id'] : null;
+        }
+        if (!$unitId) {
+            throw new RuntimeException('No production unit is available in the active concern.');
+        }
+        ConcernTransactionService::assertFacility('PRODUCTION', (int)$unitId);
+        return (int)$unitId;
+    }
+
     private function persistBill(?int $billId): void
     {
         $isNewBill = $billId === null;
+        $concernId = ConcernTransactionService::activeConcernId();
+        $unitId = $this->activeProductionUnitId();
+        if ($billId !== null) {
+            $existingBill = $this->findBill($billId);
+            if (!$existingBill || (int)$existingBill['production_unit_id'] !== $unitId) {
+                Response::redirect(url('production/billing'), 'error', 'Bill not found in the active production unit.');
+                return;
+            }
+        }
         $companyName = trim((string)($_POST['company_name'] ?? ''));
         $companyAddress = trim((string)($_POST['company_address'] ?? ''));
         $companyPhone = trim((string)($_POST['company_phone'] ?? ''));
@@ -672,13 +717,13 @@ class ProductionBillingController
                 $billNumber = 'PB-' . date('Y') . '-' . date('mdHis') . '-' . random_int(10, 99);
                 Database::execute(
                     "INSERT INTO production_bills
-                     (bill_number, buyer_type, company_name, company_address, company_phone, company_email, company_gstin,
+                     (bill_number, concern_id, production_unit_id, buyer_type, company_name, company_address, company_phone, company_email, company_gstin,
                       customer_name, customer_phone, customer_address, customer_city, customer_state, customer_gstin,
                       bill_date, payment_method, payment_status, tax_type, cash_amount, upi_amount, upi_reference,
                       gross_amount, discount_amount, subtotal, cgst_amount, sgst_amount, igst_amount, tax_amount,
                       total_amount, notes, created_by)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    array_merge([$billNumber], $header, [(int)(Auth::id() ?? 0) ?: null])
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    array_merge([$billNumber, $concernId, $unitId], $header, [(int)(Auth::id() ?? 0) ?: null])
                 );
                 $billId = (int)Database::lastInsertId();
             } else {
@@ -688,8 +733,8 @@ class ProductionBillingController
                      customer_state = ?, customer_gstin = ?, bill_date = ?, payment_method = ?, payment_status = ?,
                      tax_type = ?, cash_amount = ?, upi_amount = ?, upi_reference = ?, gross_amount = ?, discount_amount = ?,
                      subtotal = ?, cgst_amount = ?, sgst_amount = ?, igst_amount = ?, tax_amount = ?, total_amount = ?, notes = ?
-                     WHERE id = ?",
-                    array_merge($header, [$billId])
+                     WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
+                    array_merge($header, [$billId, $concernId, $unitId])
                 );
                 Database::execute("DELETE FROM production_bill_items WHERE bill_id = ?", [$billId]);
                 Database::execute("DELETE FROM production_bill_item_tags WHERE bill_id = ?", [$billId]);

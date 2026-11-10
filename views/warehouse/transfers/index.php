@@ -1,7 +1,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h2 class="h3 mb-0 text-gray-800"><i class="bi bi-arrow-left-right me-2 text-info"></i>Inter-Warehouse Transfers & Gate-Pass Logistics</h2>
-        <p class="text-muted small mb-0">Manage stock transfers between physical warehouses and retail stores with outward vehicle & driver tracking.</p>
+        <h2 class="h3 mb-0 text-gray-800"><i class="bi bi-arrow-left-right me-2 text-info"></i>Concern-to-Concern Transfers</h2>
+        <p class="text-muted small mb-0">Follow every transfer from source dispatch through transit to destination receipt and discrepancy recording.</p>
     </div>
     <div>
         <?php if (hasPermission('warehouse', 'create')): ?>
@@ -18,7 +18,7 @@
             <thead class="table-light">
                 <tr>
                     <th>Transfer</th>
-                    <th>Source & Destination</th>
+                    <th>Source Concern / Facility → Destination Concern / Facility</th>
                     <th>Outward Logistics</th>
                     <th>Total Items</th>
                     <th>Status</th>
@@ -79,27 +79,60 @@
                                     <i class="bi bi-printer me-1"></i> Gate Pass
                                 </button>
 
-                                <?php if ($trf['status'] === 'REQUESTED' && hasPermission('warehouse', 'approve')): ?>
+                                <?php if ($trf['status'] === 'REQUESTED'
+                                    && (int)$trf['source_concern_id'] === (int)currentConcernId()
+                                    && hasPermission('warehouse', 'approve')): ?>
                                     <form method="POST" action="<?= url('warehouse/transfers/approve/' . $trf['id']) ?>" class="d-inline">
                                         <?= CSRF::field() ?>
                                         <button type="submit" class="btn btn-sm btn-outline-info">Approve & Dispatch</button>
                                     </form>
-                                <?php elseif (in_array($trf['status'], ['APPROVED', 'DISPATCHED', 'IN_TRANSIT']) && hasPermission('warehouse', 'receive')): ?>
-                                    <form method="POST" action="<?= url('warehouse/transfers/receive/' . $trf['id']) ?>" class="d-inline">
-                                        <?= CSRF::field() ?>
-                                        <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Confirm receipt of transfer goods into destination warehouse?');">
-                                            <i class="bi bi-box-arrow-in-down me-1"></i> Receive Goods
+                                    <?php elseif ($trf['status'] === 'IN_TRANSIT'
+                                        && (int)$trf['destination_concern_id'] === (int)currentConcernId()
+                                        && hasPermission('warehouse', 'receive')): ?>
+                                        <button type="button" class="btn btn-sm btn-success btn-receive-transfer"
+                                                data-bs-toggle="modal" data-bs-target="#receiveTransferModal"
+                                                data-transfer='<?= htmlspecialchars(json_encode($trf), ENT_QUOTES, 'UTF-8') ?>'>
+                                            <i class="bi bi-box-arrow-in-down me-1"></i> Receive & Inspect
                                         </button>
-                                    </form>
-                                <?php elseif ($trf['status'] === 'RECEIVED' || $trf['status'] === 'COMPLETED'): ?>
-                                    <span class="btn btn-sm btn-light disabled"><i class="bi bi-check-all text-success me-1"></i> Received</span>
-                                <?php endif; ?>
+                                    <?php elseif ($trf['status'] === 'RECEIVED'): ?>
+                                        <span class="btn btn-sm btn-light disabled"><i class="bi bi-check-all text-success me-1"></i> Received</span>
+                                    <?php endif; ?>
                             </div>
                         </td>
                     </tr>
                 <?php endforeach; endif; ?>
             </tbody>
         </table>
+    </div>
+</div>
+
+<div class="modal fade" id="receiveTransferModal" tabindex="-1" aria-labelledby="receiveTransferModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" id="receiveTransferForm" action="#">
+                <?= CSRF::field() ?>
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="receiveTransferModalLabel"><i class="bi bi-box-arrow-in-down me-2"></i>Confirm Transfer Receipt</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">Enter the physically received quantity and how many of those items arrived damaged. Any dispatched quantity not received is recorded as a discrepancy.</p>
+                    <div class="fw-semibold mb-3" id="receiveTransferNumber"></div>
+                    <div class="table-responsive">
+                        <table class="table table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr><th>Item</th><th>Dispatched</th><th>Received</th><th>Damaged</th><th>Missing discrepancy</th></tr>
+                            </thead>
+                            <tbody id="receiveTransferItems"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success"><i class="bi bi-check2-circle me-1"></i>Confirm Inward</button>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 
@@ -156,15 +189,18 @@
                             <tr>
                                 <th>#</th>
                                 <th>Product Variant / SKU</th>
-                                <th class="text-end">Quantity (pcs)</th>
+                                <th class="text-end">Dispatched</th>
+                                <th class="text-end">Received</th>
+                                <th class="text-end">Damaged</th>
+                                <th class="text-end">Missing</th>
                             </tr>
                         </thead>
                         <tbody id="gpItemsTable">
-                            <tr><td colspan="3" class="text-center text-muted">Loading items...</td></tr>
+                            <tr><td colspan="6" class="text-center text-muted">Loading items...</td></tr>
                         </tbody>
                         <tfoot>
                             <tr class="fw-bold table-light">
-                                <td colspan="2" class="text-end">Total Dispatched Goods:</td>
+                                <td colspan="5" class="text-end">Total Dispatched Goods:</td>
                                 <td class="text-end" id="gpTotalQty">0 pcs</td>
                             </tr>
                         </tfoot>
@@ -193,6 +229,60 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const receiveBaseUrl = <?= json_encode(url('warehouse/transfers/receive/')) ?>;
+    document.querySelectorAll('.btn-receive-transfer').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const transfer = JSON.parse(this.getAttribute('data-transfer'));
+            document.getElementById('receiveTransferNumber').textContent = transfer.transfer_number;
+            document.getElementById('receiveTransferForm').action = receiveBaseUrl + transfer.id;
+            const tbody = document.getElementById('receiveTransferItems');
+            tbody.replaceChildren();
+            transfer.items.forEach(function(item) {
+                const row = document.createElement('tr');
+                const label = document.createElement('td');
+                label.textContent = (item.product_name || 'Product') + ' (' + (item.sku || '') + ')';
+                row.appendChild(label);
+
+                const shipped = Number(item.transferred_qty || item.quantity);
+                const shippedCell = document.createElement('td');
+                shippedCell.textContent = shipped;
+                row.appendChild(shippedCell);
+
+                const receivedCell = document.createElement('td');
+                const received = document.createElement('input');
+                received.type = 'number';
+                received.name = 'received_qty[' + item.id + ']';
+                received.min = '0';
+                received.max = String(shipped);
+                received.required = true;
+                received.className = 'form-control form-control-sm received-qty';
+                received.dataset.shipped = String(shipped);
+                receivedCell.appendChild(received);
+                row.appendChild(receivedCell);
+
+                const damagedCell = document.createElement('td');
+                const damaged = document.createElement('input');
+                damaged.type = 'number';
+                damaged.name = 'damaged_qty[' + item.id + ']';
+                damaged.min = '0';
+                damaged.max = String(shipped);
+                damaged.value = '0';
+                damaged.className = 'form-control form-control-sm damaged-qty';
+                damagedCell.appendChild(damaged);
+                row.appendChild(damagedCell);
+
+                const discrepancyCell = document.createElement('td');
+                discrepancyCell.className = 'text-center discrepancy-qty';
+                discrepancyCell.textContent = '—';
+                row.appendChild(discrepancyCell);
+                received.addEventListener('input', function() {
+                    discrepancyCell.textContent = Math.max(0, shipped - (Number(received.value) || 0));
+                });
+                tbody.appendChild(row);
+            });
+        });
+    });
+
     document.querySelectorAll('.btn-gatepass').forEach(function(btn) {
         btn.addEventListener('click', function() {
             const trf = JSON.parse(this.getAttribute('data-transfer'));
@@ -212,13 +302,34 @@ document.addEventListener('DOMContentLoaded', function() {
             if (trf.items && trf.items.length > 0) {
                 trf.items.forEach((item, idx) => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = `<td>${idx + 1}</td>
-                                    <td><strong>${item.product_name || 'Variant'}</strong> <br><small class="text-muted">SKU: ${item.sku || ''}</small></td>
-                                    <td class="text-end fw-bold">${item.quantity} pcs</td>`;
+                    const numberCell = document.createElement('td');
+                    numberCell.textContent = String(idx + 1);
+                    tr.appendChild(numberCell);
+
+                    const productCell = document.createElement('td');
+                    const productName = document.createElement('strong');
+                    productName.textContent = item.product_name || 'Variant';
+                    const sku = document.createElement('small');
+                    sku.className = 'text-muted d-block';
+                    sku.textContent = 'SKU: ' + (item.sku || '');
+                    productCell.append(productName, sku);
+                    tr.appendChild(productCell);
+
+                    [
+                        item.transferred_qty || item.quantity,
+                        item.received_qty || 0,
+                        item.damaged_qty || 0,
+                        item.discrepancy_qty || 0
+                    ].forEach((quantity, columnIndex) => {
+                        const cell = document.createElement('td');
+                        cell.className = columnIndex === 0 ? 'text-end fw-bold' : 'text-end';
+                        cell.textContent = String(quantity);
+                        tr.appendChild(cell);
+                    });
                     tbody.appendChild(tr);
                 });
             } else {
-                tbody.innerHTML = `<tr><td colspan="3" class="text-center text-muted">Total Quantity: ${trf.total_qty} pcs</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">Total Quantity: ${trf.total_qty} pcs</td></tr>`;
             }
         });
     });
