@@ -80,6 +80,22 @@ try {
         }
     }
 
+    $stockBalanceIndex = Database::fetchAll("SHOW INDEX FROM stock_balances WHERE Key_name = 'uk_stock_balance'");
+    $stockBalanceColumns = [];
+    foreach ($stockBalanceIndex as $indexRow) {
+        $stockBalanceColumns[(int)$indexRow['Seq_in_index']] = $indexRow['Column_name'];
+    }
+    ksort($stockBalanceColumns);
+    if (array_values($stockBalanceColumns) !== ['concern_id', 'variant_id', 'location_type', 'location_id', 'stock_state']) {
+        if ($stockBalanceIndex) {
+            Database::execute("ALTER TABLE stock_balances DROP INDEX uk_stock_balance");
+        }
+        Database::execute(
+            "ALTER TABLE stock_balances
+             ADD UNIQUE INDEX uk_stock_balance (concern_id, variant_id, location_type, location_id, stock_state)"
+        );
+    }
+
     echo "Concern ownership columns added to facilities and core inventory tables. Existing records remain unassigned.\n";
 } catch (Throwable $e) {
     fwrite(STDERR, 'Concern inventory ownership migration failed: ' . $e->getMessage() . PHP_EOL);
