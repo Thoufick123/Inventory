@@ -107,7 +107,13 @@ class ProductionCashService
         }
         Database::beginTransaction();
         try {
-            Database::fetchOne('SELECT id FROM production_units WHERE id = ? FOR UPDATE', [$unitId]);
+            $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+            if ($concernId === null || !Database::fetchOne(
+                'SELECT id FROM production_units WHERE id = ? AND concern_id = ? FOR UPDATE',
+                [$unitId, $concernId]
+            )) {
+                throw new InvalidArgumentException('Production unit not found in the active concern.');
+            }
             $active = self::getActiveRegister($unitId);
             if ($active) {
                 throw new RuntimeException("A production cash shift is already open ({$active['register_number']}). Close it first.");

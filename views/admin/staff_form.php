@@ -5,7 +5,7 @@
 $isEdit = !empty($staff['id']);
 $formAction = $isEdit ? url('admin/staff/update/' . $staff['id']) : url('admin/staff/store');
 $dept = strtoupper($_GET['department'] ?? $staff['department'] ?? 'PRODUCTION');
-if (!in_array($dept, ['PRODUCTION', 'WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP'])) {
+if (!in_array($dept, ['PRODUCTION', 'WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP', 'GENERAL', 'ALL'], true)) {
     $dept = 'PRODUCTION';
 }
 
@@ -13,6 +13,11 @@ $hierarchicalModules = $hierarchicalModules ?? Role::getHierarchicalPermissions(
 $rolePermissionsMap = $rolePermissionsMap ?? Role::getAllRolePermissionsMap();
 $staffPermissions = array_map('intval', $staffPermissions ?? []);
 $staffPermissions = Role::filterCrudPermissionIds($staffPermissions);
+$staffConcernIds = array_map('intval', $staffConcernIds ?? []);
+$concernModuleMap = [];
+foreach ($concerns ?? [] as $concern) {
+    $concernModuleMap[(int)$concern['id']] = $concern['module_keys'] ?? [];
+}
 
 $totalPossiblePerms = 0;
 foreach ($hierarchicalModules as $m) {
@@ -43,6 +48,7 @@ foreach ($hierarchicalModules as $m) {
     <form method="POST" action="<?= $formAction ?>" id="staffForm">
         <?= CSRF::field() ?>
         <input type="hidden" name="permissions[]" value="">
+        <input type="hidden" name="concern_ids[]" value="">
 
         <div class="row justify-content-center">
             <div class="col-12 col-xl-11">
@@ -126,36 +132,13 @@ foreach ($hierarchicalModules as $m) {
                                     <select id="role_id" name="role_id" class="form-select" required>
                                         <option value="">-- Select Role --</option>
                                         <?php foreach ($roles as $r): ?>
-                                            <?php
-                                             $rDept = $r['primary_department'] ?? 'ALL';
-                                             $rDepts = $r['departments'] ?? [];
-                                             $rDeptsJson = htmlspecialchars(json_encode($rDepts), ENT_QUOTES, 'UTF-8');
-                                             $badgeLabel = match($rDept) {
-                                                 'PRODUCTION' => '🏭 Production',
-                                                 'WAREHOUSE'  => '🏢 Warehouse',
-                                                 'WHATSAPP'   => '💬 WhatsApp',
-                                                 'WEBSITE'    => '🌐 Website',
-                                                 'SHOP'       => '🛍️ Shop',
-                                                 default      => '🌐 All Modules'
-                                             };
-                                             ?>
-                                            <option value="<?= $r['id'] ?>" 
-                                                    data-primary-dept="<?= e($rDept) ?>"
-                                                    data-departments='<?= $rDeptsJson ?>'
+                                            <option value="<?= $r['id'] ?>"
                                                     data-name="<?= e($r['name']) ?>"
                                                     <?= (string)($staff['role_id'] ?? '') === (string)$r['id'] ? 'selected' : '' ?>>
-                                                <?= e($r['name']) ?> [<?= $badgeLabel ?>]
+                                                <?= e($r['name']) ?>
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
-                                </div>
-                                <!-- Real-time Department Validation Alert -->
-                                <div id="role_mismatch_warning" class="alert alert-warning d-none py-2 px-3 mt-2 small d-flex align-items-center gap-2 mb-0 rounded-3 shadow-xs">
-                                    <i class="bi bi-exclamation-triangle-fill fs-5 text-warning flex-shrink-0"></i>
-                                    <div>
-                                        <strong>Department Mismatch:</strong> 
-                                        <span id="role_mismatch_msg">The selected role has no access permissions for this department.</span>
-                                    </div>
                                 </div>
                             </div>
 
@@ -173,99 +156,41 @@ foreach ($hierarchicalModules as $m) {
                                 </div>
                             </div>
 
-                            <!-- Department Selection Cards (5 Distinct Operational Concerns) -->
-                            <div class="col-12 pt-3 border-top">
-                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <label class="form-label fw-bold text-dark mb-0">
-                                        <i class="bi bi-diagram-3 text-primary me-2"></i>Select Department / Operational Concern <span class="text-danger">*</span>
-                                    </label>
-                                    <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>Auto-scoped based on assigned role</span>
+                                <!-- Custom staff concerns -->
+                                <div class="col-12 pt-3 border-top">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <label class="form-label fw-bold text-dark mb-0">
+                                            <i class="bi bi-diagram-3 text-primary me-2"></i>Assigned Concerns
+                                        </label>
+                                        <?php if (hasPermission('staff', 'edit')): ?>
+                                            <a class="small" href="<?= url('admin/staff/concerns') ?>" target="_blank" rel="noopener">Manage concerns &amp; modules</a>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php if (empty($concerns)): ?>
+                                        <div class="alert alert-warning mb-0">No concerns are configured. <a href="<?= url('admin/staff/concerns') ?>">Create one</a> before assigning concern-specific modules.</div>
+                                    <?php else: ?>
+                                        <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-2">
+                                            <?php foreach ($concerns as $concern): ?>
+                                                <div class="col">
+                                                    <label class="border rounded-3 p-3 d-flex gap-2 h-100">
+                                                        <input class="form-check-input concern-input mt-1" type="checkbox" name="concern_ids[]" value="<?= (int)$concern['id'] ?>" <?= in_array((int)$concern['id'], $staffConcernIds, true) ? 'checked' : '' ?>>
+                                                        <span><strong><?= e($concern['name']) ?></strong><small class="d-block text-muted"><?= count($concern['module_keys']) ?> modules</small></span>
+                                                    </label>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
-                                <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-5 g-2.5" id="departmentCards">
-                                    <!-- 1. Production -->
-                                    <div class="col">
-                                        <input type="radio" class="btn-check dept-radio" name="department" id="dept_production" value="PRODUCTION" <?= $dept === 'PRODUCTION' ? 'checked' : '' ?>>
-                                        <label class="btn btn-outline-primary w-100 p-2.5 text-start d-flex align-items-center h-100 dept-card rounded-3 shadow-xs" for="dept_production" id="label_dept_production">
-                                            <div class="rounded-circle bg-primary bg-opacity-10 p-2 me-2 text-primary flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
-                                                <i class="bi bi-gear-wide-connected fs-5"></i>
-                                            </div>
-                                            <div class="flex-grow-1 min-w-0">
-                                                <div class="d-flex align-items-center justify-content-between">
-                                                    <span class="fw-bold text-truncate" style="font-size: 13.5px;">Production</span>
-                                                    <span class="dept-badge badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill small d-none" style="font-size: 9px;">Auto</span>
-                                                </div>
-                                                <div class="text-muted small text-truncate" style="font-size: 11px;">Manufacturing &amp; Lots</div>
-                                            </div>
-                                        </label>
-                                    </div>
 
-                                    <!-- 2. Warehouse -->
-                                    <div class="col">
-                                        <input type="radio" class="btn-check dept-radio" name="department" id="dept_warehouse" value="WAREHOUSE" <?= $dept === 'WAREHOUSE' ? 'checked' : '' ?>>
-                                        <label class="btn btn-outline-success w-100 p-2.5 text-start d-flex align-items-center h-100 dept-card rounded-3 shadow-xs" for="dept_warehouse" id="label_dept_warehouse">
-                                            <div class="rounded-circle bg-success bg-opacity-10 p-2 me-2 text-success flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
-                                                <i class="bi bi-buildings fs-5"></i>
-                                            </div>
-                                            <div class="flex-grow-1 min-w-0">
-                                                <div class="d-flex align-items-center justify-content-between">
-                                                    <span class="fw-bold text-truncate" style="font-size: 13.5px;">Warehouse</span>
-                                                    <span class="dept-badge badge bg-success-subtle text-success border border-success-subtle rounded-pill small d-none" style="font-size: 9px;">Auto</span>
-                                                </div>
-                                                <div class="text-muted small text-truncate" style="font-size: 11px;">Stock &amp; Storage</div>
-                                            </div>
-                                        </label>
-                                    </div>
-
-                                    <!-- 3. WhatsApp -->
-                                    <div class="col">
-                                        <input type="radio" class="btn-check dept-radio" name="department" id="dept_whatsapp" value="WHATSAPP" <?= $dept === 'WHATSAPP' ? 'checked' : '' ?>>
-                                        <label class="btn btn-outline-success w-100 p-2.5 text-start d-flex align-items-center h-100 dept-card rounded-3 shadow-xs" for="dept_whatsapp" id="label_dept_whatsapp">
-                                            <div class="rounded-circle bg-success bg-opacity-15 p-2 me-2 text-success flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
-                                                <i class="bi bi-whatsapp fs-5"></i>
-                                            </div>
-                                            <div class="flex-grow-1 min-w-0">
-                                                <div class="d-flex align-items-center justify-content-between">
-                                                    <span class="fw-bold text-truncate" style="font-size: 13.5px;">WhatsApp</span>
-                                                    <span class="dept-badge badge bg-success-subtle text-success border border-success-subtle rounded-pill small d-none" style="font-size: 9px;">Auto</span>
-                                                </div>
-                                                <div class="text-muted small text-truncate" style="font-size: 11px;">B2B Orders &amp; Dispatches</div>
-                                            </div>
-                                        </label>
-                                    </div>
-
-                                    <!-- 4. Website -->
-                                    <div class="col">
-                                        <input type="radio" class="btn-check dept-radio" name="department" id="dept_website" value="WEBSITE" <?= $dept === 'WEBSITE' ? 'checked' : '' ?>>
-                                        <label class="btn btn-outline-info w-100 p-2.5 text-start d-flex align-items-center h-100 dept-card rounded-3 shadow-xs" for="dept_website" id="label_dept_website">
-                                            <div class="rounded-circle bg-info bg-opacity-10 p-2 me-2 text-info flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
-                                                <i class="bi bi-globe fs-5"></i>
-                                            </div>
-                                            <div class="flex-grow-1 min-w-0">
-                                                <div class="d-flex align-items-center justify-content-between">
-                                                    <span class="fw-bold text-truncate" style="font-size: 13.5px;">Website</span>
-                                                    <span class="dept-badge badge bg-info-subtle text-info border border-info-subtle rounded-pill small d-none" style="font-size: 9px;">Auto</span>
-                                                </div>
-                                                <div class="text-muted small text-truncate" style="font-size: 11px;">eCommerce Store</div>
-                                            </div>
-                                        </label>
-                                    </div>
-
-                                    <!-- 5. Shop -->
-                                    <div class="col">
-                                        <input type="radio" class="btn-check dept-radio" name="department" id="dept_shop" value="SHOP" <?= $dept === 'SHOP' ? 'checked' : '' ?>>
-                                        <label class="btn btn-outline-warning w-100 p-2.5 text-start d-flex align-items-center h-100 dept-card rounded-3 shadow-xs" for="dept_shop" id="label_dept_shop">
-                                            <div class="rounded-circle bg-warning bg-opacity-10 p-2 me-2 text-warning flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
-                                                <i class="bi bi-shop fs-5"></i>
-                                            </div>
-                                            <div class="flex-grow-1 min-w-0">
-                                                <div class="d-flex align-items-center justify-content-between">
-                                                    <span class="fw-bold text-truncate" style="font-size: 13.5px;">Shop</span>
-                                                    <span class="dept-badge badge bg-warning-subtle text-dark border border-warning-subtle rounded-pill small d-none" style="font-size: 9px;">Auto</span>
-                                                </div>
-                                                <div class="text-muted small text-truncate" style="font-size: 11px;">Retail &amp; POS Checkout</div>
-                                            </div>
-                                        </label>
-                                    </div>
+                                <!-- Preserve existing department-based facility/data scope separately from concerns. -->
+                                <div class="col-12 pt-3">
+                                    <label for="department" class="form-label fw-semibold">Facility / Record Scope</label>
+                                    <select id="department" name="department" class="form-select">
+                                        <?php foreach (['PRODUCTION' => 'Production Unit', 'WAREHOUSE' => 'Warehouse', 'WHATSAPP' => 'WhatsApp Channel', 'WEBSITE' => 'Website Channel', 'SHOP' => 'Retail Shop', 'GENERAL' => 'General', 'ALL' => 'All / Unassigned'] as $scopeValue => $scopeLabel): ?>
+                                            <option value="<?= e($scopeValue) ?>" <?= $dept === $scopeValue ? 'selected' : '' ?>><?= e($scopeLabel) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <small class="text-muted">This keeps existing facility assignments and record scoping; it is separate from the custom concerns above.</small>
                                 </div>
                             </div>
 
@@ -383,7 +308,7 @@ foreach ($hierarchicalModules as $m) {
                                     Role Sync: <span id="syncRoleName">None</span>
                                 </span>
                                 <span class="badge bg-light text-dark border px-2.5 py-1" id="activePermCountBadge">
-                                    <span id="activePermCount">0</span> / <?= $totalPossiblePerms ?> Active Permissions
+                                    <span id="activePermCount">0</span> / <span id="totalPossiblePerms"><?= $totalPossiblePerms ?></span> Active Permissions
                                 </span>
                             </div>
                         </div>
@@ -438,7 +363,7 @@ foreach ($hierarchicalModules as $m) {
                                 ?>
                                 <div class="card border border-light-subtle rounded-3 shadow-xs perm-module-block" 
                                      data-module-key="<?= e($modKey) ?>"
-                                     data-dept="<?= e($module['department'] ?? 'ALL') ?>">
+                                     >
                                     
                                     <!-- Module Header -->
                                     <div class="card-header bg-light bg-opacity-50 py-2.5 px-3 d-flex flex-wrap align-items-center justify-content-between gap-2 border-bottom">
@@ -447,12 +372,6 @@ foreach ($hierarchicalModules as $m) {
                                             <strong class="text-dark perm-module-title"><?= e($modTitle) ?></strong>
                                             <span class="badge <?= $modBadgeClass ?> border px-2 py-0.5 rounded-pill small">
                                                 <?= count($submodules) ?> submodules
-                                            </span>
-                                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill small perm-dept-lock-badge d-none">
-                                                <i class="bi bi-lock-fill me-1"></i>Restricted
-                                            </span>
-                                            <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill small perm-dept-active-badge d-none">
-                                                <i class="bi bi-check-circle-fill me-1"></i>Active Scope
                                             </span>
                                         </div>
                                         <div class="form-check form-switch mb-0 d-flex align-items-center gap-2">
@@ -487,11 +406,10 @@ foreach ($hierarchicalModules as $m) {
                                                     $subName    = $sub['name'] ?? $sub['title'] ?? ucfirst($subKey);
                                                     $subIcon    = $sub['icon'] ?? 'bi-circle';
                                                     $subDesc    = $sub['desc'] ?? $sub['description'] ?? '';
-                                                    $subDept    = $sub['department'] ?? $module['department'] ?? 'ALL';
 
                                                     $crudColumns = Role::getCrudPermissionsByAction($subPerms);
                                                     ?>
-                                                    <tr class="perm-submodule-row" data-submodule-key="<?= e($subKey) ?>" data-dept="<?= e($subDept) ?>">
+                                                    <tr class="perm-submodule-row" data-submodule-key="<?= e($subKey) ?>">
                                                         <td class="ps-3 py-2">
                                                             <div class="d-flex align-items-center gap-2">
                                                                 <i class="bi <?= $subIcon ?> text-primary"></i>
@@ -574,6 +492,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // =========================================================================
     const rolePermissionsMap = <?= json_encode($rolePermissionsMap, JSON_UNESCAPED_UNICODE) ?>;
     const initialStaffPerms = <?= json_encode($staffPermissions, JSON_UNESCAPED_UNICODE) ?>;
+    const concernModuleMap = <?= json_encode($concernModuleMap, JSON_UNESCAPED_UNICODE) ?>;
     const isEditMode = <?= $isEdit ? 'true' : 'false' ?>;
 
     const toggleBtn = document.getElementById('togglePassword');
@@ -708,105 +627,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (phoneInput.value) validatePhone();
     }
 
-    // =========================================================================
-    // Department & Role Auto-Choose Logic
-    // =========================================================================
-    const deptRadios = document.querySelectorAll('.dept-radio');
+    const departmentSelect = document.getElementById('department');
     const roleSelect = document.getElementById('role_id');
-    const warningBox = document.getElementById('role_mismatch_warning');
-    const warningMsg = document.getElementById('role_mismatch_msg');
-    const staffForm  = document.getElementById('staffForm');
-
-    function syncRoleAndDepartment(autoSelect = true) {
-        const selectedOption = roleSelect ? roleSelect.options[roleSelect.selectedIndex] : null;
-        const depts = ['PRODUCTION', 'WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP'];
-
-        if (!selectedOption || !selectedOption.value) {
-            depts.forEach(d => {
-                const radio = document.getElementById('dept_' + d.toLowerCase());
-                const label = document.getElementById('label_dept_' + d.toLowerCase());
-                const badge = label?.querySelector('.dept-badge');
-                if (radio) radio.disabled = false;
-                if (label) label.classList.remove('dept-card-disabled');
-                if (badge) badge.classList.add('d-none');
-            });
-            updateFacilityBlocks();
-            if (warningBox) warningBox.classList.add('d-none');
-            return;
-        }
-
-        const rolePrimaryDept = (selectedOption.getAttribute('data-primary-dept') || 'ALL').toUpperCase();
-        let roleDepts = [];
-        try {
-            roleDepts = JSON.parse(selectedOption.getAttribute('data-departments') || '[]').map(d => d.toUpperCase());
-        } catch (e) {}
-
-        let allowedDepts = [];
-        if (rolePrimaryDept === 'ALL' || (roleDepts.length === 0 && rolePrimaryDept === 'ALL')) {
-            allowedDepts = ['PRODUCTION', 'WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP'];
-        } else if (roleDepts.length > 0) {
-            allowedDepts = roleDepts.filter(d => depts.includes(d));
-            if (allowedDepts.length === 0 && depts.includes(rolePrimaryDept)) {
-                allowedDepts = [rolePrimaryDept];
-            }
-        } else if (depts.includes(rolePrimaryDept)) {
-            allowedDepts = [rolePrimaryDept];
-        } else {
-            allowedDepts = ['PRODUCTION', 'WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP'];
-        }
-
-        let currentlyChecked = document.querySelector('.dept-radio:checked')?.value;
-        let targetDept = currentlyChecked;
-        if (!allowedDepts.includes(currentlyChecked) || (allowedDepts.length === 1 && autoSelect)) {
-            targetDept = allowedDepts.includes(rolePrimaryDept) ? rolePrimaryDept : allowedDepts[0];
-        }
-
-        depts.forEach(d => {
-            const radio = document.getElementById('dept_' + d.toLowerCase());
-            const label = document.getElementById('label_dept_' + d.toLowerCase());
-            const badge = label?.querySelector('.dept-badge');
-            const isAllowed = allowedDepts.includes(d);
-
-            if (radio) {
-                if (d === targetDept && isAllowed) {
-                    radio.checked = true;
-                    radio.disabled = false;
-                } else {
-                    radio.disabled = !isAllowed;
-                }
-            }
-
-            if (label) {
-                if (isAllowed) {
-                    label.classList.remove('dept-card-disabled');
-                    if (badge) {
-                        if (allowedDepts.length === 1 && d === targetDept) {
-                            badge.innerHTML = '<i class="bi bi-shield-check me-1"></i>Auto Selected';
-                            badge.className = 'dept-badge badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill small';
-                            badge.classList.remove('d-none');
-                        } else {
-                            badge.classList.add('d-none');
-                        }
-                    }
-                } else {
-                    label.classList.add('dept-card-disabled');
-                    if (badge) {
-                        badge.innerHTML = '<i class="bi bi-slash-circle me-1"></i>Disabled for Role';
-                        badge.className = 'dept-badge badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill small';
-                        badge.classList.remove('d-none');
-                    }
-                }
-            }
-        });
-
-        updateFacilityBlocks();
-        syncPermissionsScopeWithDepartment(targetDept);
-        if (warningBox) warningBox.classList.add('d-none');
-    }
+    const staffForm = document.getElementById('staffForm');
+    departmentSelect?.addEventListener('change', updateFacilityBlocks);
 
     function updateFacilityBlocks() {
-        const selectedDept = document.querySelector('.dept-radio:checked')?.value || 'PRODUCTION';
-        
+        const selectedDept = departmentSelect?.value || 'PRODUCTION';
         document.getElementById('block_production')?.classList.toggle('d-none', selectedDept !== 'PRODUCTION');
         document.getElementById('block_warehouse')?.classList.toggle('d-none', selectedDept !== 'WAREHOUSE');
         document.getElementById('block_whatsapp')?.classList.toggle('d-none', selectedDept !== 'WHATSAPP');
@@ -814,118 +641,51 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('block_shop')?.classList.toggle('d-none', selectedDept !== 'SHOP');
     }
 
-    deptRadios.forEach(radio => radio.addEventListener('change', function () {
-        updateFacilityBlocks();
-        syncPermissionsScopeWithDepartment(this.value);
-    }));
-
     // =========================================================================
     // Dynamic Permissions Matrix Synchronization & Scoped Editing
     // =========================================================================
     const allPermCheckboxes = document.querySelectorAll('.perm-checkbox');
     const activePermCountEl = document.getElementById('activePermCount');
+    const totalPossiblePermsEl = document.getElementById('totalPossiblePerms');
     const permSyncBadge = document.getElementById('permSyncBadge');
     const syncRoleName = document.getElementById('syncRoleName');
     const permModuleFilter = document.getElementById('permModuleFilter');
     const permModuleBlocks = document.querySelectorAll('.perm-module-block');
     const btnResetToRole = document.getElementById('btnResetToRole');
+    const concernInputs = document.querySelectorAll('.concern-input');
 
-    function syncPermissionsScopeWithDepartment(selectedDept) {
-        if (!selectedDept) {
-            selectedDept = document.querySelector('.dept-radio:checked')?.value || 'PRODUCTION';
-        }
-        selectedDept = selectedDept.toUpperCase();
-
-        const operationalDepts = ['PRODUCTION', 'WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP'];
-
-        permModuleBlocks.forEach(block => {
-            const blockDept = (block.getAttribute('data-dept') || 'ALL').toUpperCase();
-            const modSwitch = block.querySelector('.perm-module-switch');
-            const lockBadge = block.querySelector('.perm-dept-lock-badge');
-            const activeBadge = block.querySelector('.perm-dept-active-badge');
-            const subRows = block.querySelectorAll('.perm-submodule-row');
-
-            const isOperationalBlock = operationalDepts.includes(blockDept);
-            const isBlockMismatched = isOperationalBlock && (selectedDept !== 'ALL' && selectedDept !== 'GENERAL') && (blockDept !== selectedDept);
-            const isBlockActive = isOperationalBlock && (selectedDept === blockDept);
-
-            if (isBlockMismatched) {
-                block.classList.add('d-none');
-                block.classList.add('perm-block-disabled');
-                block.classList.remove('border-info', 'border-success', 'border-primary');
-                if (lockBadge) {
-                    lockBadge.innerHTML = `<i class="bi bi-lock-fill me-1"></i>Restricted to ${blockDept}`;
-                    lockBadge.classList.remove('d-none');
-                }
-                if (activeBadge) activeBadge.classList.add('d-none');
-
-                if (modSwitch) {
-                    modSwitch.checked = false;
-                    modSwitch.disabled = true;
-                }
-
-                // Uncheck and disable all checkboxes inside this block
-                block.querySelectorAll('.perm-checkbox, .row-all-toggle').forEach(cb => {
-                    cb.checked = false;
-                    cb.disabled = true;
-                });
-            } else {
-                // ENABLED / ACTIVE / COMMON
-                block.classList.remove('d-none');
-                block.classList.remove('perm-block-disabled');
-                if (lockBadge) lockBadge.classList.add('d-none');
-
-                if (isBlockActive) {
-                    if (activeBadge) {
-                        activeBadge.innerHTML = `<i class="bi bi-check-circle-fill me-1"></i>Active (${selectedDept})`;
-                        activeBadge.classList.remove('d-none');
-                    }
-                } else {
-                    if (activeBadge) activeBadge.classList.add('d-none');
-                }
-
-                if (modSwitch) {
-                    modSwitch.disabled = false;
-                }
-
-                // Check submodule-level department restrictions (e.g. inside Reports)
-                subRows.forEach(row => {
-                    const rowDepts = (row.getAttribute('data-dept') || 'ALL')
-                        .split(',')
-                        .map(dept => dept.trim().toUpperCase());
-                    const isSubOp = rowDepts.some(dept => operationalDepts.includes(dept));
-                    const isSubMismatched = isSubOp &&
-                        (selectedDept !== 'ALL' && selectedDept !== 'GENERAL') &&
-                        !rowDepts.includes(selectedDept);
-
-                    const rowCbs = row.querySelectorAll('.perm-checkbox, .row-all-toggle');
-                    if (isSubMismatched) {
-                        row.classList.add('d-none');
-                        row.classList.add('perm-row-disabled');
-                        rowCbs.forEach(cb => {
-                            cb.checked = false;
-                            cb.disabled = true;
-                        });
-                    } else {
-                        row.classList.remove('d-none');
-                        row.classList.remove('perm-row-disabled');
-                        rowCbs.forEach(cb => {
-                            cb.disabled = false;
-                        });
-                    }
-                });
+    function syncPermissionsScopeWithConcerns() {
+        const allowedModules = new Set();
+        concernInputs.forEach(input => {
+            if (input.checked) {
+                (concernModuleMap[input.value] || []).forEach(moduleKey => allowedModules.add(moduleKey));
             }
         });
-
+        permModuleBlocks.forEach(block => {
+            let hasAllowedRow = false;
+            block.querySelectorAll('.perm-submodule-row').forEach(row => {
+                const isAllowed = allowedModules.has(row.dataset.submoduleKey);
+                row.classList.toggle('d-none', !isAllowed);
+                if (isAllowed) hasAllowedRow = true;
+            });
+            block.classList.toggle('d-none', !hasAllowedRow);
+        });
         updateActiveCounterAndSwitches();
     }
 
+    concernInputs.forEach(input => input.addEventListener('change', syncPermissionsScopeWithConcerns));
+
     function updateActiveCounterAndSwitches() {
         let activeCount = 0;
+        let possibleCount = 0;
         allPermCheckboxes.forEach(cb => {
-            if (cb.checked && !cb.disabled) activeCount++;
+            if (!cb.closest('.perm-submodule-row')?.classList.contains('d-none')) {
+                possibleCount++;
+                if (cb.checked && !cb.disabled) activeCount++;
+            }
         });
         if (activePermCountEl) activePermCountEl.textContent = activeCount;
+        if (totalPossiblePermsEl) totalPossiblePermsEl.textContent = possibleCount;
 
         // Sync each row-all toggle
         document.querySelectorAll('.row-all-toggle').forEach(rowToggle => {
@@ -987,7 +747,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // When role changes -> auto sync department AND auto load role's permissions!
     roleSelect?.addEventListener('change', function () {
-        syncRoleAndDepartment(true);
         const selectedRoleId = this.value;
         applyRolePermissions(selectedRoleId, false);
     });
@@ -1047,7 +806,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Column Tools
     function toggleColumn(actionType, checkState) {
-        document.querySelectorAll(`.perm-checkbox.perm-${actionType}:not(:disabled)`).forEach(cb => cb.checked = checkState);
+        document.querySelectorAll(`.perm-submodule-row:not(.d-none) .perm-checkbox.perm-${actionType}:not(:disabled)`).forEach(cb => cb.checked = checkState);
         updateActiveCounterAndSwitches();
         if (permSyncBadge) {
             permSyncBadge.className = 'badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2.5 py-1';
@@ -1067,7 +826,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Global Select All / Clear All
     document.getElementById('btnSelectAll')?.addEventListener('click', function () {
         allPermCheckboxes.forEach(cb => {
-            if (!cb.disabled) cb.checked = true;
+            if (!cb.disabled && !cb.closest('.perm-submodule-row')?.classList.contains('d-none')) cb.checked = true;
         });
         updateActiveCounterAndSwitches();
         if (permSyncBadge) {
@@ -1078,7 +837,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     document.getElementById('btnDeselectAll')?.addEventListener('click', function () {
         allPermCheckboxes.forEach(cb => {
-            if (!cb.disabled) cb.checked = false;
+            if (!cb.disabled && !cb.closest('.perm-submodule-row')?.classList.contains('d-none')) cb.checked = false;
         });
         updateActiveCounterAndSwitches();
         if (permSyncBadge) {
@@ -1108,11 +867,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Form submit guard
     staffForm?.addEventListener('submit', function (e) {
-        const checkedRadio = document.querySelector('.dept-radio:checked');
-        if (checkedRadio) {
-            checkedRadio.disabled = false;
-        }
-
         if (phoneInput && phoneInput.value.trim() !== '') {
             const phoneVal = phoneInput.value.replace(/\D/g, '');
             if (phoneVal.length !== 10) {
@@ -1139,7 +893,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // =========================================================================
     // Initial Load Setup
     // =========================================================================
-    syncRoleAndDepartment(false);
+    updateFacilityBlocks();
+    syncPermissionsScopeWithConcerns();
 
     if (isEditMode) {
         // In edit mode: if staff has custom permissions or role permissions
@@ -1162,33 +917,6 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 <style>
-.dept-card {
-    transition: all 0.25s ease-in-out;
-    cursor: pointer;
-}
-.dept-card-disabled {
-    opacity: 0.4 !important;
-    filter: grayscale(0.85);
-    cursor: not-allowed !important;
-    pointer-events: none !important;
-    background-color: #f8f9fa !important;
-    border-color: #dee2e6 !important;
-}
-.perm-block-disabled {
-    opacity: 0.45 !important;
-    filter: grayscale(0.7);
-    background-color: #f8f9fa !important;
-    border-color: #e2e8f0 !important;
-}
-.perm-block-disabled .table {
-    pointer-events: none !important;
-}
-.perm-row-disabled {
-    opacity: 0.35 !important;
-    filter: grayscale(0.8);
-    background-color: #f8f9fa !important;
-    pointer-events: none !important;
-}
 .permissions-table th, .permissions-table td {
     vertical-align: middle;
 }

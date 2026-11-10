@@ -257,10 +257,9 @@ function formatUtcDateTime(?string $datetime, string $format = 'd M Y h:i A'): s
 }
 
 /**
- * Check if current user has a specific permission.
- * Supports both hasPermission('module.action') and hasPermission('module', 'action')
+ * Check whether the current user's role grants an action, without concern checks.
  */
-function hasPermission(string $module, ?string $action = null): bool {
+function hasRolePermission(string $module, ?string $action = null): bool {
     if ($action === null) {
         if (strpos($module, '.') !== false) {
             [$module, $action] = explode('.', $module, 2);
@@ -324,6 +323,44 @@ function hasPermission(string $module, ?string $action = null): bool {
 }
 
 /**
+ * Check the role permission and, for operational modules, the active concern boundary.
+ * Supports both hasPermission('module.action') and hasPermission('module', 'action').
+ */
+function hasPermission(string $module, ?string $action = null): bool {
+    if ($action === null && strpos($module, '.') !== false) {
+        [$module, $action] = explode('.', $module, 2);
+    }
+    $action = $action ?? 'view';
+
+    if (!hasRolePermission($module, $action)) {
+        return false;
+    }
+
+    $user = Session::user() ?? [];
+    $isSuperAdminUser = (int)($user['role_id'] ?? 0) === 1
+        || strtolower($user['role_slug'] ?? '') === 'super_admin';
+    if ($module === 'dashboard' && !$isSuperAdminUser) {
+        return false;
+    }
+
+    return isGlobalConcernModule($module) || concernHasModule($module);
+}
+
+function isGlobalConcernModule(string $module): bool {
+    return in_array($module, ['staff', 'roles', 'dashboard', 'settings', 'audit', 'backup', 'notifications'], true);
+}
+
+function concernHasModule(string $module): bool {
+    if (isGlobalConcernModule($module)) {
+        return true;
+    }
+
+    $concern = currentConcern();
+    return $concern !== null
+        && in_array($module, $concern['module_keys'] ?? [], true);
+}
+
+/**
  * Get old form input (for repopulating forms after validation errors).
  */
 function old(string $field, $default = '') {
@@ -351,16 +388,17 @@ function currentUser(): ?array {
     if ($cachedId !== $uid || $cachedUser === null) {
         $cachedId = $uid;
         if (class_exists('Database')) {
+            $activeConcernId = (int)Session::get('active_concern_id', 0);
             $fresh = Database::fetchOne(
                 "SELECT u.*, r.name as role_name, r.slug as role_slug,
                         pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name
                  FROM users u 
                  LEFT JOIN roles r ON u.role_id = r.id 
-                 LEFT JOIN production_units pu ON u.production_unit_id = pu.id
-                 LEFT JOIN warehouses w ON u.warehouse_id = w.id
-                 LEFT JOIN shops s ON u.shop_id = s.id
+                 LEFT JOIN production_units pu ON u.production_unit_id = pu.id AND pu.concern_id = ?
+                 LEFT JOIN warehouses w ON u.warehouse_id = w.id AND w.concern_id = ?
+                 LEFT JOIN shops s ON u.shop_id = s.id AND s.concern_id = ?
                  WHERE u.id = ?",
-                [$uid]
+                [$activeConcernId, $activeConcernId, $activeConcernId, $uid]
             );
             if ($fresh) {
                 $user = array_merge($user, [
@@ -399,6 +437,26 @@ function isSuperAdmin(): bool {
     return ($roleId === 1 || $roleSlug === 'super_admin');
 }
 
+function currentConcern(): ?array {
+    static $resolved = false;
+    static $activeConcern = null;
+    if ($resolved) {
+        return $activeConcern;
+    }
+
+    if (!class_exists('Concern')) {
+        require_once (defined('BASE_PATH') ? BASE_PATH : dirname(__DIR__, 2)) . '/app/Models/Concern.php';
+    }
+    $activeConcern = Concern::getActiveForCurrentUser();
+    $resolved = true;
+    return $activeConcern;
+}
+
+function currentConcernId(): ?int {
+    $concern = currentConcern();
+    return $concern ? (int)$concern['id'] : null;
+}
+
 /**
  * Get the restricted production unit ID for the current user.
  * Returns null if user is Super Admin or has unrestricted access.
@@ -408,7 +466,21 @@ function currentProductionUnitId(): ?int {
         return null;
     }
     $u = currentUser();
-    return !empty($u['production_unit_id']) ? (int)$u['production_unit_id'] : null;
+    $unitId = !empty($u['production_unit_id']) ? (int)$u['production_unit_id'] : null;
+    if ($unitId === null) {
+        return null;
+    }
+
+    $concernId = currentConcernId();
+    if ($concernId === null) {
+        return 0;
+    }
+    $unit = Database::fetchOne(
+        "SELECT id FROM production_units WHERE id = ? AND concern_id = ?",
+        [$unitId, $concernId]
+    );
+
+    return $unit ? $unitId : 0;
 }
 
 /**
@@ -420,7 +492,20 @@ function currentWarehouseId(): ?int {
         return null;
     }
     $u = currentUser();
-    return !empty($u['warehouse_id']) ? (int)$u['warehouse_id'] : null;
+    $warehouseId = !empty($u['warehouse_id']) ? (int)$u['warehouse_id'] : null;
+    if ($warehouseId === null) {
+        return null;
+    }
+
+    $concernId = currentConcernId();
+    if ($concernId === null || !Database::fetchOne(
+        "SELECT id FROM warehouses WHERE id = ? AND concern_id = ?",
+        [$warehouseId, $concernId]
+    )) {
+        return 0;
+    }
+
+    return $warehouseId;
 }
 
 /**
@@ -432,44 +517,161 @@ function currentShopId(): ?int {
         return null;
     }
     $u = currentUser();
-    return !empty($u['shop_id']) ? (int)$u['shop_id'] : null;
+    $shopId = !empty($u['shop_id']) ? (int)$u['shop_id'] : null;
+    if ($shopId === null) {
+        return null;
+    }
+
+    $concernId = currentConcernId();
+    if ($concernId === null || !Database::fetchOne(
+        "SELECT id FROM shops WHERE id = ? AND concern_id = ?",
+        [$shopId, $concernId]
+    )) {
+        return 0;
+    }
+
+    return $shopId;
 }
 
 /**
  * Get production units scoped to the current user's assignment.
  */
 function getScopedProductionUnits(bool $activeOnly = true): array {
-    $scopedId = currentProductionUnitId();
-    if ($scopedId !== null) {
-        $pu = Database::fetchOne("SELECT * FROM production_units WHERE id = ?", [$scopedId]);
-        return $pu ? [$pu] : [];
+    $concernId = currentConcernId();
+    if ($concernId === null || !Concern::hasFacilityModules($concernId, 'PRODUCTION')) {
+        return [];
     }
-    $sql = "SELECT * FROM production_units" . ($activeOnly ? " WHERE is_active = 1" : "") . " ORDER BY name ASC";
-    return Database::fetchAll($sql);
+
+    $scopedId = currentProductionUnitId();
+    $sql = "SELECT * FROM production_units WHERE concern_id = ?";
+    $params = [$concernId];
+    if ($activeOnly) {
+        $sql .= " AND is_active = 1";
+    }
+    if ($scopedId !== null && $scopedId > 0) {
+        $sql .= " AND id = ?";
+        $params[] = $scopedId;
+    } elseif ($scopedId === 0) {
+        return [];
+    }
+    $sql .= " ORDER BY name ASC";
+    return Database::fetchAll($sql, $params);
 }
 
 /**
  * Get warehouses scoped to the current user's assignment.
  */
 function getScopedWarehouses(bool $activeOnly = true): array {
-    $scopedId = currentWarehouseId();
-    if ($scopedId !== null) {
-        $wh = Database::fetchOne("SELECT * FROM warehouses WHERE id = ?", [$scopedId]);
-        return $wh ? [$wh] : [];
+    $concernId = currentConcernId();
+    if ($concernId === null || !Concern::hasFacilityModules($concernId, 'WAREHOUSE')) {
+        return [];
     }
-    $sql = "SELECT * FROM warehouses" . ($activeOnly ? " WHERE is_active = 1" : "") . " ORDER BY name ASC";
-    return Database::fetchAll($sql);
+
+    $scopedId = currentWarehouseId();
+    if ($scopedId === 0) {
+        return [];
+    }
+    $sql = "SELECT * FROM warehouses WHERE concern_id = ?";
+    $params = [$concernId];
+    if ($activeOnly) {
+        $sql .= " AND is_active = 1";
+    }
+    if ($scopedId !== null) {
+        $sql .= " AND id = ?";
+        $params[] = $scopedId;
+    }
+    $sql .= " ORDER BY name ASC";
+    return Database::fetchAll($sql, $params);
 }
 
 /**
  * Get shops scoped to the current user's assignment.
  */
 function getScopedShops(bool $activeOnly = true): array {
-    $scopedId = currentShopId();
-    if ($scopedId !== null) {
-        $sh = Database::fetchOne("SELECT * FROM shops WHERE id = ?", [$scopedId]);
-        return $sh ? [$sh] : [];
+    $concernId = currentConcernId();
+    if ($concernId === null || !Concern::hasFacilityModules($concernId, 'SHOP')) {
+        return [];
     }
-    $sql = "SELECT * FROM shops" . ($activeOnly ? " WHERE is_active = 1" : "") . " ORDER BY name ASC";
-    return Database::fetchAll($sql);
+
+    $scopedId = currentShopId();
+    if ($scopedId === 0) {
+        return [];
+    }
+    $sql = "SELECT * FROM shops WHERE concern_id = ?";
+    $params = [$concernId];
+    if ($activeOnly) {
+        $sql .= " AND is_active = 1";
+    }
+    if ($scopedId !== null) {
+        $sql .= " AND id = ?";
+        $params[] = $scopedId;
+    }
+    $sql .= " ORDER BY name ASC";
+    return Database::fetchAll($sql, $params);
+}
+
+function currentChannelId(): ?int {
+    if (isSuperAdmin()) {
+        return null;
+    }
+    $user = currentUser();
+    $channelId = !empty($user['channel_id']) ? (int)$user['channel_id'] : null;
+    if ($channelId === null) {
+        return null;
+    }
+    $concernId = currentConcernId();
+    if ($concernId === null || !Database::fetchOne(
+        "SELECT id FROM sales_channels WHERE id = ? AND concern_id = ?",
+        [$channelId, $concernId]
+    )) {
+        return 0;
+    }
+    return $channelId;
+}
+
+function getScopedSalesChannels(?string $channelType = null, bool $activeOnly = true): array {
+    $channelType = $channelType !== null ? strtoupper($channelType) : null;
+    $concernId = currentConcernId();
+    if ($concernId === null) {
+        return [];
+    }
+    if ($channelType !== null && !in_array($channelType, ['WHATSAPP', 'WEBSITE'], true)) {
+        return [];
+    }
+    $typeFilters = [];
+    if (Concern::hasFacilityModules($concernId, 'WHATSAPP')) {
+        $typeFilters['WHATSAPP'] = "((channel_type = 'WHATSAPP') OR ((channel_type IS NULL OR channel_type = '') AND (LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE 'wa%')))";
+    }
+    if (Concern::hasFacilityModules($concernId, 'WEBSITE')) {
+        $typeFilters['WEBSITE'] = "((channel_type = 'WEBSITE') OR ((channel_type IS NULL OR channel_type = '') AND (LOWER(name) LIKE '%website%' OR LOWER(name) LIKE '%web%' OR LOWER(code) LIKE 'web%' OR LOWER(code) LIKE 'we%')))";
+    }
+
+    if ($channelType === 'WHATSAPP' || $channelType === 'WEBSITE') {
+        if (!isset($typeFilters[$channelType])) {
+            return [];
+        }
+        $typeFilters = [$typeFilters[$channelType]];
+    }
+    $allowedTypes = array_values($typeFilters);
+    if (!$allowedTypes) {
+        return [];
+    }
+
+    $sql = "SELECT * FROM sales_channels WHERE concern_id = ?";
+    $params = [$concernId];
+    $sql .= ' AND (' . implode(' OR ', $allowedTypes) . ')';
+    if ($activeOnly) {
+        $sql .= " AND is_active = 1";
+    }
+
+    $scopedId = currentChannelId();
+    if ($scopedId === 0) {
+        return [];
+    }
+    if ($scopedId !== null) {
+        $sql .= " AND id = ?";
+        $params[] = $scopedId;
+    }
+    $sql .= " ORDER BY name ASC";
+    return Database::fetchAll($sql, $params);
 }

@@ -219,9 +219,9 @@ class ReportController {
         $salesData = $this->getDetailedSalesReport($filter['start_date'], $filter['end_date'], $channel, $paymentMethod);
 
         // Fetch shops, warehouses, production units for per-location breakdowns
-        $shops = Database::fetchAll("SELECT * FROM shops WHERE is_active = 1 ORDER BY name ASC");
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
-        $productionUnits = Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+        $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         Response::view('reports.sales', [
             'pageTitle'       => 'Multi-Channel Sales & Invoice Report',
@@ -328,7 +328,7 @@ class ReportController {
         $unitId = !empty($_GET['unit_id']) ? (int)$_GET['unit_id'] : 0;
 
         $productionData = $this->getDetailedProductionReport($filter['start_date'], $filter['end_date'], $unitId);
-        $units = Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         Response::view('reports.production', [
             'pageTitle'      => 'Production & Manufacturing Reports',
@@ -353,7 +353,7 @@ class ReportController {
         $warehouseId = !empty($_GET['warehouse_id']) ? (int)$_GET['warehouse_id'] : 0;
 
         $warehouseData = $this->getDetailedWarehouseReport($filter['start_date'], $filter['end_date'], $warehouseId);
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('reports.warehouse', [
             'pageTitle'     => 'Warehouse Logistics & Damage Reports',
@@ -403,7 +403,7 @@ class ReportController {
         $shopId = !empty($_GET['shop_id']) ? (int)$_GET['shop_id'] : 0;
 
         $shopData = $this->getDetailedShopReport($filter['start_date'], $filter['end_date'], $shopId);
-        $shops = Database::fetchAll("SELECT * FROM shops WHERE is_active = 1 ORDER BY name ASC");
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
 
         Response::view('reports.shop', [
             'pageTitle'    => 'Retail Stores & POS Cash Flow Reports',

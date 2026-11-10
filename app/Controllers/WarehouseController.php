@@ -47,7 +47,7 @@ class WarehouseController {
         $stats = WarehouseService::getDashboardStats($scopedWarehouseId);
 
         // Also fetch Person 2 outbound stats & recent records for full dashboard compatibility
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         $whStockClause = $scopedWarehouseId ? " AND location_id = $scopedWarehouseId" : "";
         $whAllocClause = $scopedWarehouseId ? " AND warehouse_id = $scopedWarehouseId" : "";
         $whOutClause = $scopedWarehouseId ? " AND ao.warehouse_id = $scopedWarehouseId" : "";
@@ -520,6 +520,18 @@ class WarehouseController {
             Response::jsonError('Access denied: You do not have permission to look up batches.', [], 403);
             return;
         }
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            Response::jsonError('Select an active concern before looking up a batch.', [], 409);
+            return;
+        }
+        $assignedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($assignedWarehouseId === 0) {
+            Response::jsonError('The assigned warehouse is not available in the active concern.', [], 403);
+            return;
+        }
+        $warehouseAssignmentSql = $assignedWarehouseId !== null ? ' AND w.id = ?' : '';
+        $warehouseAssignmentParams = $assignedWarehouseId !== null ? [$assignedWarehouseId] : [];
         $code = trim($code);
         $batch = Database::fetchOne(
             "SELECT pb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name, p.code as product_code,
@@ -528,10 +540,10 @@ class WarehouseController {
              FROM production_batches pb
              JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
-             JOIN warehouses w ON pb.destination_warehouse_id = w.id
+             JOIN warehouses w ON pb.destination_warehouse_id = w.id AND w.concern_id = ?{$warehouseAssignmentSql}
              LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
-             WHERE pb.batch_number = ? OR po.outward_number = ?",
-            [$code, $code]
+             WHERE pb.concern_id = ? AND (pb.batch_number = ? OR po.outward_number = ?)",
+            array_merge([$concernId], $warehouseAssignmentParams, [$concernId, $code, $code])
         );
 
         if (!$batch) {
@@ -556,11 +568,23 @@ class WarehouseController {
         $code = trim($_POST['qr_code'] ?? '');
         $autoReceive = isset($_POST['auto_receive']) && ($_POST['auto_receive'] === '1' || $_POST['auto_receive'] === 'true');
         $notes = trim($_POST['notes'] ?? 'Scanned & Received via Inward QR Scanner');
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
 
         if (empty($code)) {
             Response::jsonError("QR code or batch identifier cannot be empty.");
             return;
         }
+        if ($concernId === null) {
+            Response::jsonError('Select an active concern before scanning an inward.', [], 409);
+            return;
+        }
+        $assignedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($assignedWarehouseId === 0) {
+            Response::jsonError('The assigned warehouse is not available in the active concern.', [], 403);
+            return;
+        }
+        $warehouseAssignmentSql = $assignedWarehouseId !== null ? ' AND w.id = ?' : '';
+        $warehouseAssignmentParams = $assignedWarehouseId !== null ? [$assignedWarehouseId] : [];
 
         // Clean code and handle JSON / Pipe formats
         $parsedCode = $code;
@@ -613,13 +637,14 @@ class WarehouseController {
              FROM production_batches pb
              JOIN production_programs pp ON pb.program_id = pp.id
              JOIN products p ON pp.product_id = p.id
-             JOIN warehouses w ON pb.destination_warehouse_id = w.id
+             JOIN warehouses w ON pb.destination_warehouse_id = w.id AND w.concern_id = ?{$warehouseAssignmentSql}
              LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
              LEFT JOIN production_batch_items pbi ON pbi.production_batch_id = pb.id
              LEFT JOIN product_variants pv ON pbi.variant_id = pv.id
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors c ON pv.color_id = c.id
-             WHERE pb.batch_number = ? 
+             WHERE pb.concern_id = ? AND (
+                pb.batch_number = ?
                 OR po.outward_number = ?
                 OR (? != '' AND pv.sku = ?)
                 OR (? != '' AND pv.sku = ?)
@@ -627,9 +652,13 @@ class WarehouseController {
                 OR (? != '' AND CONCAT(s.code, '-', c.name) = ?)
                 OR (? != '' AND ? LIKE CONCAT('%', pv.sku, '%'))
                 OR (? != '' AND ? LIKE CONCAT('%', pb.batch_number, '%'))
+             )
              ORDER BY (pb.status = 'DISPATCHED') DESC, pb.id DESC
              LIMIT 1",
             [
+                $concernId,
+                ...$warehouseAssignmentParams,
+                $concernId,
                 $parsedCode,
                 $parsedCode,
                 $extractedSku, $extractedSku,
@@ -646,11 +675,19 @@ class WarehouseController {
             $allocation = Database::fetchOne(
                 "SELECT wa.*, COALESCE(sc.name, 'Sales Channel') as channel_name, COALESCE(w.name, 'Main Warehouse') as warehouse_name
                  FROM warehouse_allocations wa
-                 LEFT JOIN sales_channels sc ON wa.channel_id = sc.id
-                 LEFT JOIN warehouses w ON wa.warehouse_id = w.id
-                 WHERE wa.allocation_number = ? OR (? REGEXP '^[0-9]+$' AND wa.id = ?) OR (? != '' AND wa.allocation_number LIKE CONCAT('%', ?, '%'))
+                 LEFT JOIN sales_channels sc ON wa.channel_id = sc.id AND sc.concern_id = ?
+                 LEFT JOIN warehouses w ON wa.warehouse_id = w.id AND w.concern_id = ?{$warehouseAssignmentSql}
+                 WHERE wa.concern_id = ? AND w.id IS NOT NULL AND (
+                    wa.allocation_number = ?
+                    OR (? REGEXP '^[0-9]+$' AND wa.id = ?)
+                    OR (? != '' AND wa.allocation_number LIKE CONCAT('%', ?, '%'))
+                 )
                  ORDER BY wa.id DESC LIMIT 1",
-                [$parsedCode, $parsedCode, (int)$parsedCode, $parsedCode, $parsedCode]
+                array_merge(
+                    [$concernId, $concernId],
+                    $warehouseAssignmentParams,
+                    [$concernId, $parsedCode, $parsedCode, (int)$parsedCode, $parsedCode, $parsedCode]
+                )
             );
 
             if ($allocation) {
@@ -677,30 +714,28 @@ class WarehouseController {
                 if ($autoReceive) {
                     $destinationType = strtoupper(trim((string)($allocation['destination_type'] ?? '')));
                     $destinationId = (int)($allocation['destination_id'] ?? 0);
-                    $stockChannelId = (int)($allocation['channel_id'] ?? 0);
+                    $scopedChannels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels() : [];
+                    $scopedChannelIds = array_map('intval', array_column($scopedChannels, 'id'));
+                    $requestedChannelId = (int)($allocation['channel_id'] ?? 0);
+                    $stockChannelId = in_array($requestedChannelId, $scopedChannelIds, true)
+                        ? $requestedChannelId
+                        : 0;
                     if ($destinationType === 'CHANNEL' && $destinationId > 0) {
+                        $stockChannelId = in_array($destinationId, $scopedChannelIds, true) ? $destinationId : 0;
+                    } elseif ($destinationId > 0 && in_array($destinationId, $scopedChannelIds, true)) {
                         $stockChannelId = $destinationId;
-                    } elseif ($destinationId > 0) {
-                        $destinationChannel = Database::fetchOne(
-                            "SELECT id FROM sales_channels
-                             WHERE id = ? AND (channel_type = 'WHATSAPP' OR LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%whatsapp%' OR code IN ('online 1', 'WA-01'))",
-                            [$destinationId]
-                        );
-                        if ($destinationChannel) {
-                            $stockChannelId = (int)$destinationChannel['id'];
-                        }
                     }
                     if ($stockChannelId <= 0) {
                         $channelType = str_contains(strtoupper((string)($allocation['allocation_number'] ?? '')), 'WREQ-')
                             ? 'WHATSAPP'
                             : strtoupper(trim((string)($allocation['destination_type'] ?? '')));
                         if (in_array($channelType, ['WHATSAPP', 'CHANNEL_WHATSAPP'], true)) {
-                            $whatsappChannel = Database::fetchOne(
-                                "SELECT id FROM sales_channels
-                                 WHERE channel_type = 'WHATSAPP' OR LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%whatsapp%' OR code IN ('online 1', 'WA-01')
-                                 ORDER BY id DESC LIMIT 1"
-                            );
-                            $stockChannelId = (int)($whatsappChannel['id'] ?? 3);
+                            $whatsappChannels = function_exists('getScopedSalesChannels')
+                                ? getScopedSalesChannels('WHATSAPP')
+                                : [];
+                            if (count($whatsappChannels) === 1) {
+                                $stockChannelId = (int)$whatsappChannels[0]['id'];
+                            }
                         }
                     }
                     if ($stockChannelId <= 0) {
@@ -784,9 +819,10 @@ class WarehouseController {
                 $selectedWhId = !empty($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : null;
                 $targetWhId = $scopedWhId ?: ($selectedWhId ?: null);
                 if ($targetWhId) {
-                    $whRow = Database::fetchOne("SELECT id, name, code FROM warehouses WHERE id = ?", [$targetWhId]);
+                    $whRow = Warehouse::find($targetWhId);
                 } else {
-                    $whRow = Database::fetchOne("SELECT id, name, code FROM warehouses WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+                    $scopedWarehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+                    $whRow = $scopedWarehouses[0] ?? null;
                 }
                 $targetWhId = $whRow ? (int)$whRow['id'] : 1;
                 $whLabel = ($whRow['name'] ?? 'Main Warehouse') . (!empty($whRow['code']) ? " ({$whRow['code']})" : '');
@@ -1337,7 +1373,10 @@ class WarehouseController {
         $selectedWarehouseId = !empty($_GET['warehouse_id']) ? (int)$_GET['warehouse_id'] : ($scopedWarehouseId ? (int)$scopedWarehouseId : null);
         $selectedWarehouse = null;
         if ($selectedWarehouseId) {
-            $selectedWarehouse = Database::fetchOne("SELECT * FROM warehouses WHERE id = ?", [$selectedWarehouseId]);
+            $selectedWarehouse = Warehouse::find($selectedWarehouseId);
+            if (!$selectedWarehouse) {
+                $selectedWarehouseId = null;
+            }
         }
 
         // Fetch balances across all warehouses (or scoped warehouse if user has hard restriction)
@@ -2058,7 +2097,7 @@ class WarehouseController {
             unset($piece);
         }
 
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         // Fetch batch-wise added stock history specifically for this variant including damage tracking
         $whBatchHistoryClause = $selectedWarehouseId ? " AND (po.warehouse_id = " . (int)$selectedWarehouseId . " OR pb.destination_warehouse_id = " . (int)$selectedWarehouseId . ")" : "";
@@ -3845,7 +3884,7 @@ class WarehouseController {
         }
 
         // Fetch active production units for routing / rework assignment
-        $productionUnits = Database::fetchAll("SELECT id, name, code, manager_name, phone FROM production_units WHERE is_active = 1 ORDER BY code ASC, name ASC");
+        $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         Response::view('warehouse.damage.view', [
             'pageTitle'       => 'Damage Case: ' . $damage['damage_number'],
@@ -4026,7 +4065,7 @@ class WarehouseController {
 
                 $puInfo = null;
                 if ($newStatus === 'REWORK' && $productionUnitId) {
-                    $puInfo = Database::fetchOne("SELECT id, name, code, manager_name, phone FROM production_units WHERE id = ?", [$productionUnitId]);
+                    $puInfo = ProductionUnit::find($productionUnitId);
                 }
                 $puNameStr = $puInfo ? "[{$puInfo['code']}] {$puInfo['name']}" : null;
 
@@ -4216,7 +4255,7 @@ class WarehouseController {
             $puInfo = null;
             if ($newStatus === 'REWORK' && $productionUnitId) {
                 $updateData['production_unit_id'] = $productionUnitId;
-                $puInfo = Database::fetchOne("SELECT id, name, code, manager_name, phone FROM production_units WHERE id = ?", [$productionUnitId]);
+                $puInfo = ProductionUnit::find($productionUnitId);
             }
 
             WarehouseDamage::update($damageId, $updateData);
@@ -5460,7 +5499,7 @@ class WarehouseController {
         if ($availableStock <= 0 && !$isAdjustmentScan) {
             $whLabel = 'Warehouse';
             if ($warehouseId > 0) {
-                $whRow = Database::fetchOne("SELECT name, code FROM warehouses WHERE id = ?", [$warehouseId]);
+                $whRow = Warehouse::find($warehouseId);
                 if ($whRow) {
                     $whLabel = $whRow['name'] . ' (' . $whRow['code'] . ')';
                 }
@@ -6355,7 +6394,7 @@ class WarehouseController {
         $categories = Database::fetchAll("SELECT id, name FROM categories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
         $subcategories = Database::fetchAll("SELECT id, category_id, name FROM subcategories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
         $subSubcategories = Database::fetchAll("SELECT id, subcategory_id, name FROM sub_subcategories WHERE is_active = 1 ORDER BY name ASC");
-        $salesChannels = Database::fetchAll("SELECT * FROM sales_channels WHERE is_active = 1 ORDER BY name ASC");
+        $salesChannels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels() : [];
 
         $defaultWhId = $scopedWarehouseId !== null ? $scopedWarehouseId : (!empty($warehouses) ? (int)$warehouses[0]['id'] : 0);
         $variants = Database::fetchAll(
@@ -6455,22 +6494,16 @@ class WarehouseController {
         $requestedQty = $_POST['requested_qty'] ?? [];
         $selectedQrCodes = $_POST['selected_qr_codes'] ?? [];
 
-        $sourceWarehouse = Database::fetchOne(
-            "SELECT id FROM warehouses WHERE id = ? AND is_active = 1",
-            [$warehouseId]
-        );
-        if (!$sourceWarehouse) {
+        $sourceWarehouse = Warehouse::find($warehouseId);
+        if (!$sourceWarehouse || empty($sourceWarehouse['is_active'])) {
             Session::flash('error', 'Please select a valid active source warehouse.');
             Response::redirect(url('warehouse/allocation/create'));
             return;
         }
 
         if ($destWhId !== null) {
-            $destinationWarehouse = Database::fetchOne(
-                "SELECT id FROM warehouses WHERE id = ? AND is_active = 1",
-                [$destWhId]
-            );
-            if (!$destinationWarehouse) {
+            $destinationWarehouse = Warehouse::find($destWhId);
+            if (!$destinationWarehouse || empty($destinationWarehouse['is_active'])) {
                 Session::flash('error', 'Please select a valid active destination warehouse.');
                 Response::redirect(url('warehouse/allocation/create'));
                 return;
@@ -7655,7 +7688,7 @@ class WarehouseController {
         // Fetch Source Warehouse name for friendly messages
         $warehouseName = 'Warehouse';
         if ($warehouseId > 0) {
-            $whRow = Database::fetchOne("SELECT name FROM warehouses WHERE id = ?", [$warehouseId]);
+            $whRow = Warehouse::find($warehouseId);
             if ($whRow && !empty($whRow['name'])) {
                 $warehouseName = $whRow['name'];
             }
@@ -8867,7 +8900,7 @@ class WarehouseController {
         if (empty($subSubcategories)) {
             $subSubcategories = Database::fetchAll("SELECT id, subcategory_id, name FROM sub_subcategories WHERE is_active = 1 ORDER BY name ASC");
         }
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         // Brands list for Brand dropdown
         $brands = Database::fetchAll("SELECT id, name FROM brands WHERE is_active = 1 ORDER BY name ASC");
@@ -9366,7 +9399,8 @@ class WarehouseController {
         if ($scopedWhId !== null) {
             $warehouseId = $scopedWhId;
         } elseif ($warehouseId <= 0) {
-            $defaultWh = Database::fetchOne("SELECT id FROM warehouses WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+            $scopedWarehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+            $defaultWh = $scopedWarehouses[0] ?? null;
             $warehouseId = $defaultWh ? (int)$defaultWh['id'] : 1;
         }
 
@@ -9452,7 +9486,7 @@ class WarehouseController {
             $quantity = $remainingExpected;
         }
 
-        $warehouse = Database::fetchOne("SELECT * FROM warehouses WHERE id = ?", [$warehouseId]);
+        $warehouse = Warehouse::find($warehouseId);
         $whName = $warehouse['name'] ?? ('Warehouse #' . $warehouseId);
 
         $sessionUserId = Session::get('user_id');
@@ -9680,6 +9714,15 @@ class WarehouseController {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
             return;
         }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::json(['success' => false, 'message' => 'Select an active concern before creating a warehouse.'], 409);
+            return;
+        }
+        if (!Concern::hasFacilityModules((int)$activeConcernId, 'WAREHOUSE')) {
+            Response::json(['success' => false, 'message' => 'Enable a warehouse module for the active concern before creating a warehouse.'], 403);
+            return;
+        }
 
         $name = trim($_POST['name'] ?? '');
         if (empty($name)) {
@@ -9697,8 +9740,8 @@ class WarehouseController {
             if (empty($code)) {
                 $num = 1;
                 do {
-                    $code = 'WH-' . str_pad($num, 2, '0', STR_PAD_LEFT);
-                    $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ?", [$code]);
+                    $code = 'WH-C' . $activeConcernId . '-' . str_pad($num, 2, '0', STR_PAD_LEFT);
+                    $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                     if ($exists) {
                         $num++;
                     } else {
@@ -9706,7 +9749,7 @@ class WarehouseController {
                     }
                 } while (true);
             } else {
-                $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ?", [$code]);
+                $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                 if ($exists) {
                     Response::json(['success' => false, 'message' => "Warehouse code '{$code}' already exists."], 400);
                     return;
@@ -9714,8 +9757,8 @@ class WarehouseController {
             }
 
             Database::execute(
-                "INSERT INTO warehouses (name, code, manager_name, phone, address, is_active) VALUES (?, ?, ?, ?, ?, ?)",
-                [$name, $code, $managerName ?: null, $phone ?: null, $address ?: null, $isActive]
+                "INSERT INTO warehouses (name, code, manager_name, phone, address, is_active, concern_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [$name, $code, $managerName ?: null, $phone ?: null, $address ?: null, $isActive, $activeConcernId]
             );
             $id = (int)Database::lastInsertId();
 
@@ -9742,11 +9785,17 @@ class WarehouseController {
             return;
         }
 
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$concernId || !Warehouse::find($id)) {
+            Response::json(['success' => false, 'message' => 'Warehouse not found in the active concern.'], 404);
+            return;
+        }
+
         try {
             try {
-                Database::execute("DELETE FROM warehouses WHERE id = ?", [$id]);
+                Database::execute("DELETE FROM warehouses WHERE id = ? AND concern_id = ?", [$id, $concernId]);
             } catch (Exception $ex) {
-                Database::execute("UPDATE warehouses SET is_active = 0 WHERE id = ?", [$id]);
+                Database::execute("UPDATE warehouses SET is_active = 0 WHERE id = ? AND concern_id = ?", [$id, $concernId]);
             }
             AuditService::log('WAREHOUSE', 'DELETE_WAREHOUSE', 'warehouses', $id);
 
@@ -9762,8 +9811,17 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('warehouse', 'create') && !hasPermission('warehouse', 'edit')) {
+        if (!hasPermission('shop', 'create') && !hasPermission('shop', 'edit')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
+            return;
+        }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::json(['success' => false, 'message' => 'Select an active concern before creating a shop.'], 409);
+            return;
+        }
+        if (!Concern::hasFacilityModules((int)$activeConcernId, 'SHOP')) {
+            Response::json(['success' => false, 'message' => 'Enable a shop module for the active concern before creating a shop.'], 403);
             return;
         }
 
@@ -9784,8 +9842,8 @@ class WarehouseController {
             if (empty($code)) {
                 $num = 1;
                 do {
-                    $code = 'SH-' . str_pad($num, 2, '0', STR_PAD_LEFT);
-                    $exists = Database::fetchOne("SELECT id FROM shops WHERE code = ?", [$code]);
+                    $code = 'SH-C' . $activeConcernId . '-' . str_pad($num, 2, '0', STR_PAD_LEFT);
+                    $exists = Database::fetchOne("SELECT id FROM shops WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                     if ($exists) {
                         $num++;
                     } else {
@@ -9793,7 +9851,7 @@ class WarehouseController {
                     }
                 } while (true);
             } else {
-                $exists = Database::fetchOne("SELECT id FROM shops WHERE code = ?", [$code]);
+                $exists = Database::fetchOne("SELECT id FROM shops WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                 if ($exists) {
                     Response::json(['success' => false, 'message' => "Shop code '{$code}' already exists."], 400);
                     return;
@@ -9801,8 +9859,8 @@ class WarehouseController {
             }
 
             Database::execute(
-                "INSERT INTO shops (name, code, manager_name, gst_number, phone, address, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [$name, $code, $managerName ?: null, $gstNumber ?: null, $phone ?: null, $address ?: null, $isActive]
+                "INSERT INTO shops (name, code, manager_name, gst_number, phone, address, is_active, concern_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [$name, $code, $managerName ?: null, $gstNumber ?: null, $phone ?: null, $address ?: null, $isActive, $activeConcernId]
             );
             $id = (int)Database::lastInsertId();
 
@@ -9824,16 +9882,22 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('warehouse', 'delete') && !hasPermission('warehouse', 'edit')) {
+        if (!hasPermission('shop', 'delete') && !hasPermission('shop', 'edit')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
+            return;
+        }
+
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$concernId || !Shop::find($id)) {
+            Response::json(['success' => false, 'message' => 'Shop not found in the active concern.'], 404);
             return;
         }
 
         try {
             try {
-                Database::execute("DELETE FROM shops WHERE id = ?", [$id]);
+                Database::execute("DELETE FROM shops WHERE id = ? AND concern_id = ?", [$id, $concernId]);
             } catch (Exception $ex) {
-                Database::execute("UPDATE shops SET is_active = 0 WHERE id = ?", [$id]);
+                Database::execute("UPDATE shops SET is_active = 0 WHERE id = ? AND concern_id = ?", [$id, $concernId]);
             }
             AuditService::log('WAREHOUSE', 'DELETE_SHOP', 'shops', $id);
 
@@ -9852,7 +9916,7 @@ class WarehouseController {
             return;
         }
         $id = (int)$id;
-        $wh = Database::fetchOne("SELECT * FROM warehouses WHERE id = ?", [$id]);
+        $wh = Warehouse::find($id);
         if ($wh) {
             Response::json(['success' => true, 'data' => $wh]);
         } else {
@@ -9876,6 +9940,11 @@ class WarehouseController {
             Response::json(['success' => false, 'message' => 'Invalid Warehouse ID.'], 400);
             return;
         }
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$concernId || !Warehouse::find($id)) {
+            Response::json(['success' => false, 'message' => 'Warehouse not found in the active concern.'], 404);
+            return;
+        }
 
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
@@ -9890,15 +9959,15 @@ class WarehouseController {
         }
 
         try {
-            $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ? AND id != ?", [$code, $id]);
+            $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ? AND id != ? AND concern_id = ?", [$code, $id, $concernId]);
             if ($exists) {
                 Response::json(['success' => false, 'message' => "Warehouse code '{$code}' already exists."], 400);
                 return;
             }
 
             Database::execute(
-                "UPDATE warehouses SET name = ?, code = ?, manager_name = ?, phone = ?, address = ?, is_active = ? WHERE id = ?",
-                [$name, $code, $managerName ?: null, $phone ?: null, $address ?: null, $isActive, $id]
+                "UPDATE warehouses SET name = ?, code = ?, manager_name = ?, phone = ?, address = ?, is_active = ? WHERE id = ? AND concern_id = ?",
+                [$name, $code, $managerName ?: null, $phone ?: null, $address ?: null, $isActive, $id, $concernId]
             );
 
             AuditService::log('WAREHOUSE', 'UPDATE_WAREHOUSE', 'warehouses', $id, null, ['name' => $name, 'code' => $code]);
@@ -9910,12 +9979,12 @@ class WarehouseController {
     }
 
     public function ajaxGetShop(string $id): void {
-        if (!hasPermission('warehouse', 'view')) {
+        if (!hasPermission('shop', 'view')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
             return;
         }
         $id = (int)$id;
-        $shop = Database::fetchOne("SELECT * FROM shops WHERE id = ?", [$id]);
+        $shop = Shop::find($id);
         if ($shop) {
             Response::json(['success' => true, 'data' => $shop]);
         } else {
@@ -9929,7 +9998,7 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('warehouse', 'edit')) {
+        if (!hasPermission('shop', 'edit')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
             return;
         }
@@ -9937,6 +10006,11 @@ class WarehouseController {
         $id = (int)($id ?: ($_POST['id'] ?? 0));
         if ($id <= 0) {
             Response::json(['success' => false, 'message' => 'Invalid Shop ID.'], 400);
+            return;
+        }
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$concernId || !Shop::find($id)) {
+            Response::json(['success' => false, 'message' => 'Shop not found in the active concern.'], 404);
             return;
         }
 
@@ -9954,15 +10028,15 @@ class WarehouseController {
         }
 
         try {
-            $exists = Database::fetchOne("SELECT id FROM shops WHERE code = ? AND id != ?", [$code, $id]);
+            $exists = Database::fetchOne("SELECT id FROM shops WHERE code = ? AND id != ? AND concern_id = ?", [$code, $id, $concernId]);
             if ($exists) {
                 Response::json(['success' => false, 'message' => "Shop code '{$code}' already exists."], 400);
                 return;
             }
 
             Database::execute(
-                "UPDATE shops SET name = ?, code = ?, manager_name = ?, gst_number = ?, phone = ?, address = ?, is_active = ? WHERE id = ?",
-                [$name, $code, $managerName ?: null, $gstNumber ?: null, $phone ?: null, $address ?: null, $isActive, $id]
+                "UPDATE shops SET name = ?, code = ?, manager_name = ?, gst_number = ?, phone = ?, address = ?, is_active = ? WHERE id = ? AND concern_id = ?",
+                [$name, $code, $managerName ?: null, $gstNumber ?: null, $phone ?: null, $address ?: null, $isActive, $id, $concernId]
             );
 
             AuditService::log('WAREHOUSE', 'UPDATE_SHOP', 'shops', $id, null, ['name' => $name, 'code' => $code]);
@@ -9979,8 +10053,17 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('sales_channels', 'create') && !hasPermission('warehouse', 'edit')) {
+        if (!hasPermission('sales_channels', 'create')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
+            return;
+        }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::json(['success' => false, 'message' => 'Select an active concern before creating a sales channel.'], 409);
+            return;
+        }
+        if (!Concern::hasModule((int)$activeConcernId, 'sales_channels')) {
+            Response::json(['success' => false, 'message' => 'Enable the sales channels module for the active concern first.'], 403);
             return;
         }
 
@@ -10000,8 +10083,8 @@ class WarehouseController {
             if (empty($code)) {
                 $num = 1;
                 do {
-                    $code = 'SC-' . str_pad($num, 2, '0', STR_PAD_LEFT);
-                    $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ?", [$code]);
+                    $code = 'SC-C' . $activeConcernId . '-' . str_pad($num, 2, '0', STR_PAD_LEFT);
+                    $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                     if ($exists) {
                         $num++;
                     } else {
@@ -10009,7 +10092,7 @@ class WarehouseController {
                     }
                 } while (true);
             } else {
-                $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ?", [$code]);
+                $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                 if ($exists) {
                     Response::json(['success' => false, 'message' => "Sales Channel code '{$code}' already exists."], 400);
                     return;
@@ -10017,8 +10100,8 @@ class WarehouseController {
             }
 
             Database::execute(
-                "INSERT INTO sales_channels (name, code, manager_name, phone, description, is_active) VALUES (?, ?, ?, ?, ?, ?)",
-                [$name, $code, $managerName ?: null, $phone ?: null, $description ?: null, $isActive]
+                "INSERT INTO sales_channels (name, code, manager_name, phone, description, is_active, concern_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [$name, $code, $managerName ?: null, $phone ?: null, $description ?: null, $isActive, $activeConcernId]
             );
             $id = (int)Database::lastInsertId();
 
@@ -10035,12 +10118,16 @@ class WarehouseController {
     }
 
     public function ajaxGetChannel(string $id): void {
-        if (!hasPermission('sales_channels', 'view') && !hasPermission('warehouse', 'view')) {
+        if (!hasPermission('sales_channels', 'view')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
             return;
         }
         $id = (int)$id;
-        $chan = Database::fetchOne("SELECT * FROM sales_channels WHERE id = ?", [$id]);
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
+        $chan = $concernId === null || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== $id)
+            ? null
+            : Database::fetchOne("SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?", [$id, $concernId]);
         if ($chan) {
             Response::json(['success' => true, 'data' => $chan]);
         } else {
@@ -10054,7 +10141,7 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('sales_channels', 'create') && !hasPermission('warehouse', 'edit')) {
+        if (!hasPermission('sales_channels', 'edit')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
             return;
         }
@@ -10062,6 +10149,13 @@ class WarehouseController {
         $id = (int)($id ?: ($_POST['id'] ?? 0));
         if ($id <= 0) {
             Response::json(['success' => false, 'message' => 'Invalid Sales Channel ID.'], 400);
+            return;
+        }
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
+        if (!$concernId || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== $id)
+            || !Database::fetchOne("SELECT id FROM sales_channels WHERE id = ? AND concern_id = ?", [$id, $concernId])) {
+            Response::json(['success' => false, 'message' => 'Sales channel not found in the active concern.'], 404);
             return;
         }
 
@@ -10078,15 +10172,15 @@ class WarehouseController {
         }
 
         try {
-            $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND id != ?", [$code, $id]);
+            $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND id != ? AND concern_id = ?", [$code, $id, $concernId]);
             if ($exists) {
                 Response::json(['success' => false, 'message' => "Sales Channel code '{$code}' already exists."], 400);
                 return;
             }
 
             Database::execute(
-                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, description = ?, is_active = ? WHERE id = ?",
-                [$name, $code, $managerName ?: null, $phone ?: null, $description ?: null, $isActive, $id]
+                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, description = ?, is_active = ? WHERE id = ? AND concern_id = ?",
+                [$name, $code, $managerName ?: null, $phone ?: null, $description ?: null, $isActive, $id, $concernId]
             );
 
             AuditService::log('WAREHOUSE', 'UPDATE_CHANNEL', 'sales_channels', $id, null, ['name' => $name, 'code' => $code]);
@@ -10103,17 +10197,24 @@ class WarehouseController {
             return;
         }
 
-        if (!hasPermission('sales_channels', 'delete') && !hasPermission('warehouse', 'edit')) {
+        if (!hasPermission('sales_channels', 'delete')) {
             Response::json(['success' => false, 'message' => 'Access denied.'], 403);
             return;
         }
 
         $id = (int)$id;
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
+        if (!$concernId || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== $id)
+            || !Database::fetchOne("SELECT id FROM sales_channels WHERE id = ? AND concern_id = ?", [$id, $concernId])) {
+            Response::json(['success' => false, 'message' => 'Sales channel not found in the active concern.'], 404);
+            return;
+        }
         try {
             try {
-                Database::execute("DELETE FROM sales_channels WHERE id = ?", [$id]);
+                Database::execute("DELETE FROM sales_channels WHERE id = ? AND concern_id = ?", [$id, $concernId]);
             } catch (Exception $ex) {
-                Database::execute("UPDATE sales_channels SET is_active = 0 WHERE id = ?", [$id]);
+                Database::execute("UPDATE sales_channels SET is_active = 0 WHERE id = ? AND concern_id = ?", [$id, $concernId]);
             }
             AuditService::log('WAREHOUSE', 'DELETE_CHANNEL', 'sales_channels', $id);
 
@@ -12911,18 +13012,29 @@ class WarehouseController {
                     // Task 3: Update live warehouse stock level if entered
                     if (isset($existingStocks[$idx]) && $existingStocks[$idx] !== '') {
                         $targetStock = max(0.0, (float)$existingStocks[$idx]);
-                        $whId = function_exists('currentWarehouseId') && currentWarehouseId() ? currentWarehouseId() : 1;
+                        $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+                        if ($scopedWarehouseId === 0) {
+                            throw new RuntimeException('The assigned warehouse is not available in the active concern.');
+                        }
+                        if ($scopedWarehouseId === null) {
+                            $scopedWarehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+                            $scopedWarehouseId = isset($scopedWarehouses[0]['id']) ? (int)$scopedWarehouses[0]['id'] : null;
+                        }
+                        if ($scopedWarehouseId === null || $scopedWarehouseId <= 0) {
+                            throw new RuntimeException('No warehouse is available in the active concern.');
+                        }
+                        $whId = $scopedWarehouseId;
                         $currBalanceRow = Database::fetchOne(
-                            "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE'",
-                            [$vId, $whId]
+                            "SELECT quantity FROM stock_balances WHERE variant_id = ? AND location_type = 'WAREHOUSE' AND location_id = ? AND stock_state = 'AVAILABLE' AND concern_id = ?",
+                            [$vId, $whId, currentConcernId()]
                         );
                         $currentQty = (float)($currBalanceRow['quantity'] ?? 0);
                         if ($targetStock != $currentQty) {
                             Database::execute(
-                                "INSERT INTO stock_balances (variant_id, location_type, location_id, stock_state, quantity, last_updated, created_at)
-                                 VALUES (?, 'WAREHOUSE', ?, 'AVAILABLE', ?, NOW(), NOW())
+                                "INSERT INTO stock_balances (variant_id, location_type, location_id, stock_state, quantity, concern_id, last_updated, created_at)
+                                 VALUES (?, 'WAREHOUSE', ?, 'AVAILABLE', ?, ?, NOW(), NOW())
                                  ON DUPLICATE KEY UPDATE quantity = VALUES(quantity), last_updated = NOW()",
-                                [$vId, $whId, $targetStock]
+                                [$vId, $whId, $targetStock, currentConcernId()]
                             );
                             $diff = $targetStock - $currentQty;
                             try {
@@ -13467,12 +13579,13 @@ class WarehouseController {
         } else {
             $warehouseId = (int)($_POST['warehouse_id'] ?? $po['warehouse_id']);
             if ($warehouseId <= 0) {
-                $defaultWh = Database::fetchOne("SELECT id FROM warehouses WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+                $scopedWarehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+                $defaultWh = $scopedWarehouses[0] ?? null;
                 $warehouseId = $defaultWh ? (int)$defaultWh['id'] : 1;
             }
         }
 
-        $whName = Database::fetchOne("SELECT name FROM warehouses WHERE id = ?", [$warehouseId])['name'] ?? ('Warehouse #' . $warehouseId);
+        $whName = Warehouse::find($warehouseId)['name'] ?? ('Warehouse #' . $warehouseId);
 
         Database::beginTransaction();
         try {
@@ -13658,8 +13771,8 @@ class WarehouseController {
         $whatsappRequests = $filterList($allWhatsappList);
         $websiteRequests = $filterList($allWebsiteList);
 
-        $shops = Database::fetchAll("SELECT * FROM shops WHERE is_active = 1 ORDER BY name ASC");
-        $channels = Database::fetchAll("SELECT * FROM sales_channels WHERE is_active = 1 ORDER BY channel_type ASC, name ASC");
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
+        $channels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels() : [];
 
         $activeTab = $_GET['tab'] ?? 'shop';
         if (!in_array($activeTab, ['shop', 'whatsapp', 'website'])) {
@@ -13693,8 +13806,8 @@ class WarehouseController {
             return;
         }
         $scopedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
-        $shops = function_exists('getScopedShops') ? getScopedShops() : Database::fetchAll("SELECT * FROM shops WHERE is_active = 1 ORDER BY name ASC");
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.mrp, pv.selling_price, p.name as product_name,
                     COALESCE((
@@ -13799,7 +13912,7 @@ class WarehouseController {
 
         $scopedWhId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
         $warehouseId = !empty($_GET['warehouse_id']) ? (int)$_GET['warehouse_id'] : ($scopedWhId ?: 0);
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         
         $startDate = $_GET['start_date'] ?? date('Y-m-01');
         $endDate = $_GET['end_date'] ?? date('Y-m-d');
@@ -14736,7 +14849,7 @@ class WarehouseController {
         $subSubcategories = Database::fetchAll("SELECT * FROM warehouse_sub_subcategories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
 
         // Fetch warehouses, sizes, colors, brands
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         $sizes = Database::fetchAll("SELECT * FROM sizes WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
         $colors = Database::fetchAll("SELECT * FROM colors WHERE is_active = 1 ORDER BY name ASC");
         $brands = Database::fetchAll("SELECT * FROM brands WHERE is_active = 1 ORDER BY name ASC");

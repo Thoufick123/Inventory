@@ -16,24 +16,12 @@ class SalesController {
     }
 
     private function getSalesChannelLocationIds(string $channelType): array {
-        if ($channelType === 'WEBSITE') {
-            $channels = Database::fetchAll(
-                "SELECT id FROM sales_channels
-                 WHERE LOWER(name) LIKE '%website%' OR LOWER(code) LIKE '%website%'
-                    OR channel_type = 'WEBSITE' OR code IN ('online 2', 'WE-01')"
-            );
-            $fallbackIds = [1, 2, 4];
-        } else {
-            $channels = Database::fetchAll(
-                "SELECT id FROM sales_channels
-                 WHERE LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%whatsapp%'
-                    OR channel_type = 'WHATSAPP' OR code IN ('online 1', 'WA-01')"
-            );
-            $fallbackIds = [3];
-        }
-
-        $ids = array_values(array_unique(array_filter(array_map('intval', array_column($channels, 'id')))));
-        return $ids ?: $fallbackIds;
+        $channels = function_exists('getScopedSalesChannels')
+            ? getScopedSalesChannels(strtoupper($channelType))
+            : [];
+        return array_values(array_unique(array_filter(
+            array_map('intval', array_column($channels, 'id'))
+        )));
     }
 
     private function getSalesChannelAvailableStock(array $channelIds): array {
@@ -822,7 +810,8 @@ class SalesController {
         $gstPercentage = $taxableSubtotal > 0 ? round(($gstAmount / $taxableSubtotal) * 100, 2) : 0.0;
         $grandTotalAmount = (float)ceil($grossTotal + $shippingCost);
 
-        $shop = Database::fetchOne("SELECT id FROM shops LIMIT 1");
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
+        $shop = $shops[0] ?? null;
         $shopId = $shop ? (int)$shop['id'] : null;
 
         $stockUserId = $billerId > 0 && Database::fetchOne("SELECT id FROM users WHERE id = ?", [$billerId])
@@ -1264,7 +1253,8 @@ class SalesController {
         $gstPercentage = $taxableSubtotal > 0 ? round(($gstAmount / $taxableSubtotal) * 100, 2) : 0.0;
         $grandTotalAmount = (float)ceil($grossTotal + $shippingCost);
 
-        $shop = Database::fetchOne("SELECT id FROM shops LIMIT 1");
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
+        $shop = $shops[0] ?? null;
         $shopId = $shop ? (int)$shop['id'] : null;
 
         $stockUserId = $billerId > 0 && Database::fetchOne("SELECT id FROM users WHERE id = ?", [$billerId])

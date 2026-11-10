@@ -15,14 +15,11 @@ class Role {
     /**
      * Map of operational departments to their respective functional modules.
      */
-    /**
-     * Map of operational departments to their respective functional modules.
-     */
     public const DEPT_MODULE_MAP = [
         'PRODUCTION' => [
             'production', 'sellers', 'damages', 'catalog', 'programs', 'cutting', 'wastage',
             'stitching', 'stitching_wastage', 'production_expenses', 'labels', 'qc', 'inventory',
-            'batches', 'outward', 'production_cash', 'warehouse_rework', 'reports_production'
+            'batches', 'outward', 'production_inward', 'production_cash', 'warehouse_rework', 'reports_production'
         ],
         'WAREHOUSE'  => [
             'warehouse', 'inward', 'stock', 'wh_sellers', 'wh_catalog', 'wh_labels', 'purchases', 'purchases_returns', 'allocation',
@@ -293,6 +290,8 @@ class Role {
                     'inventory'           => ['name' => 'Inventory', 'icon' => 'bi-boxes', 'desc' => 'Unassigned lot staging bays and finished goods floor storage', 'department' => 'PRODUCTION'],
                     'batches'             => ['name' => 'Batches', 'icon' => 'bi-box-seam', 'desc' => 'Carton packing, SKU bundles, and master box packaging', 'department' => 'PRODUCTION'],
                     'outward'             => ['name' => 'Outward', 'icon' => 'bi-truck', 'desc' => 'Delivery challans and outward dispatch to Central Warehouses', 'department' => 'PRODUCTION'],
+                    'production_inward'  => ['name' => 'Inward / GRN', 'icon' => 'bi-box-arrow-in-down', 'desc' => 'Receive transferred products into a production unit', 'department' => 'PRODUCTION'],
+                    'production_cash'    => ['name' => 'Cash & Cash Flow', 'icon' => 'bi-cash-stack', 'desc' => 'Production cash registers, shifts, expenses, and deposits', 'department' => 'PRODUCTION'],
                     'warehouse_rework'    => ['name' => 'Warehouse Rework', 'icon' => 'bi-tools', 'desc' => 'Repair and dispatch damaged warehouse goods', 'department' => 'PRODUCTION'],
                 ]
             ],
@@ -443,6 +442,24 @@ class Role {
         return $modules;
     }
 
+    public static function filterHierarchicalPermissions(array $hierarchy, array $moduleKeys): array
+    {
+        $allowed = array_fill_keys($moduleKeys, true);
+        foreach ($hierarchy as $moduleKey => &$module) {
+            foreach ($module['submodules'] ?? [] as $submoduleKey => $submodule) {
+                if (empty($allowed[$submoduleKey])) {
+                    unset($module['submodules'][$submoduleKey]);
+                }
+            }
+            if (empty($module['submodules'])) {
+                unset($hierarchy[$moduleKey]);
+            }
+        }
+        unset($module);
+
+        return $hierarchy;
+    }
+
     public static function getCrudPermissionsByAction(array $permissions): array {
         $columns = [
             'view' => [],
@@ -494,6 +511,70 @@ class Role {
             [$roleId]
         );
         return array_column($rows, 'permission_id');
+    }
+
+    public static function getRolePermissionIdsForModules(int $roleId, array $moduleKeys): array
+    {
+        if (!$moduleKeys) {
+            return [];
+        }
+        $placeholders = implode(',', array_fill(0, count($moduleKeys), '?'));
+        $rows = Database::fetchAll(
+            "SELECT rp.permission_id
+             FROM role_permissions rp
+             JOIN permissions p ON p.id = rp.permission_id
+             WHERE rp.role_id = ? AND p.module IN ($placeholders)",
+            array_merge([$roleId], $moduleKeys)
+        );
+
+        return array_map('intval', array_column($rows, 'permission_id'));
+    }
+
+    public static function savePermissionsForModules(int $roleId, array $permissionIds, array $moduleKeys): void
+    {
+        if (!$moduleKeys) {
+            throw new InvalidArgumentException('Choose a concern with at least one module.');
+        }
+
+        $modulePlaceholders = implode(',', array_fill(0, count($moduleKeys), '?'));
+        $cleanIds = self::filterCrudPermissionIds($permissionIds);
+        if ($cleanIds) {
+            $idPlaceholders = implode(',', array_fill(0, count($cleanIds), '?'));
+            $rows = Database::fetchAll(
+                "SELECT id FROM permissions
+                 WHERE id IN ($idPlaceholders) AND module IN ($modulePlaceholders)",
+                array_merge($cleanIds, $moduleKeys)
+            );
+            $cleanIds = array_map('intval', array_column($rows, 'id'));
+        }
+
+        Database::beginTransaction();
+        try {
+            $modulePermissionRows = Database::fetchAll(
+                "SELECT id FROM permissions WHERE module IN ($modulePlaceholders)",
+                $moduleKeys
+            );
+            $modulePermissionIds = array_map('intval', array_column($modulePermissionRows, 'id'));
+            if ($modulePermissionIds) {
+                $permissionPlaceholders = implode(',', array_fill(0, count($modulePermissionIds), '?'));
+                Database::execute(
+                    "DELETE FROM role_permissions WHERE role_id = ? AND permission_id IN ($permissionPlaceholders)",
+                    array_merge([$roleId], $modulePermissionIds)
+                );
+            }
+            foreach ($cleanIds as $permissionId) {
+                Database::execute(
+                    "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                    [$roleId, $permissionId]
+                );
+            }
+            Database::commit();
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
+            throw $e;
+        }
     }
 
     /**

@@ -18,22 +18,16 @@ class WebsiteController {
      * Helper to get Website channel record
      */
     private function getChannel(): array {
-        $chan = Database::fetchOne(
-            "SELECT * FROM sales_channels 
-             WHERE LOWER(name) LIKE '%website%' OR LOWER(code) LIKE '%website%' OR channel_type = 'WEBSITE' OR code = 'online 2' OR code = 'WE-01'
-             ORDER BY id ASC LIMIT 1"
-        );
-        return $chan ?: ['id' => 2, 'name' => 'MARAKATHAI', 'code' => 'WE-01'];
+        $channels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels('WEBSITE') : [];
+        if (!$channels) {
+            Response::error(409, 'No Website channel is configured for the active concern.');
+        }
+        return $channels[0];
     }
 
     private function getWebsiteChannelIds(): array {
-        $channels = Database::fetchAll(
-            "SELECT id FROM sales_channels 
-             WHERE LOWER(name) LIKE '%website%' OR LOWER(code) LIKE '%website%' OR channel_type = 'WEBSITE' OR code = 'online 2' OR code = 'WE-01'"
-        );
-        $ids = array_map('intval', array_column($channels, 'id'));
-        if (empty($ids)) $ids = [2];
-        return array_unique($ids);
+        $channels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels('WEBSITE') : [];
+        return array_map('intval', array_column($channels, 'id'));
     }
 
     private function isAggregateStockVariant(int $variantId): bool {
@@ -415,7 +409,7 @@ class WebsiteController {
         }
         unset($a);
 
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('website_orders.inward', [
             'pageTitle'              => 'Website Inward & GRN Verification',
@@ -1950,7 +1944,7 @@ class WebsiteController {
             return;
         }
         $chan = $this->getChannel();
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.mrp, pv.selling_price, p.name as product_name,
                     COALESCE(wc.name, c.name, 'General') as category_name,
@@ -2525,7 +2519,7 @@ class WebsiteController {
         $channelIds = $this->getWebsiteChannelIds();
 
         $pendingItems = ChannelDamage::getPendingOutward($channelIds);
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('website_orders.damage.outward_create', [
             'channel'      => $chan,
@@ -4404,7 +4398,7 @@ class WebsiteController {
         $chanIds = $this->getWebsiteChannelIds();
         $placeholders = implode(',', array_fill(0, count($chanIds), '?'));
 
-        $warehouses = Database::fetchAll("SELECT id, name, code, address FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         // Fetch inventory items available in Website channel (both AVAILABLE and DAMAGED stock across all website channel IDs)
         $inventory = Database::fetchAll(
@@ -4747,7 +4741,14 @@ class WebsiteController {
         if ($warehouseId <= 0) {
             throw new InvalidArgumentException("Please select a destination warehouse.");
         }
-        $whExists = Database::fetchOne("SELECT id FROM warehouses WHERE id = ? AND is_active = 1", [$warehouseId]);
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        $whExists = $concernId === null || $assignedWarehouseId === 0 || ($assignedWarehouseId !== null && $assignedWarehouseId !== $warehouseId)
+            ? null
+            : Database::fetchOne(
+                "SELECT id FROM warehouses WHERE id = ? AND concern_id = ? AND is_active = 1",
+                [$warehouseId, $concernId]
+            );
         if (!$whExists) {
             throw new InvalidArgumentException("Selected destination warehouse is invalid or inactive.");
         }

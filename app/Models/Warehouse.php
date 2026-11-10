@@ -27,12 +27,20 @@ class Warehouse {
      */
     public static function find(int $id): ?array {
         self::ensureSchema();
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            return null;
+        }
+        $assignedId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($assignedId !== null && $assignedId !== $id) {
+            return null;
+        }
         return Database::fetchOne(
             "SELECT w.*, COALESCE(NULLIF(w.manager_name, ''), u.full_name) as manager_name, u.email as manager_email, u.phone as manager_phone
              FROM warehouses w
              LEFT JOIN users u ON w.manager_id = u.id
-             WHERE w.id = ?",
-            [$id]
+             WHERE w.id = ? AND w.concern_id = ?",
+            [$id, $concernId]
         );
     }
 
@@ -41,12 +49,26 @@ class Warehouse {
      */
     public static function findByCode(string $code): ?array {
         self::ensureSchema();
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            return null;
+        }
+        $assignedId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($assignedId === 0) {
+            return null;
+        }
+        if ($assignedId !== null && !Database::fetchOne(
+            "SELECT id FROM warehouses WHERE code = ? AND concern_id = ? AND id = ?",
+            [$code, $concernId, $assignedId]
+        )) {
+            return null;
+        }
         return Database::fetchOne(
             "SELECT w.*, COALESCE(NULLIF(w.manager_name, ''), u.full_name) as manager_name
              FROM warehouses w
              LEFT JOIN users u ON w.manager_id = u.id
-             WHERE w.code = ?",
-            [$code]
+             WHERE w.code = ? AND w.concern_id = ?",
+            [$code, $concernId]
         );
     }
 
@@ -62,28 +84,32 @@ class Warehouse {
      */
     public static function getAll(array $filters = []): array {
         self::ensureSchema();
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            return [];
+        }
         $sql = "SELECT w.*, COALESCE(NULLIF(w.manager_name, ''), u.full_name) as manager_name
                 FROM warehouses w
                 LEFT JOIN users u ON w.manager_id = u.id
-                WHERE 1=1";
-        $params = [];
+                WHERE w.concern_id = ?";
+        $params = [$concernId];
 
         if (isset($filters['is_active'])) {
             $sql .= " AND w.is_active = ?";
             $params[] = $filters['is_active'] ? 1 : 0;
         }
 
-        // Automatic warehouse scoping for assigned warehouse staff
-        if (empty($filters['unscoped']) && function_exists('currentWarehouseId')) {
+        if (function_exists('currentWarehouseId')) {
             $scopedId = currentWarehouseId();
+            if ($scopedId === 0) {
+                return [];
+            }
             if ($scopedId !== null) {
                 $sql .= " AND w.id = ?";
                 $params[] = $scopedId;
-            } elseif (!empty($filters['warehouse_id'])) {
-                $sql .= " AND w.id = ?";
-                $params[] = (int)$filters['warehouse_id'];
             }
-        } elseif (!empty($filters['warehouse_id'])) {
+        }
+        if (!empty($filters['warehouse_id'])) {
             $sql .= " AND w.id = ?";
             $params[] = (int)$filters['warehouse_id'];
         }
@@ -103,18 +129,36 @@ class Warehouse {
      */
     public static function create(array $data): int {
         self::ensureSchema();
+        $concernId = (int)($data['concern_id'] ?? 0);
+        $activeConcernId = self::currentConcernScopeId();
+        if ($concernId <= 0 || $activeConcernId === null || $concernId !== $activeConcernId || !Concern::hasFacilityModules($concernId, 'WAREHOUSE') || !Database::fetchOne(
+            "SELECT id FROM concerns WHERE id = ? AND is_active = 1",
+            [$concernId]
+        )) {
+            throw new InvalidArgumentException('Choose an active concern before creating a warehouse.');
+        }
+        $code = strtoupper(trim($data['code'] ?? ''));
+        if ($code === '') {
+            $num = 1;
+            do {
+                $code = 'WH-C' . $concernId . '-' . str_pad((string)$num, 2, '0', STR_PAD_LEFT);
+                $exists = Database::fetchOne("SELECT id FROM warehouses WHERE code = ?", [$code]);
+                $num++;
+            } while ($exists);
+        }
         Database::execute(
-            "INSERT INTO warehouses (name, code, manager_name, address, phone, gst_number, manager_id, is_active, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+            "INSERT INTO warehouses (name, code, manager_name, address, phone, gst_number, manager_id, is_active, concern_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
                 trim($data['name']),
-                strtoupper(trim($data['code'])),
+                $code,
                 trim($data['manager_name'] ?? ''),
                 $data['address'] ?? null,
                 trim($data['phone'] ?? ''),
                 $data['gst_number'] ?? null,
                 !empty($data['manager_id']) ? (int)$data['manager_id'] : null,
-                $data['is_active'] ?? 1
+                $data['is_active'] ?? 1,
+                $concernId
             ]
         );
         return (int)Database::lastInsertId();
@@ -125,10 +169,14 @@ class Warehouse {
      */
     public static function update(int $id, array $data): bool {
         self::ensureSchema();
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null || !self::find($id)) {
+            return false;
+        }
         return Database::execute(
             "UPDATE warehouses 
              SET name = ?, code = ?, manager_name = ?, address = ?, phone = ?, gst_number = ?, manager_id = ?, is_active = ?, updated_at = NOW()
-             WHERE id = ?",
+             WHERE id = ? AND concern_id = ?",
             [
                 trim($data['name']),
                 strtoupper(trim($data['code'])),
@@ -138,7 +186,8 @@ class Warehouse {
                 $data['gst_number'] ?? null,
                 !empty($data['manager_id']) ? (int)$data['manager_id'] : null,
                 isset($data['is_active']) ? (int)$data['is_active'] : 1,
-                $id
+                $id,
+                $concernId
             ]
         ) >= 0;
     }
@@ -193,16 +242,22 @@ class Warehouse {
      * Delete warehouse.
      */
     public static function delete(int $id): bool {
-        return Database::execute("DELETE FROM warehouses WHERE id = ?", [$id]) > 0;
+        $concernId = self::currentConcernScopeId();
+        return $concernId !== null && self::find($id) !== null
+            && Database::execute("DELETE FROM warehouses WHERE id = ? AND concern_id = ?", [$id, $concernId]) > 0;
     }
 
     /**
      * Toggle active status.
      */
     public static function toggleActive(int $id): bool {
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null || self::find($id) === null) {
+            return false;
+        }
         return Database::execute(
-            "UPDATE warehouses SET is_active = NOT is_active, updated_at = NOW() WHERE id = ?",
-            [$id]
+            "UPDATE warehouses SET is_active = NOT is_active, updated_at = NOW() WHERE id = ? AND concern_id = ?",
+            [$id, $concernId]
         ) > 0;
     }
 
@@ -210,13 +265,30 @@ class Warehouse {
      * Count warehouses.
      */
     public static function count(array $filters = []): int {
-        $sql = "SELECT COUNT(*) as cnt FROM warehouses WHERE 1=1";
-        $params = [];
+        $concernId = self::currentConcernScopeId();
+        if ($concernId === null) {
+            return 0;
+        }
+        $sql = "SELECT COUNT(*) as cnt FROM warehouses WHERE concern_id = ?";
+        $params = [$concernId];
+        $assignedId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($assignedId === 0) {
+            return 0;
+        }
+        if ($assignedId !== null) {
+            $sql .= " AND id = ?";
+            $params[] = $assignedId;
+        }
         if (isset($filters['is_active'])) {
             $sql .= " AND is_active = ?";
             $params[] = $filters['is_active'] ? 1 : 0;
         }
         $row = Database::fetchOne($sql, $params);
         return (int)($row['cnt'] ?? 0);
+    }
+
+    private static function currentConcernScopeId(): ?int {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        return $concernId !== null && $concernId > 0 ? $concernId : null;
     }
 }

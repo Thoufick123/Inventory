@@ -4,8 +4,14 @@
  */
 $isEdit = !empty($role['id']);
 $formAction = $isEdit ? url('admin/roles/update/' . $role['id']) : url('admin/roles/store');
+$concernFormAction = $isEdit ? url('admin/roles/edit/' . $role['id']) : url('admin/roles/create');
+$selectedConcern = $selectedConcern ?? null;
+$selectedConcernId = (int)($selectedConcernId ?? 0);
 $assigned = Role::filterCrudPermissionIds(array_map('intval', $assignedPermissionIds ?? []));
-$hierarchicalModules = $hierarchicalModules ?? Role::getHierarchicalPermissions();
+$hierarchicalModules = $hierarchicalModules ?? Role::filterHierarchicalPermissions(
+    Role::getHierarchicalPermissions(),
+    $selectedConcern['module_keys'] ?? []
+);
 
 $totalPossiblePerms = 0;
 foreach ($hierarchicalModules as $m) {
@@ -22,7 +28,7 @@ foreach ($hierarchicalModules as $m) {
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h1 class="h3 mb-0 fw-bold"><?= $isEdit ? 'Edit Role: ' . e($role['name'] ?? '') : 'Add New Role' ?></h1>
-            <div class="text-muted small mt-1">Define the role and assign View, Create, Edit, or Delete access by module.</div>
+            <div class="text-muted small mt-1">Define the role and assign permissions within one selected concern.</div>
         </div>
         <div>
             <a href="<?= url('admin/roles') ?>" class="btn btn-outline-secondary d-inline-flex align-items-center gap-2">
@@ -32,8 +38,31 @@ foreach ($hierarchicalModules as $m) {
         </div>
     </div>
 
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <form method="GET" action="<?= $concernFormAction ?>" class="d-flex flex-grow-1 align-items-center gap-2">
+                <label for="roleConcern" class="form-label fw-semibold mb-0">Concern</label>
+                <select id="roleConcern" name="concern_id" class="form-select" required onchange="this.form.submit()">
+                    <option value="">-- Select a concern --</option>
+                    <?php foreach ($concerns ?? [] as $concern): ?>
+                        <option value="<?= (int)$concern['id'] ?>" <?= $selectedConcernId === (int)$concern['id'] ? 'selected' : '' ?>>
+                            <?= e($concern['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <noscript><button class="btn btn-outline-primary" type="submit">Show Modules</button></noscript>
+            </form>
+            <?php if ($selectedConcern): ?>
+                <span class="text-muted small">Only <strong><?= e($selectedConcern['name']) ?></strong> modules are shown. Saving preserves permissions for all other concerns.</span>
+            <?php else: ?>
+                <div class="alert alert-info mb-0">Select a concern to view and assign its modules.</div>
+            <?php endif; ?>
+        </div>
+    </div>
+
     <form method="POST" action="<?= $formAction ?>" id="roleForm" autocomplete="off">
         <?= CSRF::field() ?>
+        <input type="hidden" name="concern_id" value="<?= $selectedConcernId ?>">
 
         <!-- ============================================ -->
         <!-- ROLE DETAILS SECTION -->
@@ -253,7 +282,7 @@ foreach ($hierarchicalModules as $m) {
             <!-- Form Actions Footer -->
             <div class="card-footer bg-white py-3 px-4 border-top d-flex justify-content-between align-items-center">
                 <a href="<?= url('admin/roles') ?>" class="btn btn-outline-secondary">Cancel</a>
-                <button type="submit" class="btn btn-primary px-4 shadow-sm d-inline-flex align-items-center gap-2 fw-semibold">
+                <button type="submit" class="btn btn-primary px-4 shadow-sm d-inline-flex align-items-center gap-2 fw-semibold" <?= !$selectedConcern ? 'disabled' : '' ?>>
                     <i class="bi bi-check-circle-fill"></i>
                     <span><?= $isEdit ? 'Update Staff Role & Permissions' : 'Save Staff Role & Permissions' ?></span>
                 </button>

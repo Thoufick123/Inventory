@@ -876,6 +876,17 @@
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body p-4">
+                    <?php $unitConcern = function_exists('currentConcern') ? currentConcern() : null; ?>
+                    <?php if ($unitConcern): ?>
+                        <div class="alert alert-info py-2">
+                            This production unit will belong to <strong><?= e($unitConcern['name']) ?></strong>.
+                        </div>
+                    <?php else: ?>
+                        <div class="alert alert-warning py-2">
+                            Select an active concern before creating a production unit.
+                            <a href="<?= url('admin/concern/select') ?>">Select concern</a>
+                        </div>
+                    <?php endif; ?>
                     <div class="mb-3">
                         <label class="form-label fw-600">Unit Name <span class="text-danger">*</span></label>
                         <input type="text" name="name" id="unit_name" class="form-control" placeholder="e.g. Tirupur Main Unit 1" required>

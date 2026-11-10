@@ -16,8 +16,31 @@ foreach ($hierarchicalModules as $m) {
 ?>
 
 <div class="container-fluid py-4 px-3 px-md-4">
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <label for="permissionConcern" class="form-label fw-semibold mb-0">Concern</label>
+            <form method="GET" action="<?= url('admin/roles/permissions/' . $role['id']) ?>" class="d-flex flex-grow-1 gap-2">
+                <select id="permissionConcern" name="concern_id" class="form-select" onchange="this.form.submit()" <?= empty($concerns) ? 'disabled' : '' ?>>
+                    <option value="" <?= !$selectedConcernId ? 'selected' : '' ?>>-- Select a concern --</option>
+                    <?php foreach ($concerns as $concern): ?>
+                        <option value="<?= (int)$concern['id'] ?>" <?= (int)$selectedConcernId === (int)$concern['id'] ? 'selected' : '' ?>>
+                            <?= e($concern['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <?php if ($selectedConcern): ?><noscript><button class="btn btn-outline-primary" type="submit">Show Modules</button></noscript><?php endif; ?>
+            </form>
+            <?php if ($selectedConcern): ?>
+                <span class="text-muted small">Only modules assigned to <strong><?= e($selectedConcern['name']) ?></strong> are shown. Other concern permissions are preserved when saving.</span>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php if (!$selectedConcern): ?>
+        <div class="alert alert-info">Create a concern and assign modules in <a href="<?= url('admin/staff/concerns') ?>">Staff → Concerns &amp; Modules</a> before managing concern-scoped role permissions.</div>
+    <?php endif; ?>
     <form method="POST" action="<?= url('admin/roles/permissions/' . $role['id']) ?>" id="permissionsMatrixForm">
         <?= CSRF::field() ?>
+        <input type="hidden" name="concern_id" value="<?= (int)$selectedConcernId ?>">
 
         <!-- ============================================ -->
         <!-- STICKY TOP ACTION TOOLBAR -->
@@ -91,7 +114,7 @@ foreach ($hierarchicalModules as $m) {
 
                         <!-- Cancel & Save -->
                         <a href="<?= url('admin/roles') ?>" class="btn btn-sm btn-outline-dark">Cancel</a>
-                        <button type="submit" class="btn btn-sm btn-primary px-3 shadow-sm d-flex align-items-center gap-1">
+                        <button type="submit" class="btn btn-sm btn-primary px-3 shadow-sm d-flex align-items-center gap-1" <?= !$selectedConcern ? 'disabled' : '' ?>>
                             <i class="bi bi-check2-circle fs-6"></i>
                             <span class="fw-semibold">Save Permissions</span>
                         </button>
@@ -285,7 +308,7 @@ foreach ($hierarchicalModules as $m) {
                     <span class="text-muted small d-none d-sm-inline">
                         Clicking save will instantly synchronize active permissions for role <strong class="text-dark"><?= e($role['name']) ?></strong>.
                     </span>
-                    <button type="submit" class="btn btn-primary px-4 py-2 shadow-sm d-inline-flex align-items-center gap-2 fw-bold">
+                    <button type="submit" class="btn btn-primary px-4 py-2 shadow-sm d-inline-flex align-items-center gap-2 fw-bold" <?= !$selectedConcern ? 'disabled' : '' ?>>
                         <i class="bi bi-check-circle-fill"></i>
                         <span>Save Permissions Matrix</span>
                     </button>

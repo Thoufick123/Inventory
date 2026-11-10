@@ -17,22 +17,16 @@ class WhatsappController {
      * Helper to get WhatsApp channel record
      */
     private function getChannel(): array {
-        $chan = Database::fetchOne(
-            "SELECT * FROM sales_channels 
-             WHERE LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%whatsapp%' OR channel_type = 'WHATSAPP' OR code = 'online 1' OR code = 'WA-01'
-             ORDER BY id DESC LIMIT 1"
-        );
-        return $chan ?: ['id' => 3, 'name' => 'MARAKATHAI WHATSAPP', 'code' => 'WA-01'];
+        $channels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels('WHATSAPP') : [];
+        if (!$channels) {
+            Response::error(409, 'No WhatsApp channel is configured for the active concern.');
+        }
+        return $channels[0];
     }
 
     private function getWhatsappChannelIds(): array {
-        $channels = Database::fetchAll(
-            "SELECT id FROM sales_channels 
-             WHERE LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%whatsapp%' OR channel_type = 'WHATSAPP' OR code = 'online 1' OR code = 'WA-01'"
-        );
-        $ids = array_map('intval', array_column($channels, 'id'));
-        if (empty($ids)) $ids = [3];
-        return array_unique($ids);
+        $channels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels('WHATSAPP') : [];
+        return array_map('intval', array_column($channels, 'id'));
     }
 
     /** Resolve the WhatsApp stock location from the allocation's channel destination. */
@@ -426,7 +420,7 @@ class WhatsappController {
              ORDER BY r.created_at DESC"
         );
 
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('whatsapp_orders.inward', [
             'pageTitle'              => 'WhatsApp Stock Inward & QR Receiving',
@@ -2024,7 +2018,7 @@ class WhatsappController {
      */
     public function createWhatsappStockRequest(): void {
         $chan = $this->getChannel();
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.mrp, pv.selling_price, p.name as product_name,
                     COALESCE(wc.name, c.name, 'General') as category_name,
@@ -3353,7 +3347,7 @@ class WhatsappController {
         $channelId = (int)($chan['id'] ?? 3);
 
         $pendingDamages = ChannelDamage::getPendingOutward($channelId);
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('whatsapp_orders.damage.outward_create', [
             'channel'            => $chan,
@@ -4308,7 +4302,7 @@ class WhatsappController {
         $chanIds = $this->getWhatsappChannelIds();
         $placeholders = implode(',', array_fill(0, count($chanIds), '?'));
 
-        $warehouses = Database::fetchAll("SELECT id, name, code, address FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         // Fetch inventory items available in WhatsApp channel (both AVAILABLE and DAMAGED stock)
         $inventory = Database::fetchAll(

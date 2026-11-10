@@ -21,33 +21,38 @@ class ShopService {
      * Get the active primary shop record (auto-creates if missing).
      */
     public static function getActiveShop(?int $requestedShopId = null): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            Response::redirect(url('admin/concern/select'), 'error', 'Select an active concern before opening shop operations.');
+        }
+
         // If staff is restricted to a specific shop, always enforce their assigned shop
         $scopedShopId = function_exists('currentShopId') ? currentShopId() : null;
+        if ($scopedShopId === 0) {
+            Response::error(403, 'The assigned shop is not available in the active concern.');
+        }
         if ($scopedShopId) {
-            $shop = Database::fetchOne("SELECT * FROM shops WHERE id = ?", [$scopedShopId]);
+            $shop = Database::fetchOne(
+                "SELECT * FROM shops WHERE id = ? AND concern_id = ?",
+                [$scopedShopId, $concernId]
+            );
             if ($shop) return $shop;
         }
 
         if ($requestedShopId) {
-            $shop = Database::fetchOne("SELECT * FROM shops WHERE id = ?", [$requestedShopId]);
+            $shop = Database::fetchOne(
+                "SELECT * FROM shops WHERE id = ? AND concern_id = ?",
+                [$requestedShopId, $concernId]
+            );
             if ($shop) return $shop;
         }
 
-        $shop = Database::fetchOne("SELECT * FROM shops WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+        $shop = Database::fetchOne(
+            "SELECT * FROM shops WHERE concern_id = ? AND is_active = 1 ORDER BY id ASC LIMIT 1",
+            [$concernId]
+        );
         if (!$shop) {
-            // Create default initial shop
-            Database::execute(
-                "INSERT INTO shops (name, code, address, phone, gst_number, is_active, created_at)
-                 VALUES (?, ?, ?, ?, ?, 1, NOW())",
-                [
-                    'GRM Retail Flagship Store',
-                    'SHOP-01',
-                    'Main Road, Tirupur, Tamil Nadu',
-                    '+91 98765 43210',
-                    '33AAAAA0000A1Z5'
-                ]
-            );
-            $shop = Database::fetchOne("SELECT * FROM shops WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+            Response::error(409, 'No active shop is configured for the selected concern. Ask an administrator to create one.');
         }
         return $shop;
     }
@@ -2883,14 +2888,19 @@ class ShopService {
                 $shopId = (int)substr($destinationType, 5);
             }
         }
-        $shopId = $shopId > 0 ? $shopId : 1;
-        $shop = Database::fetchOne("SELECT * FROM shops WHERE id = ?", [$shopId]);
+        if ($shopId <= 0) {
+            throw new RuntimeException('The allocation does not reference a shop in the active concern.');
+        }
+        $shop = Shop::find($shopId);
         if (!$shop) {
-            $shop = ['id' => $shopId, 'name' => 'Flagship Retail Store', 'code' => 'SH-01'];
+            throw new RuntimeException('The allocation shop is not available in the active concern.');
         }
 
         // Warehouse details
-        $warehouse = Database::fetchOne("SELECT * FROM warehouses WHERE id = ?", [(int)$allocation['warehouse_id']]);
+        $warehouse = Warehouse::find((int)$allocation['warehouse_id']);
+        if (!$warehouse) {
+            throw new RuntimeException('The allocation warehouse is not available in the active concern.');
+        }
 
         // Enhanced Item breakdown with variants, product codes, sizes, colors, and prices
         $rawItems = Database::fetchAll(
@@ -3704,7 +3714,7 @@ class ShopService {
      * Create a new Return to Warehouse from Shop Inventory and deduct stock.
      */
     public static function createShopWarehouseReturn(int $shopId, array $payload, int $userId): array {
-        if ($shopId <= 0) {
+        if ($shopId <= 0 || !Shop::find($shopId)) {
             throw new InvalidArgumentException("Invalid shop store context.");
         }
 
@@ -3712,9 +3722,8 @@ class ShopService {
         if ($warehouseId <= 0) {
             throw new InvalidArgumentException("Please select a valid destination warehouse.");
         }
-        $whExists = Database::fetchOne("SELECT id FROM warehouses WHERE id = ?", [$warehouseId]);
-        if (!$whExists) {
-            throw new InvalidArgumentException("Selected destination warehouse does not exist.");
+        if (!Warehouse::find($warehouseId)) {
+            throw new InvalidArgumentException("Selected destination warehouse does not belong to the active concern.");
         }
 
         $reason = trim($payload['reason'] ?? '');

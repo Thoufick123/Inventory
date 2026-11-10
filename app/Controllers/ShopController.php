@@ -2597,7 +2597,7 @@ class ShopController {
         $shop = ShopService::getActiveShop();
         $shopId = (int)$shop['id'];
 
-        $warehouses = Database::fetchAll("SELECT id, name, code, address FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         
         // Return-to-warehouse accepts both available and damaged shop stock; the scan flow preserves each item's condition.
         $inventory = Database::fetchAll(

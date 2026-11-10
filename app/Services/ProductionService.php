@@ -1141,9 +1141,16 @@ class ProductionService {
     /**
      * Get Production Dashboard KPIs.
      */
-    public static function getDashboardStats(?int $unitId = null): array {
-        $unitClauseProg = $unitId ? " AND production_unit_id = $unitId" : "";
-        $unitClausePP = $unitId ? " AND pp.production_unit_id = $unitId" : "";
+    public static function getDashboardStats(?int $unitId = null, ?int $concernId = null): array {
+        $unitClauseProg = $unitId !== null ? " AND production_unit_id = $unitId" : "";
+        $unitClausePP = $unitId !== null ? " AND pp.production_unit_id = $unitId" : "";
+        if ($concernId !== null && $concernId > 0) {
+            $unitClauseProg .= " AND production_unit_id IN (SELECT id FROM production_units WHERE concern_id = $concernId)";
+            $unitClausePP .= " AND pp.production_unit_id IN (SELECT id FROM production_units WHERE concern_id = $concernId)";
+        } else {
+            $unitClauseProg .= " AND 1 = 0";
+            $unitClausePP .= " AND 1 = 0";
+        }
 
         // Active Programs
         $activePrograms = Database::fetchOne(

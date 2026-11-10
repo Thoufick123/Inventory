@@ -1,4 +1,5 @@
 <div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4">
+    <?php $isAdmin = isSuperAdmin(); ?>
     <div>
         <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
             <h2 class="mb-0"><i class="bi bi-gear-wide-connected me-2 text-primary"></i>Production Dashboard</h2>
@@ -16,16 +17,34 @@
             <?php endif; ?>
         </div>
         <span class="text-muted">Live status of manufacturing pipeline, cutting, stitching, QC & dispatches</span>
+        <?php if (!empty($activeConcern)): ?>
+            <div class="small text-primary mt-1">Active concern: <strong><?= e($activeConcern['name']) ?></strong></div>
+        <?php endif; ?>
     </div>
-    <div class="d-flex gap-2">
-        <a href="<?= url('production/programs/create') ?>" class="btn btn-primary">
-            <i class="bi bi-plus-circle me-1"></i> New Program
-        </a>
-        <a href="<?= url('production/outward') ?>" class="btn btn-outline-secondary">
-            <i class="bi bi-truck me-1"></i> Outward Dispatches
-        </a>
-    </div>
+    <?php if ($isAdmin): ?>
+        <div class="d-flex gap-2">
+            <a href="<?= url('production/programs/create') ?>" class="btn btn-primary">
+                <i class="bi bi-plus-circle me-1"></i> New Program
+            </a>
+            <a href="<?= url('production/outward') ?>" class="btn btn-outline-secondary">
+                <i class="bi bi-truck me-1"></i> Outward Dispatches
+            </a>
+        </div>
+    <?php endif; ?>
 </div>
+
+<?php if (empty(getScopedProductionUnits())): ?>
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle me-1"></i>
+        No production units are available in your active concern and assignment. No production history is being copied from other concerns.
+        Ask an administrator to create or assign a production unit to this concern.
+    </div>
+<?php endif; ?>
+<?php if (!$isAdmin): ?>
+    <div class="alert alert-warning">
+        Concern-scoped dashboard access is enabled. Other production workflows remain unavailable until their data isolation is completed.
+    </div>
+<?php endif; ?>
 
 <!-- KPI Stats Row -->
 <div class="row g-3 mb-4">
@@ -103,7 +122,7 @@
                     <div class="fs-4 text-primary"><i class="bi bi-file-earmark-text"></i></div>
                     <div class="fw-bold mt-1">1. Program</div>
                     <small class="text-muted">Plan & Approve</small>
-                    <div class="mt-2"><a href="<?= url('production/programs') ?>" class="btn btn-sm btn-outline-primary w-100">View</a></div>
+                    <?php if ($isAdmin): ?><div class="mt-2"><a href="<?= url('production/programs') ?>" class="btn btn-sm btn-outline-primary w-100">View</a></div><?php endif; ?>
                 </div>
             </div>
             <div class="col-md-2 col-4">
@@ -111,7 +130,7 @@
                     <div class="fs-4 text-info"><i class="bi bi-scissors"></i></div>
                     <div class="fw-bold mt-1">2. Cutting</div>
                     <small class="text-muted">Material Issue</small>
-                    <div class="mt-2"><a href="<?= url('production/cutting') ?>" class="btn btn-sm btn-outline-info w-100">View</a></div>
+                    <?php if ($isAdmin): ?><div class="mt-2"><a href="<?= url('production/cutting') ?>" class="btn btn-sm btn-outline-info w-100">View</a></div><?php endif; ?>
                 </div>
             </div>
             <div class="col-md-2 col-4">
@@ -119,7 +138,7 @@
                     <div class="fs-4 text-warning"><i class="bi bi-threads"></i></div>
                     <div class="fw-bold mt-1">3. Stitching</div>
                     <small class="text-muted">Sewing & Rework</small>
-                    <div class="mt-2"><a href="<?= url('production/stitching') ?>" class="btn btn-sm btn-outline-warning w-100">View</a></div>
+                    <?php if ($isAdmin): ?><div class="mt-2"><a href="<?= url('production/stitching') ?>" class="btn btn-sm btn-outline-warning w-100">View</a></div><?php endif; ?>
                 </div>
             </div>
             <div class="col-md-2 col-4">
@@ -127,7 +146,7 @@
                     <div class="fs-4 text-secondary"><i class="bi bi-tags"></i></div>
                     <div class="fw-bold mt-1">4. Labeling</div>
                     <small class="text-muted">Tags & Barcode</small>
-                    <div class="mt-2"><a href="<?= url('production/labels') ?>" class="btn btn-sm btn-outline-secondary w-100">View</a></div>
+                    <?php if ($isAdmin): ?><div class="mt-2"><a href="<?= url('production/labels') ?>" class="btn btn-sm btn-outline-secondary w-100">View</a></div><?php endif; ?>
                 </div>
             </div>
             <div class="col-md-2 col-4">
@@ -135,7 +154,7 @@
                     <div class="fs-4 text-danger"><i class="bi bi-patch-check"></i></div>
                     <div class="fw-bold mt-1">5. QC Check</div>
                     <small class="text-muted">Pass/Reject/Rework</small>
-                    <div class="mt-2"><a href="<?= url('production/qc') ?>" class="btn btn-sm btn-outline-danger w-100">View</a></div>
+                    <?php if ($isAdmin): ?><div class="mt-2"><a href="<?= url('production/qc') ?>" class="btn btn-sm btn-outline-danger w-100">View</a></div><?php endif; ?>
                 </div>
             </div>
             <div class="col-md-2 col-4">
@@ -143,7 +162,7 @@
                     <div class="fs-4 text-success"><i class="bi bi-box-seam"></i></div>
                     <div class="fw-bold mt-1">6. Batch & Outward</div>
                     <small class="text-muted">Box & Dispatch</small>
-                    <div class="mt-2"><a href="<?= url('production/batches') ?>" class="btn btn-sm btn-outline-success w-100">View</a></div>
+                    <?php if ($isAdmin): ?><div class="mt-2"><a href="<?= url('production/batches') ?>" class="btn btn-sm btn-outline-success w-100">View</a></div><?php endif; ?>
                 </div>
             </div>
         </div>
@@ -157,7 +176,7 @@
         <div class="card h-100">
             <div class="card-header bg-white d-flex align-items-center justify-content-between py-3">
                 <h5 class="card-title mb-0 fw-bold"><i class="bi bi-list-task me-2 text-primary"></i>Active Production Programs</h5>
-                <a href="<?= url('production/programs') ?>" class="btn btn-sm btn-link text-decoration-none">View All &rarr;</a>
+                <?php if ($isAdmin): ?><a href="<?= url('production/programs') ?>" class="btn btn-sm btn-link text-decoration-none">View All &rarr;</a><?php endif; ?>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -206,9 +225,11 @@
                                     ?>
                                     <tr>
                                         <td>
-                                            <a href="<?= url('production/programs/view/' . $prog['id']) ?>" class="fw-bold text-decoration-none">
-                                                <?= e($prog['program_number']) ?>
-                                            </a>
+                                            <?php if ($isAdmin): ?>
+                                                <a href="<?= url('production/programs/view/' . $prog['id']) ?>" class="fw-bold text-decoration-none"><?= e($prog['program_number']) ?></a>
+                                            <?php else: ?>
+                                                <span class="fw-bold"><?= e($prog['program_number']) ?></span>
+                                            <?php endif; ?>
                                             <div class="small text-muted"><?= formatDate($prog['created_at']) ?></div>
                                         </td>
                                         <td>
@@ -228,9 +249,9 @@
                                         <td><span class="badge <?= $prioClass ?>"><?= e($prog['priority']) ?></span></td>
                                         <td><span class="badge <?= $statusClass ?>"><?= e($prog['status']) ?></span></td>
                                         <td class="text-end">
-                                            <a href="<?= url('production/programs/view/' . $prog['id']) ?>" class="btn btn-sm btn-outline-primary" title="View Details">
-                                                <i class="bi bi-eye"></i>
-                                            </a>
+                                            <?php if ($isAdmin): ?>
+                                                <a href="<?= url('production/programs/view/' . $prog['id']) ?>" class="btn btn-sm btn-outline-primary" title="View Details"><i class="bi bi-eye"></i></a>
+                                            <?php endif; ?>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -248,7 +269,7 @@
         <div class="card mb-4">
             <div class="card-header bg-white d-flex align-items-center justify-content-between py-3">
                 <h6 class="card-title mb-0 fw-bold"><i class="bi bi-patch-check me-2 text-danger"></i>Recent QC Checks</h6>
-                <a href="<?= url('production/qc') ?>" class="btn btn-sm btn-link text-decoration-none p-0">All QC &rarr;</a>
+                <?php if ($isAdmin): ?><a href="<?= url('production/qc') ?>" class="btn btn-sm btn-link text-decoration-none p-0">All QC &rarr;</a><?php endif; ?>
             </div>
             <div class="card-body p-0">
                 <ul class="list-group list-group-flush">
@@ -282,7 +303,7 @@
         <div class="card">
             <div class="card-header bg-white d-flex align-items-center justify-content-between py-3">
                 <h6 class="card-title mb-0 fw-bold"><i class="bi bi-truck me-2 text-success"></i>Recent Outward Dispatches</h6>
-                <a href="<?= url('production/outward') ?>" class="btn btn-sm btn-link text-decoration-none p-0">All Outwards &rarr;</a>
+                <?php if ($isAdmin): ?><a href="<?= url('production/outward') ?>" class="btn btn-sm btn-link text-decoration-none p-0">All Outwards &rarr;</a><?php endif; ?>
             </div>
             <div class="card-body p-0">
                 <ul class="list-group list-group-flush">

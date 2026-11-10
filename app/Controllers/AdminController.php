@@ -6,6 +6,7 @@
 
 require_once BASE_PATH . '/app/Models/User.php';
 require_once BASE_PATH . '/app/Models/Role.php';
+require_once BASE_PATH . '/app/Models/Concern.php';
 require_once BASE_PATH . '/app/Models/ProductionUnit.php';
 require_once BASE_PATH . '/app/Models/Warehouse.php';
 require_once BASE_PATH . '/app/Models/Shop.php';
@@ -63,8 +64,8 @@ class AdminController {
         $shops           = Shop::getWithMetrics();
         $managersList    = User::getAll(['is_active' => 1]);
         
-        $whatsappChannels = Database::fetchAll("SELECT * FROM sales_channels WHERE channel_type = 'WHATSAPP' OR LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%wa%' ORDER BY name ASC");
-        $websiteChannels  = Database::fetchAll("SELECT * FROM sales_channels WHERE channel_type = 'WEBSITE' OR LOWER(name) LIKE '%website%' OR LOWER(name) LIKE '%web%' OR LOWER(code) LIKE '%web%' ORDER BY name ASC");
+        $whatsappChannels = getScopedSalesChannels('WHATSAPP', false);
+        $websiteChannels  = getScopedSalesChannels('WEBSITE', false);
 
         $data['productionUnits']      = $productionUnits;
         $data['warehouses']           = $warehouses;
@@ -160,12 +161,12 @@ class AdminController {
      * Staff List.
      */
     public function staffList(): void {
-        $department = $_GET['department'] ?? 'all';
         $status = isset($_GET['status']) && $_GET['status'] !== '' ? (int)$_GET['status'] : null;
         $filters = [
             'search'             => $_GET['search'] ?? '',
             'role_id'            => $_GET['role_id'] ?? '',
-            'department'         => strtolower($department) === 'all' ? '' : $department,
+            'department'         => '',
+            'concern_id'         => $_GET['concern_id'] ?? '',
             'production_unit_id' => $_GET['production_unit_id'] ?? '',
             'warehouse_id'       => $_GET['warehouse_id'] ?? '',
             'shop_id'            => $_GET['shop_id'] ?? '',
@@ -179,16 +180,9 @@ class AdminController {
         $productionUnits = ProductionUnit::getWithMetrics();
         $warehouses      = Warehouse::getWithMetrics();
         $shops           = Shop::getWithMetrics();
+        $concerns        = Concern::getAll(true);
 
         $activeMenu = 'staff-all';
-        $deptLower = strtolower($department);
-        if ($deptLower === 'all') $activeMenu = 'staff-all';
-        elseif ($deptLower === 'production') $activeMenu = 'staff-production';
-        elseif ($deptLower === 'warehouse') $activeMenu = 'staff-warehouse';
-        elseif ($deptLower === 'whatsapp') $activeMenu = 'staff-whatsapp';
-        elseif ($deptLower === 'website') $activeMenu = 'staff-website';
-        elseif ($deptLower === 'shop') $activeMenu = 'staff-shop';
-        elseif ($deptLower === 'reports') $activeMenu = 'staff-reports';
 
         Response::view('admin.staff_list', [
             'pageTitle'       => 'Staff Management',
@@ -200,6 +194,7 @@ class AdminController {
             'productionUnits' => $productionUnits,
             'warehouses'      => $warehouses,
             'shops'           => $shops,
+            'concerns'        => $concerns,
             'filters'         => $filters,
         ]);
     }
@@ -217,6 +212,13 @@ class AdminController {
             'Shop'            => $staff['shop_name'] ?? null,
             'Sales Channel'   => $staff['channel_name'] ?? null,
         ]);
+        $concernNames = [];
+        foreach (Concern::getUserConcernIds((int)$staff['id']) as $concernId) {
+            $concern = Concern::find($concernId);
+            if ($concern) {
+                $concernNames[] = $concern['name'];
+            }
+        }
 
         Response::view('admin.staff_view', [
             'pageTitle'    => 'Staff Details',
@@ -228,6 +230,7 @@ class AdminController {
             ],
             'staff'        => $staff,
             'assignments'  => $assignments,
+            'concernNames' => $concernNames,
             'hierarchicalModules' => Role::getHierarchicalPermissions(),
             'staffPermissions'    => User::getPermissionIds((int)$staff['id']),
         ]);
@@ -246,8 +249,8 @@ class AdminController {
         $productionUnits  = ProductionUnit::getWithMetrics();
         $warehouses       = Warehouse::getWithMetrics();
         $shops            = Shop::getWithMetrics();
-        $whatsappChannels = Database::fetchAll("SELECT * FROM sales_channels WHERE (channel_type = 'WHATSAPP' OR channel_type IS NULL OR channel_type = '' OR LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%wa%') AND (channel_type != 'WEBSITE' OR channel_type IS NULL) AND is_active = 1 ORDER BY name ASC");
-        $websiteChannels  = Database::fetchAll("SELECT * FROM sales_channels WHERE (channel_type = 'WEBSITE' OR channel_type IS NULL OR channel_type = '' OR LOWER(name) LIKE '%website%' OR LOWER(name) LIKE '%web%' OR LOWER(code) LIKE '%web%' OR LOWER(code) LIKE '%we%') AND (channel_type != 'WHATSAPP' OR channel_type IS NULL) AND is_active = 1 ORDER BY name ASC");
+        $whatsappChannels = getScopedSalesChannels('WHATSAPP');
+        $websiteChannels  = getScopedSalesChannels('WEBSITE');
 
         Response::view('admin.staff_form', [
             'pageTitle'           => 'Create Staff',
@@ -266,6 +269,8 @@ class AdminController {
             'hierarchicalModules' => Role::getHierarchicalPermissions(),
             'rolePermissionsMap'  => Role::getAllRolePermissionsMap(),
             'staffPermissions'    => [],
+            'concerns'            => Concern::getAll(true),
+            'staffConcernIds'     => [],
             'staff'               => null,
         ]);
     }
@@ -281,6 +286,7 @@ class AdminController {
 
         if (!CSRF::validateRequest()) {
             Response::back('error', 'Invalid form submission.');
+            return;
         }
 
         $validator = Validator::make($_POST)
@@ -307,16 +313,15 @@ class AdminController {
         if ($validator->fails()) {
             Session::set('_old_input', $_POST);
             Response::back('error', implode(' ', $validator->allErrors()));
+            return;
         }
-
-        $roleId     = (int)($_POST['role_id'] ?? 0);
-        $department = strtoupper($_POST['department'] ?? 'PRODUCTION');
-
-        if (!Role::isRoleCompatibleWithDepartment($roleId, $department)) {
-            $role = Role::findById($roleId);
-            $roleName = $role['name'] ?? 'Selected role';
-            Session::set('_old_input', $_POST);
-            Response::back('error', "Department Validation Error: The role '{$roleName}' does not have access permissions for the '{$department}' department. Please assign a role with {$department} permissions or select a compatible department.");
+        $selectedConcernIds = array_values(array_filter(
+            array_map('intval', is_array($_POST['concern_ids'] ?? null) ? $_POST['concern_ids'] : []),
+            static fn(int $concernId): bool => $concernId > 0
+        ));
+        if (!$selectedConcernIds) {
+            Response::back('error', 'Assign at least one concern to this staff member.');
+            return;
         }
 
         try {
@@ -365,7 +370,11 @@ class AdminController {
         if (array_key_exists('channel_id', $data) || array_key_exists('whatsapp_channel_id', $data) || array_key_exists('website_channel_id', $data)) {
             $chanId = (int)($data['channel_id'] ?? $data['whatsapp_channel_id'] ?? $data['website_channel_id'] ?? 0);
             if ($chanId) {
-                $chan = Database::fetchOne("SELECT name, code FROM sales_channels WHERE id = ?", [$chanId]);
+                $concernId = currentConcernId();
+                $chan = $concernId === null ? null : Database::fetchOne(
+                    "SELECT name, code FROM sales_channels WHERE id = ? AND concern_id = ?",
+                    [$chanId, $concernId]
+                );
                 $chanName = $chan ? $chan['name'] . ' (' . $chan['code'] . ')' : 'Channel #' . $chanId;
             } else {
                 $chanName = 'None (Unassigned)';
@@ -383,6 +392,13 @@ class AdminController {
             'Warehouse'         => $whName ?: 'None',
             'Shop'              => $shopName ?: 'None',
             'Sales Channel'     => $chanName ?: 'None',
+            'Concerns'          => implode(', ', array_column(
+                array_filter(array_map(
+                    static fn($concernId) => Concern::find((int)$concernId),
+                    is_array($data['concern_ids'] ?? null) ? $data['concern_ids'] : ($userRecord ? Concern::getUserConcernIds((int)$userRecord['id']) : [])
+                )),
+                'name'
+            )) ?: 'None',
             'Reports Access'    => $data['reports_access'] ?? ($userRecord['reports_access'] ?? 'ALL'),
             'Account Status'    => isset($data['is_active']) ? ((int)$data['is_active'] ? 'Active' : 'Deactivated') : ($userRecord ? ((int)($userRecord['is_active'] ?? 1) ? 'Active' : 'Deactivated') : 'Active'),
         ];
@@ -419,8 +435,8 @@ class AdminController {
         $productionUnits  = ProductionUnit::getWithMetrics();
         $warehouses       = Warehouse::getWithMetrics();
         $shops            = Shop::getWithMetrics();
-        $whatsappChannels = Database::fetchAll("SELECT * FROM sales_channels WHERE (channel_type = 'WHATSAPP' OR channel_type IS NULL OR channel_type = '' OR LOWER(name) LIKE '%whatsapp%' OR LOWER(code) LIKE '%wa%') AND (channel_type != 'WEBSITE' OR channel_type IS NULL) AND is_active = 1 ORDER BY name ASC");
-        $websiteChannels  = Database::fetchAll("SELECT * FROM sales_channels WHERE (channel_type = 'WEBSITE' OR channel_type IS NULL OR channel_type = '' OR LOWER(name) LIKE '%website%' OR LOWER(name) LIKE '%web%' OR LOWER(code) LIKE '%web%' OR LOWER(code) LIKE '%we%') AND (channel_type != 'WHATSAPP' OR channel_type IS NULL) AND is_active = 1 ORDER BY name ASC");
+        $whatsappChannels = getScopedSalesChannels('WHATSAPP');
+        $websiteChannels  = getScopedSalesChannels('WEBSITE');
 
         Response::view('admin.staff_form', [
             'pageTitle'           => 'Edit Staff',
@@ -439,6 +455,8 @@ class AdminController {
             'hierarchicalModules' => Role::getHierarchicalPermissions(),
             'rolePermissionsMap'  => Role::getAllRolePermissionsMap(),
             'staffPermissions'    => User::getPermissionIds($staffId),
+            'concerns'            => Concern::getAll(true),
+            'staffConcernIds'     => Concern::getUserConcernIds($staffId),
             'staff'               => $staff,
         ]);
     }
@@ -479,15 +497,15 @@ class AdminController {
 
         if ($validator->fails()) {
             Response::back('error', implode(' ', $validator->allErrors()));
+            return;
         }
-
-        $roleId     = (int)($_POST['role_id'] ?? 0);
-        $department = strtoupper($_POST['department'] ?? ($oldStaff['department'] ?? 'PRODUCTION'));
-
-        if (!Role::isRoleCompatibleWithDepartment($roleId, $department)) {
-            $role = Role::findById($roleId);
-            $roleName = $role['name'] ?? 'Selected role';
-            Response::back('error', "Department Validation Error: The role '{$roleName}' does not have access permissions for the '{$department}' department. Please assign a role with {$department} permissions or select a compatible department.");
+        $selectedConcernIds = array_values(array_filter(
+            array_map('intval', is_array($_POST['concern_ids'] ?? null) ? $_POST['concern_ids'] : []),
+            static fn(int $concernId): bool => $concernId > 0
+        ));
+        if (!$selectedConcernIds) {
+            Response::back('error', 'Assign at least one concern to this staff member.');
+            return;
         }
 
         try {
@@ -689,10 +707,14 @@ class AdminController {
             return;
         }
 
-        $allPermissions = Database::fetchAll("SELECT id, module, action FROM permissions ORDER BY id ASC");
-        $permMap = [];
-        foreach ($allPermissions as $p) {
-            $permMap[$p['module']][$p['action']] = (int) $p['id'];
+        $concerns = Concern::getAll(true);
+        $selectedConcernId = (int)($_GET['concern_id'] ?? 0);
+        $selectedConcern = null;
+        foreach ($concerns as $concern) {
+            if ((int)$concern['id'] === $selectedConcernId) {
+                $selectedConcern = $concern;
+                break;
+            }
         }
 
         Response::view('admin.role_form', [
@@ -705,9 +727,13 @@ class AdminController {
                 ['label' => 'Create'],
             ],
             'role'                   => null,
-            'staff'                  => null,
-            'permMap'                => $permMap,
-            'hierarchicalModules'    => Role::getHierarchicalPermissions(),
+            'concerns'               => $concerns,
+            'selectedConcernId'      => $selectedConcernId,
+            'selectedConcern'        => $selectedConcern,
+            'hierarchicalModules'    => Role::filterHierarchicalPermissions(
+                Role::getHierarchicalPermissions(),
+                $selectedConcern['module_keys'] ?? []
+            ),
             'assignedPermissionIds'  => [],
         ]);
     }
@@ -723,16 +749,23 @@ class AdminController {
 
         if (!CSRF::validateRequest()) {
             Response::back('error', 'Invalid form submission.');
+            return;
         }
 
         $name          = trim($_POST['name'] ?? '');
         $slugInput     = trim($_POST['slug'] ?? '');
         $description   = trim($_POST['description'] ?? '');
         $isActive      = isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1;
-        $permissionIds = array_map('intval', $_POST['permissions'] ?? []);
+        $permissionIds = $_POST['permissions'] ?? [];
+        $concern = Concern::find((int)($_POST['concern_id'] ?? 0));
 
         if (empty($name)) {
             Response::back('error', 'Role Name is required.');
+            return;
+        }
+        if (!$concern || empty($concern['is_active'])) {
+            Response::back('error', 'Select a valid concern before saving role permissions.');
+            return;
         }
 
         // Prepare unique role slug
@@ -751,13 +784,10 @@ class AdminController {
                 'is_active'   => $isActive
             ]);
 
-            // Save selected permissions
-            if (!empty($permissionIds)) {
-                Role::savePermissions($roleId, $permissionIds);
-            }
+            Role::savePermissionsForModules($roleId, is_array($permissionIds) ? $permissionIds : [], $concern['module_keys']);
 
             AuditService::log('roles', 'create', 'roles', $roleId, null, $_POST);
-            Response::redirect(url('admin/roles'), 'success', "Role '{$name}' created successfully with assigned permissions.");
+            Response::redirect(url('admin/roles'), 'success', "Role '{$name}' created with permissions for {$concern['name']}.");
         } catch (Exception $e) {
             error_log("Error creating role: " . $e->getMessage());
             Response::back('error', 'Failed to create role: ' . $e->getMessage());
@@ -774,15 +804,21 @@ class AdminController {
         }
 
         $role = Role::findById((int) $id);
-        if (!$role) Response::error(404, 'Role not found.');
-
-        $assignedPermissionIds = Role::getRolePermissionIds((int) $id);
-
-        $allPermissions = Database::fetchAll("SELECT id, module, action FROM permissions ORDER BY id ASC");
-        $permMap = [];
-        foreach ($allPermissions as $p) {
-            $permMap[$p['module']][$p['action']] = (int) $p['id'];
+        if (!$role) {
+            Response::error(404, 'Role not found.');
+            return;
         }
+
+        $concerns = Concern::getAll(true);
+        $selectedConcernId = (int)($_GET['concern_id'] ?? 0);
+        $selectedConcern = null;
+        foreach ($concerns as $concern) {
+            if ((int)$concern['id'] === $selectedConcernId) {
+                $selectedConcern = $concern;
+                break;
+            }
+        }
+        $moduleKeys = $selectedConcern['module_keys'] ?? [];
 
         Response::view('admin.role_form', [
             'pageTitle'              => 'Edit Role: ' . ($role['name'] ?? ''),
@@ -794,9 +830,14 @@ class AdminController {
                 ['label' => 'Edit'],
             ],
             'role'                   => $role,
-            'permMap'                => $permMap,
-            'hierarchicalModules'    => Role::getHierarchicalPermissions(),
-            'assignedPermissionIds'  => $assignedPermissionIds,
+            'concerns'               => $concerns,
+            'selectedConcernId'      => $selectedConcernId,
+            'selectedConcern'        => $selectedConcern,
+            'hierarchicalModules'    => Role::filterHierarchicalPermissions(
+                Role::getHierarchicalPermissions(),
+                $moduleKeys
+            ),
+            'assignedPermissionIds'  => Role::getRolePermissionIdsForModules((int)$id, $moduleKeys),
         ]);
     }
 
@@ -811,20 +852,30 @@ class AdminController {
 
         if (!CSRF::validateRequest()) {
             Response::back('error', 'Invalid form submission.');
+            return;
         }
 
         $roleId        = (int) $id;
         $role          = Role::findById($roleId);
-        if (!$role) Response::error(404, 'Role not found.');
+        if (!$role) {
+            Response::error(404, 'Role not found.');
+            return;
+        }
 
         $name          = trim($_POST['name'] ?? '');
         $slugInput     = trim($_POST['slug'] ?? '');
         $description   = trim($_POST['description'] ?? '');
         $isActive      = isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1;
-        $permissionIds = array_map('intval', $_POST['permissions'] ?? []);
+        $permissionIds = $_POST['permissions'] ?? [];
+        $concern = Concern::find((int)($_POST['concern_id'] ?? 0));
 
         if (empty($name)) {
             Response::back('error', 'Role Name is required.');
+            return;
+        }
+        if (!$concern || empty($concern['is_active'])) {
+            Response::back('error', 'Select a valid concern before saving role permissions.');
+            return;
         }
 
         $baseSlug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $slugInput ?: $name), '-'));
@@ -842,11 +893,10 @@ class AdminController {
                 'is_active'   => $isActive
             ]);
 
-            // Sync updated permissions
-            Role::savePermissions($roleId, $permissionIds);
+            Role::savePermissionsForModules($roleId, is_array($permissionIds) ? $permissionIds : [], $concern['module_keys']);
 
             AuditService::log('roles', 'update', 'roles', $roleId, $role, $_POST);
-            Response::redirect(url('admin/roles'), 'success', "Role '{$name}' updated successfully.");
+            Response::redirect(url('admin/roles'), 'success', "Role '{$name}' updated; permissions for {$concern['name']} were saved.");
         } catch (Exception $e) {
             error_log("Error updating role: " . $e->getMessage());
             Response::back('error', 'Failed to update role: ' . $e->getMessage());
@@ -865,9 +915,21 @@ class AdminController {
         $role = Role::findById((int) $id);
         if (!$role) Response::error(404, 'Role not found.');
 
-        $groupedPermissions = Role::getPermissionsGrouped();
-        $hierarchicalModules = Role::getHierarchicalPermissions();
-        $rolePermissionIds = Role::getRolePermissionIds((int) $id);
+        $concerns = Concern::getAll(true);
+        $selectedConcernId = (int)($_GET['concern_id'] ?? 0);
+        $selectedConcern = null;
+        foreach ($concerns as $concern) {
+            if ((int)$concern['id'] === $selectedConcernId) {
+                $selectedConcern = $concern;
+                break;
+            }
+        }
+        $moduleKeys = $selectedConcern['module_keys'] ?? [];
+        $hierarchicalModules = Role::filterHierarchicalPermissions(
+            Role::getHierarchicalPermissions(),
+            $moduleKeys
+        );
+        $rolePermissionIds = Role::getRolePermissionIdsForModules((int)$id, $moduleKeys);
 
         Response::view('admin.permissions', [
             'pageTitle'           => 'Manage Permissions — ' . $role['name'],
@@ -879,9 +941,11 @@ class AdminController {
                 ['label' => 'Permissions'],
             ],
             'role'                => $role,
-            'groupedPermissions'  => $groupedPermissions,
             'hierarchicalModules' => $hierarchicalModules,
             'rolePermissionIds'   => $rolePermissionIds,
+            'concerns'           => $concerns,
+            'selectedConcernId'  => $selectedConcernId,
+            'selectedConcern'    => $selectedConcern,
         ]);
     }
 
@@ -896,18 +960,132 @@ class AdminController {
 
         if (!CSRF::validateRequest()) {
             Response::back('error', 'Invalid form submission.');
+            return;
         }
 
         $roleId = (int) $id;
         $permissionIds = $_POST['permissions'] ?? [];
+        $concernId = (int)($_POST['concern_id'] ?? 0);
+        $concern = Concern::find($concernId);
+        if (!$concern || empty($concern['is_active'])) {
+            Response::back('error', 'Select a valid concern before saving role permissions.');
+            return;
+        }
 
         try {
-            Role::savePermissions($roleId, $permissionIds);
-            AuditService::log('roles', 'update_permissions', 'roles', $roleId, null, ['permissions' => $permissionIds]);
-            Response::redirect(url('admin/roles'), 'success', 'Permissions updated successfully.');
+            Role::savePermissionsForModules($roleId, is_array($permissionIds) ? $permissionIds : [], $concern['module_keys']);
+            AuditService::log('roles', 'update_permissions', 'roles', $roleId, null, [
+                'concern_id' => $concernId,
+                'permissions' => $permissionIds,
+            ]);
+            Response::redirect(
+                url('admin/roles/permissions/' . $roleId . '?concern_id=' . $concernId),
+                'success',
+                'Permissions updated for ' . $concern['name'] . '.'
+            );
         } catch (Exception $e) {
-            Response::back('error', 'Failed to update permissions.');
+            error_log('Role permissions update failed: ' . $e->getMessage());
+            Response::back('error', 'Failed to update permissions: ' . $e->getMessage());
         }
+    }
+
+    public function concerns(): void
+    {
+        if (!hasPermission('staff', 'view')) {
+            Response::error(403, 'Access denied: You do not have permission to view staff concerns.');
+            return;
+        }
+
+        $concernId = (int)($_GET['concern_id'] ?? 0);
+        $concern = $concernId ? Concern::find($concernId) : null;
+        if ($concernId && !$concern) {
+            Response::redirect(url('admin/staff/concerns'), 'error', 'Concern was not found.');
+            return;
+        }
+
+        Response::view('admin.concerns', [
+            'pageTitle' => 'Staff Concerns & Modules',
+            'activeModule' => 'staff',
+            'activeMenu' => 'staff-concerns',
+            'concerns' => Concern::getAll(),
+            'selectedConcern' => $concern,
+            'hierarchicalModules' => Role::getHierarchicalPermissions(),
+            'breadcrumb' => [
+                ['label' => 'Staff', 'url' => url('admin/staff')],
+                ['label' => 'Concerns & Modules'],
+            ],
+        ]);
+    }
+
+    public function storeConcern(): void
+    {
+        if (!hasPermission('staff', 'create')) {
+            Response::error(403, 'Access denied: You do not have permission to create concerns.');
+            return;
+        }
+        if (!CSRF::validateRequest()) {
+            Response::back('error', 'Invalid form submission.');
+            return;
+        }
+
+        try {
+            $concernId = Concern::save(
+                null,
+                (string)($_POST['name'] ?? ''),
+                (string)($_POST['description'] ?? ''),
+                is_array($_POST['module_keys'] ?? null) ? $_POST['module_keys'] : []
+            );
+            AuditService::log('staff', 'create_concern', 'concerns', $concernId, null, $_POST);
+            Response::redirect(url('admin/staff/concerns?concern_id=' . $concernId), 'success', 'Concern created.');
+        } catch (Exception $e) {
+            Response::back('error', 'Unable to save concern: ' . $e->getMessage());
+        }
+    }
+
+    public function updateConcern(string $id): void
+    {
+        if (!hasPermission('staff', 'edit')) {
+            Response::error(403, 'Access denied: You do not have permission to edit concerns.');
+            return;
+        }
+        if (!CSRF::validateRequest()) {
+            Response::back('error', 'Invalid form submission.');
+            return;
+        }
+
+        try {
+            Concern::save(
+                (int)$id,
+                (string)($_POST['name'] ?? ''),
+                (string)($_POST['description'] ?? ''),
+                is_array($_POST['module_keys'] ?? null) ? $_POST['module_keys'] : []
+            );
+            AuditService::log('staff', 'update_concern', 'concerns', (int)$id, null, $_POST);
+            Response::redirect(url('admin/staff/concerns?concern_id=' . (int)$id), 'success', 'Concern updated.');
+        } catch (Exception $e) {
+            Response::back('error', 'Unable to update concern: ' . $e->getMessage());
+        }
+    }
+
+    public function deleteConcern(string $id): void
+    {
+        if (!hasPermission('staff', 'delete')) {
+            Response::error(403, 'Access denied: You do not have permission to delete concerns.');
+            return;
+        }
+        if (!CSRF::validateRequest()) {
+            Response::back('error', 'Invalid form submission.');
+            return;
+        }
+
+        $concern = Concern::find((int)$id);
+        if (!$concern) {
+            Response::redirect(url('admin/staff/concerns'), 'error', 'Concern was not found.');
+            return;
+        }
+        Concern::delete((int)$id);
+        AuditService::log('staff', 'delete_concern', 'concerns', (int)$id, $concern, null);
+        Response::redirect(url('admin/staff/concerns'), 'success', 'Concern deleted.');
     }
 
     /**
@@ -945,6 +1123,10 @@ class AdminController {
         if (!CSRF::validateRequest()) {
             Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Invalid security token.');
         }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a production unit.');
+        }
 
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
@@ -975,6 +1157,7 @@ class AdminController {
                 'phone'        => $phone,
                 'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
+                'concern_id'   => $activeConcernId,
             ]);
 
             AuditService::log('production_units', 'create', 'production_units', $id, null, $_POST);
@@ -990,6 +1173,9 @@ class AdminController {
         }
 
         $unitId = (int)$id;
+        if (!ProductionUnit::find($unitId)) {
+            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit not found in the active concern.');
+        }
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
@@ -1010,7 +1196,7 @@ class AdminController {
         }
 
         try {
-            ProductionUnit::update($unitId, [
+            if (!ProductionUnit::update($unitId, [
                 'name'         => $name,
                 'code'         => $code,
                 'manager_name' => $managerName,
@@ -1019,7 +1205,9 @@ class AdminController {
                 'phone'        => $phone,
                 'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-            ]);
+            ])) {
+                Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit could not be updated in the active concern.');
+            }
 
             AuditService::log('production_units', 'update', 'production_units', $unitId, null, $_POST);
             Response::redirect(url('admin/dashboard?tab=production-units'), 'success', "Production Unit '{$name}' updated successfully.");
@@ -1034,6 +1222,9 @@ class AdminController {
         }
 
         $unitId = (int)$id;
+        if (!ProductionUnit::find($unitId)) {
+            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit not found in the active concern.');
+        }
         try {
             // Check if programs are linked
             $progCount = (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM production_programs WHERE production_unit_id = ?", [$unitId])['cnt'] ?? 0);
@@ -1041,7 +1232,9 @@ class AdminController {
                 Response::redirect(url('admin/dashboard?tab=production-units'), 'error', "Cannot delete unit: {$progCount} production program(s) are assigned to it. You can deactivate it instead.");
             }
 
-            ProductionUnit::delete($unitId);
+            if (!ProductionUnit::delete($unitId)) {
+                Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit could not be deleted.');
+            }
             AuditService::log('production_units', 'delete', 'production_units', $unitId);
             Response::redirect(url('admin/dashboard?tab=production-units'), 'success', 'Production Unit deleted successfully.');
         } catch (Exception $e) {
@@ -1055,7 +1248,9 @@ class AdminController {
         }
 
         $unitId = (int)$id;
-        ProductionUnit::toggleActive($unitId);
+        if (!ProductionUnit::toggleActive($unitId)) {
+            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit not found in the active concern.');
+        }
         AuditService::log('production_units', 'toggle_active', 'production_units', $unitId);
         Response::redirect(url('admin/dashboard?tab=production-units'), 'success', 'Production Unit status updated.');
     }
@@ -1063,6 +1258,10 @@ class AdminController {
     public function ajaxAddProductionUnit(): void {
         if (!CSRF::validateRequest()) {
             Response::jsonError('Invalid security token.', [], 403);
+        }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::jsonError('Select a concern before creating a production unit.', [], 409);
         }
 
         $name = trim($_POST['name'] ?? '');
@@ -1094,6 +1293,7 @@ class AdminController {
                 'phone'        => $phone,
                 'gst_number'   => $gstNumber,
                 'is_active'    => 1,
+                'concern_id'   => $activeConcernId,
             ]);
 
             $unit = ProductionUnit::find($id);
@@ -1111,6 +1311,10 @@ class AdminController {
     public function storeWarehouse(): void {
         if (!CSRF::validateRequest()) {
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Invalid security token.');
+        }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a warehouse.');
         }
 
         $name = trim($_POST['name'] ?? '');
@@ -1142,6 +1346,7 @@ class AdminController {
                 'phone'        => $phone,
                 'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
+                'concern_id'   => $activeConcernId,
             ]);
 
             AuditService::log('warehouses', 'create', 'warehouses', $id, null, $_POST);
@@ -1157,6 +1362,9 @@ class AdminController {
         }
 
         $whId = (int)$id;
+        if (!Warehouse::find($whId)) {
+            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse not found in the active concern.');
+        }
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
@@ -1177,7 +1385,7 @@ class AdminController {
         }
 
         try {
-            Warehouse::update($whId, [
+            if (!Warehouse::update($whId, [
                 'name'         => $name,
                 'code'         => $code,
                 'manager_name' => $managerName,
@@ -1186,7 +1394,9 @@ class AdminController {
                 'phone'        => $phone,
                 'gst_number'   => $gstNumber,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-            ]);
+            ])) {
+                Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse could not be updated in the active concern.');
+            }
 
             AuditService::log('warehouses', 'update', 'warehouses', $whId, null, $_POST);
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', "Warehouse '{$name}' updated successfully.");
@@ -1201,6 +1411,9 @@ class AdminController {
         }
 
         $whId = (int)$id;
+        if (!Warehouse::find($whId)) {
+            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse not found in the active concern.');
+        }
         try {
             // Check stock balances
             $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'WAREHOUSE' AND location_id = ?", [$whId])['total'] ?? 0);
@@ -1208,7 +1421,9 @@ class AdminController {
                 Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', "Cannot delete warehouse: It holds {$stockCount} active inventory units. Please transfer stock or deactivate it.");
             }
 
-            Warehouse::delete($whId);
+            if (!Warehouse::delete($whId)) {
+                Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse could not be deleted.');
+            }
             AuditService::log('warehouses', 'delete', 'warehouses', $whId);
             Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', 'Warehouse deleted successfully.');
         } catch (Exception $e) {
@@ -1222,7 +1437,9 @@ class AdminController {
         }
 
         $whId = (int)$id;
-        Warehouse::toggleActive($whId);
+        if (!Warehouse::toggleActive($whId)) {
+            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse not found in the active concern.');
+        }
         AuditService::log('warehouses', 'toggle_active', 'warehouses', $whId);
         Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', 'Warehouse status updated.');
     }
@@ -1234,6 +1451,10 @@ class AdminController {
     public function storeShop(): void {
         if (!CSRF::validateRequest()) {
             Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Invalid security token.');
+        }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a shop.');
         }
 
         $name = trim($_POST['name'] ?? '');
@@ -1265,6 +1486,7 @@ class AdminController {
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
+                'concern_id'   => $activeConcernId,
             ]);
 
             AuditService::log('shops', 'create', 'shops', $id, null, $_POST);
@@ -1280,6 +1502,9 @@ class AdminController {
         }
 
         $shopId = (int)$id;
+        if (!Shop::find($shopId)) {
+            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop not found in the active concern.');
+        }
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
         $managerName = trim($_POST['manager_name'] ?? '');
@@ -1300,7 +1525,7 @@ class AdminController {
         }
 
         try {
-            Shop::update($shopId, [
+            if (!Shop::update($shopId, [
                 'name'         => $name,
                 'code'         => $code,
                 'manager_name' => $managerName,
@@ -1309,7 +1534,9 @@ class AdminController {
                 'address'      => trim($_POST['address'] ?? ''),
                 'phone'        => $phone,
                 'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-            ]);
+            ])) {
+                Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop could not be updated in the active concern.');
+            }
 
             AuditService::log('shops', 'update', 'shops', $shopId, null, $_POST);
             Response::redirect(url('admin/dashboard?tab=shops'), 'success', "Retail Shop '{$name}' updated successfully.");
@@ -1324,6 +1551,9 @@ class AdminController {
         }
 
         $shopId = (int)$id;
+        if (!Shop::find($shopId)) {
+            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop not found in the active concern.');
+        }
         try {
             // Check stock balances
             $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'SHOP' AND location_id = ?", [$shopId])['total'] ?? 0);
@@ -1331,7 +1561,9 @@ class AdminController {
                 Response::redirect(url('admin/dashboard?tab=shops'), 'error', "Cannot delete shop: It holds {$stockCount} active stock items. Please transfer stock or deactivate it.");
             }
 
-            Shop::delete($shopId);
+            if (!Shop::delete($shopId)) {
+                Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop could not be deleted.');
+            }
             AuditService::log('shops', 'delete', 'shops', $shopId);
             Response::redirect(url('admin/dashboard?tab=shops'), 'success', 'Retail Shop deleted successfully.');
         } catch (Exception $e) {
@@ -1345,7 +1577,9 @@ class AdminController {
         }
 
         $shopId = (int)$id;
-        Shop::toggleActive($shopId);
+        if (!Shop::toggleActive($shopId)) {
+            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop not found in the active concern.');
+        }
         AuditService::log('shops', 'toggle_active', 'shops', $shopId);
         Response::redirect(url('admin/dashboard?tab=shops'), 'success', 'Shop status updated.');
     }
@@ -1358,8 +1592,15 @@ class AdminController {
         if (!CSRF::validateRequest()) {
             Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
         }
+        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$activeConcernId) {
+            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a sales channel.');
+        }
 
-        $type = $_POST['channel_type'] ?? 'OTHER';
+        $type = strtoupper($_POST['channel_type'] ?? '');
+        if (!in_array($type, ['WHATSAPP', 'WEBSITE'], true)) {
+            Response::redirect(url('admin/dashboard'), 'error', 'Select a supported sales channel type.');
+        }
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
         if (empty($name)) {
@@ -1374,14 +1615,17 @@ class AdminController {
         if (!$this->isValidGstNumber($gstNumber)) {
             Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enter a valid 15-character GSTIN.');
         }
+        if (!Concern::hasFacilityModules((int)$activeConcernId, $type)) {
+            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enable a module for this channel type in the active concern first.');
+        }
 
         try {
             if (empty($code)) {
-                $prefix = ($type === 'WHATSAPP') ? 'WA-' : 'WE-';
+                $prefix = ($type === 'WHATSAPP' ? 'WA' : 'WE') . '-C' . $activeConcernId . '-';
                 $num = 1;
                 do {
                     $code = $prefix . str_pad((string)$num, 2, '0', STR_PAD_LEFT);
-                    $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ?", [$code]);
+                    $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                     if ($exists) {
                         $num++;
                     } else {
@@ -1389,7 +1633,7 @@ class AdminController {
                     }
                 } while (true);
             } else {
-                $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ?", [$code]);
+                $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
                 if ($exists) {
                     Response::redirect(url("admin/dashboard?tab=" . strtolower($type)), 'error', 'Channel code already exists.');
                     return;
@@ -1397,8 +1641,8 @@ class AdminController {
             }
 
             Database::execute(
-                "INSERT INTO sales_channels (name, code, manager_name, phone, gst_number, description, channel_type, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active]
+                "INSERT INTO sales_channels (name, code, manager_name, phone, gst_number, description, channel_type, is_active, concern_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active, $activeConcernId]
             );
             $id = Database::lastInsertId();
             AuditService::log('admin', 'create_channel', 'sales_channels', $id, null, $_POST);
@@ -1413,7 +1657,19 @@ class AdminController {
             Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
         }
 
-        $type = $_POST['channel_type'] ?? 'OTHER';
+        $activeConcernId = currentConcernId();
+        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
+        $channel = $activeConcernId === null ? null : Database::fetchOne(
+            "SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?",
+            [(int)$id, $activeConcernId]
+        );
+        if (!$channel || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== (int)$id)) {
+            Response::redirect(url('admin/dashboard'), 'error', 'Sales channel not found in the active concern.');
+        }
+        $type = strtoupper($_POST['channel_type'] ?? '');
+        if (!in_array($type, ['WHATSAPP', 'WEBSITE'], true) || !Concern::hasFacilityModules((int)$activeConcernId, $type)) {
+            Response::redirect(url('admin/dashboard'), 'error', 'Choose a supported channel type enabled for the active concern.');
+        }
         $name = trim($_POST['name'] ?? '');
         $code = trim($_POST['code'] ?? '');
         if (empty($name)) {
@@ -1430,15 +1686,15 @@ class AdminController {
         }
 
         try {
-            $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND id != ?", [$code, $id]);
+            $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND id != ? AND concern_id = ?", [$code, $id, $activeConcernId]);
             if ($exists && !empty($code)) {
                 Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Channel code already exists for another channel.');
                 return;
             }
 
             Database::execute(
-                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, gst_number = ?, description = ?, channel_type = ?, is_active = ? WHERE id = ?",
-                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active, $id]
+                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, gst_number = ?, description = ?, channel_type = ?, is_active = ? WHERE id = ? AND concern_id = ?",
+                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active, $id, $activeConcernId]
             );
             AuditService::log('admin', 'update_channel', 'sales_channels', $id, null, $_POST);
             Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'success', "Channel '{$name}' updated successfully.");
@@ -1453,9 +1709,16 @@ class AdminController {
         }
 
         try {
-            $chan = Database::fetchOne("SELECT * FROM sales_channels WHERE id = ?", [$id]);
+            $concernId = currentConcernId();
+            $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
+            $chan = $concernId === null || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== (int)$id)
+                ? null
+                : Database::fetchOne(
+                "SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?",
+                [$id, $concernId]
+            );
             if ($chan) {
-                Database::execute("DELETE FROM sales_channels WHERE id = ?", [$id]);
+                Database::execute("DELETE FROM sales_channels WHERE id = ? AND concern_id = ?", [$id, $concernId]);
                 AuditService::log('admin', 'delete_channel', 'sales_channels', $id);
                 Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($chan['channel_type'])), 'success', 'Channel deleted successfully.');
             } else {
@@ -1463,7 +1726,10 @@ class AdminController {
             }
         } catch (Exception $e) {
             // Cannot delete if in use
-            Database::execute("UPDATE sales_channels SET is_active = 0 WHERE id = ?", [$id]);
+            $concernId = currentConcernId();
+            if ($concernId !== null) {
+                Database::execute("UPDATE sales_channels SET is_active = 0 WHERE id = ? AND concern_id = ?", [$id, $concernId]);
+            }
             Response::redirect(url('admin/dashboard'), 'warning', 'Channel is in use and was deactivated instead of deleted.');
         }
     }
@@ -1473,10 +1739,17 @@ class AdminController {
             Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
         }
 
-        $chan = Database::fetchOne("SELECT * FROM sales_channels WHERE id = ?", [$id]);
+        $concernId = currentConcernId();
+        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
+        $chan = $concernId === null || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== (int)$id)
+            ? null
+            : Database::fetchOne(
+            "SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?",
+            [$id, $concernId]
+        );
         if ($chan) {
             $newStatus = $chan['is_active'] ? 0 : 1;
-            Database::execute("UPDATE sales_channels SET is_active = ? WHERE id = ?", [$newStatus, $id]);
+            Database::execute("UPDATE sales_channels SET is_active = ? WHERE id = ? AND concern_id = ?", [$newStatus, $id, $concernId]);
             AuditService::log('admin', 'toggle_channel', 'sales_channels', $id);
             Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($chan['channel_type'])), 'success', 'Channel status updated.');
         } else {

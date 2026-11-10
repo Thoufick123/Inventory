@@ -9,6 +9,16 @@ require_once BASE_PATH . '/app/Models/AllocationItem.php';
 class WarehouseAllocation {
 
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($concernId === null || $assignedWarehouseId === 0) {
+            return null;
+        }
+        $warehouseFilter = $assignedWarehouseId !== null ? ' AND wa.warehouse_id = ?' : '';
+        $params = [$id, $concernId];
+        if ($assignedWarehouseId !== null) {
+            $params[] = $assignedWarehouseId;
+        }
         $allocation = Database::fetchOne(
             "SELECT wa.*, 
                     w.name as warehouse_name, w.code as warehouse_code,
@@ -18,8 +28,8 @@ class WarehouseAllocation {
              JOIN warehouses w ON wa.warehouse_id = w.id
              LEFT JOIN users u_req ON wa.requested_by = u_req.id
              LEFT JOIN users u_appr ON wa.approved_by = u_appr.id
-             WHERE wa.id = ?",
-            [$id]
+             WHERE wa.id = ? AND wa.concern_id = ?{$warehouseFilter}",
+            $params
         );
 
         if ($allocation) {
@@ -29,24 +39,24 @@ class WarehouseAllocation {
             $whName = '';
 
             if (!empty($allocation['shop_id'])) {
-                $shop = Database::fetchOne("SELECT name, code FROM shops WHERE id = ?", [$allocation['shop_id']]);
+                $shop = Database::fetchOne("SELECT name, code FROM shops WHERE id = ? AND concern_id = ?", [$allocation['shop_id'], $concernId]);
                 if ($shop) $shopName = $shop['name'] . " (" . $shop['code'] . ")";
             } elseif ($allocation['destination_type'] === 'SHOP' && !empty($allocation['destination_id'])) {
-                $shop = Database::fetchOne("SELECT name, code FROM shops WHERE id = ?", [$allocation['destination_id']]);
+                $shop = Database::fetchOne("SELECT name, code FROM shops WHERE id = ? AND concern_id = ?", [$allocation['destination_id'], $concernId]);
                 if ($shop) $shopName = $shop['name'] . " (" . $shop['code'] . ")";
             }
 
             if (!empty($allocation['channel_id'])) {
-                $chan = Database::fetchOne("SELECT name, code FROM sales_channels WHERE id = ?", [$allocation['channel_id']]);
+                $chan = Database::fetchOne("SELECT name, code FROM sales_channels WHERE id = ? AND concern_id = ?", [$allocation['channel_id'], $concernId]);
                 if ($chan) $chanName = $chan['name'];
             } elseif (str_starts_with((string)$allocation['destination_type'], 'CHANNEL_')) {
                 $chanId = (int)substr($allocation['destination_type'], 8);
-                $chan = Database::fetchOne("SELECT name FROM sales_channels WHERE id = ?", [$chanId]);
+                $chan = Database::fetchOne("SELECT name FROM sales_channels WHERE id = ? AND concern_id = ?", [$chanId, $concernId]);
                 if ($chan) $chanName = $chan['name'];
             }
 
             if ($allocation['destination_type'] === 'WAREHOUSE' && !empty($allocation['destination_id'])) {
-                $wh = Database::fetchOne("SELECT name, code FROM warehouses WHERE id = ?", [$allocation['destination_id']]);
+                $wh = Database::fetchOne("SELECT name, code FROM warehouses WHERE id = ? AND concern_id = ?", [$allocation['destination_id'], $concernId]);
                 if ($wh) $whName = $wh['name'] . " (" . $wh['code'] . ")";
             }
 
@@ -69,9 +79,13 @@ class WarehouseAllocation {
     }
 
     public static function findByNumber(string $allocationNumber): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
         $allocation = Database::fetchOne(
-            "SELECT wa.* FROM warehouse_allocations wa WHERE wa.allocation_number = ?",
-            [$allocationNumber]
+            "SELECT wa.* FROM warehouse_allocations wa WHERE wa.allocation_number = ? AND wa.concern_id = ?",
+            [$allocationNumber, $concernId]
         );
         if ($allocation) {
             return self::find((int)$allocation['id']);

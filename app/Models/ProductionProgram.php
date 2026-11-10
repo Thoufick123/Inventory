@@ -10,6 +10,12 @@ class ProductionProgram {
      * Find program by ID with related unit, product, seller roll, category hierarchy, and staff details.
      */
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $concernClause = $concernId !== null ? ' AND pu.concern_id = ?' : '';
+        $params = [$id];
+        if ($concernId !== null) {
+            $params[] = $concernId;
+        }
         return Database::fetchOne(
             "SELECT pp.*, 
                     pu.name as unit_name, pu.code as unit_code,
@@ -34,8 +40,8 @@ class ProductionProgram {
              LEFT JOIN users u_assign ON pp.assigned_to = u_assign.id
              LEFT JOIN users u_appr ON pp.approved_by = u_appr.id
              LEFT JOIN users u_creat ON pp.created_by = u_creat.id
-             WHERE pp.id = ?",
-            [$id]
+             WHERE pp.id = ?{$concernClause}",
+            $params
         );
     }
 
@@ -43,6 +49,12 @@ class ProductionProgram {
      * Find program by program number.
      */
     public static function findByNumber(string $programNumber): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $concernClause = $concernId !== null ? ' AND pu.concern_id = ?' : '';
+        $params = [$programNumber];
+        if ($concernId !== null) {
+            $params[] = $concernId;
+        }
         return Database::fetchOne(
             "SELECT pp.*, pu.name as unit_name, p.name as product_name,
                     sr.roll_number, sr.color as roll_color, sr.design_name as roll_design,
@@ -56,8 +68,8 @@ class ProductionProgram {
              LEFT JOIN categories c ON pp.category_id = c.id
              LEFT JOIN subcategories sc ON pp.subcategory_id = sc.id
              LEFT JOIN sub_subcategories ssc ON pp.sub_subcategory_id = ssc.id
-             WHERE pp.program_number = ?",
-            [$programNumber]
+             WHERE pp.program_number = ?{$concernClause}",
+            $params
         );
     }
 
@@ -85,6 +97,11 @@ class ProductionProgram {
                 LEFT JOIN users u ON pp.assigned_to = u.id
                 WHERE 1=1";
         $params = [];
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId !== null) {
+            $sql .= " AND pu.concern_id = ?";
+            $params[] = $concernId;
+        }
 
         if (!empty($filters['status'])) {
             $sql .= " AND pp.status = ?";
@@ -179,9 +196,21 @@ class ProductionProgram {
         }
 
         $unitId = !empty($data['production_unit_id']) ? (int)$data['production_unit_id'] : null;
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($unitId !== null && $concernId === null) {
+            throw new InvalidArgumentException('Select an active concern before assigning a production unit.');
+        }
+        if ($concernId !== null && $unitId === null) {
+            throw new InvalidArgumentException('Choose a production unit belonging to the active concern.');
+        }
         if ($unitId) {
-            $unit = Database::fetchOne("SELECT id FROM production_units WHERE id = ?", [$unitId]);
-            if (!$unit) $unitId = null;
+            $unit = Database::fetchOne(
+                "SELECT id FROM production_units WHERE id = ? AND concern_id = ?",
+                [$unitId, $concernId]
+            );
+            if (!$unit) {
+                throw new InvalidArgumentException('The selected production unit is not part of the active concern.');
+            }
         }
 
         $productId = !empty($data['product_id']) ? (int)$data['product_id'] : null;
@@ -424,4 +453,3 @@ class ProductionProgram {
         );
     }
 }
-

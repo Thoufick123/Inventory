@@ -78,6 +78,10 @@ foreach ($hierarchicalModules as $module) {
                 <div class="text-muted small fw-semibold">Department</div>
                 <div><?= e($staff['department'] ?? '—') ?></div>
             </div>
+            <div class="col-md-6 col-xl-4">
+                <div class="text-muted small fw-semibold">Assigned Concerns</div>
+                <div><?= $concernNames ? e(implode(', ', $concernNames)) : '—' ?></div>
+            </div>
             <?php foreach ($assignments as $label => $value): ?>
                 <div class="col-md-6 col-xl-4">
                     <div class="text-muted small fw-semibold"><?= e($label) ?></div>

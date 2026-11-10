@@ -112,18 +112,41 @@ class ExpenseService {
         $locationType = strtoupper(trim($payload['location_type'] ?? 'WAREHOUSE'));
         $locationId = (int)($payload['location_id'] ?? 0);
         $locationName = trim($payload['location_name'] ?? '');
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $facilityTables = [
+            'PRODUCTION' => 'production_units',
+            'WAREHOUSE' => 'warehouses',
+            'SHOP' => 'shops',
+            'CHANNEL' => 'sales_channels',
+            'WHATSAPP' => 'sales_channels',
+            'WEBSITE' => 'sales_channels',
+        ];
+        if (isset($facilityTables[$locationType])) {
+            if ($concernId === null || $locationId <= 0) {
+                throw new InvalidArgumentException('Choose a facility belonging to the active concern.');
+            }
+            $facility = Database::fetchOne(
+                "SELECT name, code FROM {$facilityTables[$locationType]} WHERE id = ? AND concern_id = ?",
+                [$locationId, $concernId]
+            );
+            if (!$facility) {
+                throw new InvalidArgumentException('The selected facility does not belong to the active concern.');
+            }
+            if ($locationName === '') {
+                $locationName = $locationType === 'WAREHOUSE'
+                    ? "{$facility['name']} ({$facility['code']})"
+                    : $facility['name'];
+            }
+        }
 
         // Resolve location name if not provided
         if (empty($locationName)) {
             if ($locationType === 'WAREHOUSE') {
-                $wh = Database::fetchOne("SELECT name, code FROM warehouses WHERE id = ?", [$locationId]);
-                $locationName = $wh ? "{$wh['name']} ({$wh['code']})" : 'Main Warehouse';
+                $locationName = 'Main Warehouse';
             } elseif (in_array($locationType, ['CHANNEL', 'WHATSAPP', 'WEBSITE'])) {
-                $chan = Database::fetchOne("SELECT name, code FROM sales_channels WHERE id = ?", [$locationId]);
-                $locationName = $chan ? "{$chan['name']}" : ($locationType === 'WHATSAPP' ? 'WhatsApp Channel' : 'Website Channel');
+                $locationName = $locationType === 'WHATSAPP' ? 'WhatsApp Channel' : 'Website Channel';
             } elseif ($locationType === 'SHOP') {
-                $sh = Database::fetchOne("SELECT name, code FROM shops WHERE id = ?", [$locationId]);
-                $locationName = $sh ? "{$sh['name']}" : 'Retail Shop';
+                $locationName = 'Retail Shop';
             }
         }
 

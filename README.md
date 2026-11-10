@@ -11,6 +11,8 @@ An enterprise-grade, end-to-end apparel manufacturing, central warehousing, mult
 
 ## 🚀 Quickstart & Setup Guide
 
+Concern isolation design and the current module/data ownership map are documented in [docs/concern-isolation-phase-1.md](./docs/concern-isolation-phase-1.md).
+
 ### 1. Requirements
 - **Local Server**: XAMPP (Apache + MySQL/MariaDB) or Linux LAMP/LEMP stack.
 - **PHP Version**: `8.1.0` or higher (with `pdo_mysql`, `curl`, `mbstring`, `openssl` extensions enabled).
@@ -77,9 +79,12 @@ An enterprise-grade, end-to-end apparel manufacturing, central warehousing, mult
       php database/migrations/add_production_outward_receipt_fields.php
       php database/migrations/create_production_cash_flow_tables.php
       php database/migrations/create_production_return_inventory.php
+      php database/migrations/create_staff_concerns.php
+      php database/migrations/add_concern_ownership_to_inventory.php
        php database/seed_permissions.php
      ```
    - Hostinger Git deployment updates application files, but does not update the production database. After deploying a release that adds a migration, run that migration against the Hostinger database using Hostinger's PHP terminal/SSH before using the affected feature. Then assign any new permissions to the intended roles/staff in the application.
+   - Concern ownership migrations leave existing operational records unassigned; they are not copied into new concerns. Non-admin operational workflows remain unavailable until each module's concern scoping is completed.
 
 4. Launch Application:
    - Navigate to: **[http://localhost/grm-inventory/](http://localhost/grm-inventory/)**

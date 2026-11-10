@@ -21,12 +21,14 @@ class ProductionController {
      */
     public function dashboard(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        $stats = ProductionService::getDashboardStats($scopedUnitId);
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $stats = ProductionService::getDashboardStats($scopedUnitId, $concernId);
         Response::view('production.dashboard', array_merge($stats, [
             'pageTitle'    => 'Production Dashboard',
             'activeModule' => 'production',
             'activeMenu'   => 'prod-dashboard',
             'scopedUnitId' => $scopedUnitId,
+            'activeConcern' => function_exists('currentConcern') ? currentConcern() : null,
             'breadcrumb'   => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Dashboard'],
@@ -3910,7 +3912,7 @@ class ProductionController {
         ];
 
         $programs = ProductionProgram::getAll($filters);
-        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         $programRollsMap = [];
         foreach ($programs as $prog) {
@@ -3935,7 +3937,7 @@ class ProductionController {
 
     public function createProgram(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         $categories = Database::fetchAll(
             "SELECT c.* FROM categories c
              WHERE c.is_active = 1
@@ -4230,7 +4232,7 @@ class ProductionController {
         }
 
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         $categories = Database::fetchAll(
             "SELECT c.* FROM categories c
              WHERE c.is_active = 1
@@ -5272,7 +5274,7 @@ class ProductionController {
 
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
         $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
-        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         $rolls = Database::fetchAll(
             "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
              FROM seller_rolls sr
@@ -5556,7 +5558,7 @@ class ProductionController {
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
         $items = CuttingBatch::getItems((int)$id);
         $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
-        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : Database::fetchAll("SELECT * FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         Response::view('production.cutting.edit', [
             'pageTitle'    => 'Edit Cutting Batch — ' . ($batch['name'] ?: $batch['batch_number']),
@@ -6940,10 +6942,7 @@ class ProductionController {
         ];
 
         $batches = ProductionBatch::getAll($filters);
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
-        if (empty($warehouses)) {
-            $warehouses = Database::fetchAll("SELECT * FROM warehouses ORDER BY name ASC");
-        }
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('production.batches.index', [
             'pageTitle'    => 'Finished Production Batches',
@@ -7107,7 +7106,7 @@ class ProductionController {
             }
         }
 
-        $warehouses = Database::fetchAll("SELECT * FROM warehouses WHERE is_active = 1 ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
 
         Response::view('production.batches.create', [
             'pageTitle'       => 'Pack Production Batch',
@@ -7459,7 +7458,7 @@ class ProductionController {
         $reworks = ProductionWarehouseRework::getAll($filters);
         $stats = ProductionWarehouseRework::getStats(['production_unit_id' => $scopedUnitId]);
 
-        $warehouses = Database::fetchAll("SELECT id, name, code FROM warehouses ORDER BY name ASC");
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
         
         $unitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
         $dispatchedBatches = Database::fetchAll(
@@ -7475,7 +7474,7 @@ class ProductionController {
              ORDER BY pb.id DESC"
         );
 
-        $productionUnits = Database::fetchAll("SELECT id, name, code FROM production_units WHERE is_active = 1 ORDER BY name ASC");
+        $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         $allVariants = Database::fetchAll(
             "SELECT pv.id, pv.sku, p.name as product_name, s.name as size_name, c.name as color_name
@@ -8478,9 +8477,7 @@ class ProductionController {
             return;
         }
         $unitId = $scopedUnitId ?? (!empty($_GET['unit_id']) ? (int)$_GET['unit_id'] : null);
-        $units = $scopedUnitId
-            ? Database::fetchAll('SELECT id, name, code FROM production_units WHERE id = ?', [$scopedUnitId])
-            : Database::fetchAll('SELECT id, name, code FROM production_units WHERE is_active = 1 ORDER BY name');
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         $unit = null;
         if ($unitId !== null) {
             foreach ($units as $candidate) {

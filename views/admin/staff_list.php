@@ -2,15 +2,14 @@
 /**
  * Staff Directory / Management List View
  */
-$currentDept = strtolower($filters['department'] ?? 'all');
-if (empty($currentDept)) $currentDept = 'all';
+$currentConcernId = (int)($filters['concern_id'] ?? 0);
 ?>
 <div class="container-fluid py-4">
     <!-- Header -->
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h1 class="h3 mb-1 fw-bold">Staff Management</h1>
-            <p class="text-muted mb-0">Manage department staff members, facility assignments, and module access control.</p>
+            <p class="text-muted mb-0">Manage staff, custom concern assignments, facility scopes, and module access.</p>
         </div>
         <div>
             <?php if (hasPermission('staff', 'create')): ?>
@@ -19,42 +18,11 @@ if (empty($currentDept)) $currentDept = 'all';
                 <span>Add Staff Member</span>
             </a>
             <?php endif; ?>
+            <?php if (hasPermission('staff', 'view')): ?>
+                <a href="<?= url('admin/staff/concerns') ?>" class="btn btn-outline-primary ms-2"><i class="bi bi-diagram-3 me-1"></i>Concerns &amp; Modules</a>
+            <?php endif; ?>
         </div>
     </div>
-
-    <!-- Department Navigation Tabs -->
-    <ul class="nav nav-pills mb-4 gap-2 bg-white p-2 rounded-3 shadow-sm border" id="deptTabs">
-        <li class="nav-item">
-            <a href="<?= url('admin/staff?department=all') ?>" class="nav-link <?= $currentDept === 'all' ? 'active' : 'text-dark' ?> fw-semibold px-3">
-                <i class="bi bi-people-fill me-1"></i> Total Staffs
-            </a>
-        </li>
-        <li class="nav-item">
-            <a href="<?= url('admin/staff?department=production') ?>" class="nav-link <?= $currentDept === 'production' ? 'active' : 'text-dark' ?> fw-semibold px-3">
-                <i class="bi bi-gear-wide-connected me-1 text-primary"></i> Production
-            </a>
-        </li>
-        <li class="nav-item">
-            <a href="<?= url('admin/staff?department=warehouse') ?>" class="nav-link <?= $currentDept === 'warehouse' ? 'active' : 'text-dark' ?> fw-semibold px-3">
-                <i class="bi bi-buildings me-1 text-success"></i> Warehouse
-            </a>
-        </li>
-        <li class="nav-item">
-            <a href="<?= url('admin/staff?department=whatsapp') ?>" class="nav-link <?= $currentDept === 'whatsapp' ? 'active' : 'text-dark' ?> fw-semibold px-3">
-                <i class="bi bi-whatsapp me-1 text-success"></i> WhatsApp
-            </a>
-        </li>
-        <li class="nav-item">
-            <a href="<?= url('admin/staff?department=website') ?>" class="nav-link <?= $currentDept === 'website' ? 'active' : 'text-dark' ?> fw-semibold px-3">
-                <i class="bi bi-globe me-1 text-info"></i> Website
-            </a>
-        </li>
-        <li class="nav-item">
-            <a href="<?= url('admin/staff?department=shop') ?>" class="nav-link <?= $currentDept === 'shop' ? 'active' : 'text-dark' ?> fw-semibold px-3">
-                <i class="bi bi-shop me-1 text-warning"></i> Shop
-            </a>
-        </li>
-    </ul>
 
     <!-- KPI Summary Cards Container -->
     <div id="staffKpiContainer">
@@ -72,7 +40,7 @@ if (empty($currentDept)) $currentDept = 'all';
                             <i class="bi bi-people-fill fs-3"></i>
                         </div>
                         <div>
-                            <div class="text-muted small fw-medium"><?= ($currentDept !== 'all' && !empty($currentDept)) ? 'Total ' . ucfirst($currentDept) . ' Staff' : 'Total Staffs' ?></div>
+                            <div class="text-muted small fw-medium">Total Staffs</div>
                             <div class="fs-4 fw-bold text-dark"><?= $totalStaff ?></div>
                         </div>
                     </div>
@@ -124,10 +92,9 @@ if (empty($currentDept)) $currentDept = 'all';
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-body">
             <form method="GET" action="<?= url('admin/staff') ?>" id="staffFilterForm" class="row g-3 align-items-center">
-                <input type="hidden" name="department" id="filterDepartment" value="<?= e($currentDept) ?>">
 
                 <!-- Search Input -->
-                <div class="col-12 col-md-4">
+                <div class="col-12 col-md-3">
                     <div class="input-group">
                         <span class="input-group-text bg-white text-muted border-end-0"><i class="bi bi-search"></i></span>
                         <input type="text" name="search" id="searchInput" class="form-control border-start-0 ps-0" placeholder="Search by name, username, or email..." value="<?= e($filters['search'] ?? '') ?>" autocomplete="off">
@@ -135,7 +102,7 @@ if (empty($currentDept)) $currentDept = 'all';
                 </div>
 
                 <!-- Roles Dropdown -->
-                <div class="col-12 col-md-3">
+                <div class="col-12 col-md-2">
                     <select name="role_id" id="roleSelect" class="form-select">
                         <option value="">All Roles</option>
                         <?php foreach ($roles as $role): ?>
@@ -146,42 +113,21 @@ if (empty($currentDept)) $currentDept = 'all';
                     </select>
                 </div>
 
-                <!-- Facility / Unit Dropdown -->
                 <div class="col-12 col-md-3">
-                    <?php if (in_array($currentDept, ['warehouse', 'whatsapp', 'website'])): ?>
-                        <select name="warehouse_id" id="unitSelect" class="form-select">
-                            <option value="">All Warehouses</option>
-                            <?php foreach ($warehouses as $wh): ?>
-                                <option value="<?= $wh['id'] ?>" <?= (string)($filters['warehouse_id'] ?? '') === (string)$wh['id'] ? 'selected' : '' ?>>
-                                    <?= e($wh['name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    <?php elseif ($currentDept === 'shop'): ?>
-                        <select name="shop_id" id="unitSelect" class="form-select">
-                            <option value="">All Shops</option>
-                            <?php foreach ($shops as $sh): ?>
-                                <option value="<?= $sh['id'] ?>" <?= (string)($filters['shop_id'] ?? '') === (string)$sh['id'] ? 'selected' : '' ?>>
-                                    <?= e($sh['name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    <?php elseif ($currentDept === 'production'): ?>
-                        <select name="production_unit_id" id="unitSelect" class="form-select">
-                            <option value="">All Production Units</option>
-                            <?php foreach ($productionUnits as $pu): ?>
-                                <option value="<?= $pu['id'] ?>" <?= (string)($filters['production_unit_id'] ?? '') === (string)$pu['id'] ? 'selected' : '' ?>>
-                                    <?= e($pu['name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    <?php else: ?>
-                        <select name="status" id="statusSelect" class="form-select">
-                            <option value="">All Statuses</option>
-                            <option value="1" <?= isset($filters['is_active']) && (int)$filters['is_active'] === 1 ? 'selected' : '' ?>>Active Only</option>
-                            <option value="0" <?= isset($filters['is_active']) && (int)$filters['is_active'] === 0 ? 'selected' : '' ?>>Inactive Only</option>
-                        </select>
-                    <?php endif; ?>
+                    <select name="concern_id" class="form-select">
+                        <option value="">All Concerns</option>
+                        <?php foreach ($concerns as $concern): ?>
+                            <option value="<?= (int)$concern['id'] ?>" <?= $currentConcernId === (int)$concern['id'] ? 'selected' : '' ?>><?= e($concern['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-2">
+                    <select name="status" id="statusSelect" class="form-select">
+                        <option value="">All Statuses</option>
+                        <option value="1" <?= isset($filters['is_active']) && (int)$filters['is_active'] === 1 ? 'selected' : '' ?>>Active Only</option>
+                        <option value="0" <?= isset($filters['is_active']) && (int)$filters['is_active'] === 0 ? 'selected' : '' ?>>Inactive Only</option>
+                    </select>
                 </div>
 
                 <!-- Reset Button & Live Status Indicator -->
@@ -200,7 +146,7 @@ if (empty($currentDept)) $currentDept = 'all';
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white py-3 border-0 d-flex align-items-center justify-content-between">
                 <h5 class="card-title mb-0 fw-bold">
-                    <?= ($currentDept !== 'all' && !empty($currentDept)) ? ucfirst($currentDept) . ' Department Directory' : 'All Staff Directory' ?>
+                    <?= $currentConcernId ? 'Concern Staff Directory' : 'All Staff Directory' ?>
                 </h5>
                 <span class="badge bg-light text-dark border"><?= count($staff) ?> Staff Members</span>
             </div>
@@ -209,7 +155,7 @@ if (empty($currentDept)) $currentDept = 'all';
                     <thead class="table-light">
                         <tr>
                             <th class="ps-4">Staff Member</th>
-                            <th>Department &amp; Scope</th>
+                            <th>Assigned Concerns</th>
                             <th>Role &amp; Facility</th>
                             <th>Status</th>
                             <th class="text-end pe-4">Actions</th>
@@ -225,25 +171,7 @@ if (empty($currentDept)) $currentDept = 'all';
                             </tr>
                         <?php else: ?>
                             <?php foreach ($staff as $s): ?>
-                                <?php
-                                $userDept = strtoupper($s['department'] ?? 'GENERAL');
-                                $deptBadgeClass = match($userDept) {
-                                    'PRODUCTION' => 'bg-primary-subtle text-primary border-primary-subtle',
-                                    'WAREHOUSE'  => 'bg-success-subtle text-success border-success-subtle',
-                                    'WHATSAPP'   => 'bg-success-subtle text-success border-success-subtle',
-                                    'WEBSITE'    => 'bg-info-subtle text-info border-info-subtle',
-                                    'SHOP'       => 'bg-warning-subtle text-warning-emphasis border-warning-subtle',
-                                    default      => 'bg-secondary-subtle text-secondary border-secondary-subtle'
-                                };
-                                $deptIcon = match($userDept) {
-                                    'PRODUCTION' => 'bi-gear-wide-connected',
-                                    'WAREHOUSE'  => 'bi-buildings',
-                                    'WHATSAPP'   => 'bi-whatsapp',
-                                    'WEBSITE'    => 'bi-globe',
-                                    'SHOP'       => 'bi-shop',
-                                    default      => 'bi-building'
-                                };
-                                ?>
+                                <?php $assignedConcernNames = array_filter(array_map('trim', explode(',', (string)($s['concern_names'] ?? '')))); ?>
                                 <tr>
                                     <td class="ps-4">
                                         <div class="d-flex align-items-center">
@@ -257,9 +185,12 @@ if (empty($currentDept)) $currentDept = 'all';
                                         </div>
                                     </td>
                                     <td>
-                                        <span class="badge border px-2 py-1 <?= $deptBadgeClass ?>">
-                                            <i class="bi <?= $deptIcon ?> me-1"></i><?= e($userDept) ?>
-                                        </span>
+                                        <?php if ($assignedConcernNames): foreach ($assignedConcernNames as $concernName): ?>
+                                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle me-1 mb-1"><?= e($concernName) ?></span>
+                                        <?php endforeach; else: ?>
+                                            <span class="text-muted">No concern assigned</span>
+                                        <?php endif; ?>
+                                        <small class="d-block text-muted mt-1">Data scope: <?= e($s['department'] ?? 'GENERAL') ?></small>
                                     </td>
                                     <td>
                                         <div class="fw-semibold text-dark">

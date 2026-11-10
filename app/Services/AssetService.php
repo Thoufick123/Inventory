@@ -69,17 +69,21 @@ class AssetService {
      * Get structured map of all location entities across the enterprise.
      */
     public static function getLocationUnitsMap(): array {
-        $productionUnits = Database::fetchAll("SELECT id, name, code, COALESCE(manager_name, '') as manager, COALESCE(phone, '') as phone FROM production_units WHERE is_active = 1 ORDER BY id ASC");
-        $warehouses = Database::fetchAll("SELECT id, name, code, COALESCE(phone, '') as phone FROM warehouses WHERE is_active = 1 ORDER BY id ASC");
-        $shops = Database::fetchAll("SELECT id, name, code, COALESCE(phone, '') as phone FROM shops WHERE is_active = 1 ORDER BY id ASC");
+        $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+        $productionUnits = array_map(
+            static fn(array $unit): array => array_merge($unit, ['manager' => $unit['manager_name'] ?? '']),
+            $productionUnits
+        );
+        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+        $shops = function_exists('getScopedShops') ? getScopedShops() : [];
 
         return [
             'production' => $productionUnits,
             'warehouses'  => $warehouses,
             'shops'       => $shops,
-            'office'      => [
-                ['id' => 1, 'name' => 'GRM Head Office & Admin', 'code' => 'HQ']
-            ]
+            'office'      => isSuperAdmin()
+                ? [['id' => 1, 'name' => 'GRM Head Office & Admin', 'code' => 'HQ']]
+                : [],
         ];
     }
 
@@ -87,20 +91,33 @@ class AssetService {
      * Resolve human-readable location label for a location_type and location_id.
      */
     public static function resolveLocationName(string $locationType, int $locationId): string {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return self::fallbackLocationName($locationType, $locationId);
+        }
         switch ($locationType) {
             case 'PRODUCTION':
-                $pu = Database::fetchOne("SELECT name, code FROM production_units WHERE id = ?", [$locationId]);
+                $pu = Database::fetchOne("SELECT name, code FROM production_units WHERE id = ? AND concern_id = ?", [$locationId, $concernId]);
                 return $pu ? "🏭 " . ($pu['code'] ? "[{$pu['code']}] " : "") . $pu['name'] : "🏭 Production Unit #{$locationId}";
             case 'WAREHOUSE':
-                $wh = Database::fetchOne("SELECT name, code FROM warehouses WHERE id = ?", [$locationId]);
+                $wh = Database::fetchOne("SELECT name, code FROM warehouses WHERE id = ? AND concern_id = ?", [$locationId, $concernId]);
                 return $wh ? "🏢 " . ($wh['code'] ? "[{$wh['code']}] " : "") . $wh['name'] : "🏢 Warehouse #{$locationId}";
             case 'SHOP':
-                $shp = Database::fetchOne("SELECT name, code FROM shops WHERE id = ?", [$locationId]);
+                $shp = Database::fetchOne("SELECT name, code FROM shops WHERE id = ? AND concern_id = ?", [$locationId, $concernId]);
                 return $shp ? "🛍️ " . ($shp['code'] ? "[{$shp['code']}] " : "") . $shp['name'] : "🛍️ Shop #{$locationId}";
             case 'OFFICE':
             default:
                 return "🏛️ Head Office & Logistics";
         }
+    }
+
+    private static function fallbackLocationName(string $locationType, int $locationId): string {
+        return match ($locationType) {
+            'PRODUCTION' => "🏭 Production Unit #{$locationId}",
+            'WAREHOUSE' => "🏢 Warehouse #{$locationId}",
+            'SHOP' => "🛍️ Shop #{$locationId}",
+            default => "🏛️ Head Office & Logistics",
+        };
     }
 
     /**
@@ -129,8 +146,9 @@ class AssetService {
      * Get Dashboard KPI Metrics with optional Unit Filter.
      */
     public static function getDashboardMetrics(?string $locationType = null, ?int $locationId = null): array {
-        $where = "WHERE 1=1";
-        $params = [];
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        [$scopeSql, $params] = self::assetConcernScope('a');
+        $where = "WHERE {$scopeSql}";
 
         if (!empty($locationType)) {
             $where .= " AND a.location_type = ?";
@@ -177,14 +195,30 @@ class AssetService {
                 COALESCE(SUM(current_book_value), 0) as total_value,
                 COALESCE(SUM(CASE WHEN status = 'IN_USE' THEN 1 ELSE 0 END), 0) as active_count,
                 COALESCE(SUM(CASE WHEN status = 'IN_MAINTENANCE' THEN 1 ELSE 0 END), 0) as maintenance_count
-            FROM assets
+            FROM assets a
+            $where
             GROUP BY location_type
-        ");
+        ", $params);
 
         // Specific Facility-by-Facility Breakdown across all units, warehouses, shops, HQ
         $facilityBreakdown = [];
+        $productionUnitIds = array_map('intval', array_column(
+            function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [],
+            'id'
+        ));
+        $warehouseIds = array_map('intval', array_column(
+            function_exists('getScopedWarehouses') ? getScopedWarehouses() : [],
+            'id'
+        ));
+        $shopIds = array_map('intval', array_column(
+            function_exists('getScopedShops') ? getScopedShops() : [],
+            'id'
+        ));
 
         // 1. Production Units
+        $productionUnitFilter = $productionUnitIds
+            ? ' AND pu.id IN (' . implode(',', array_fill(0, count($productionUnitIds), '?')) . ')'
+            : ' AND 1 = 0';
         $pus = Database::fetchAll("
             SELECT 
                 pu.id, pu.name, pu.code, 'PRODUCTION' as location_type,
@@ -195,10 +229,10 @@ class AssetService {
                 COALESCE(SUM(CASE WHEN a.status = 'DAMAGED' THEN 1 ELSE 0 END), 0) as damaged_count
             FROM production_units pu
             LEFT JOIN assets a ON a.location_type = 'PRODUCTION' AND a.location_id = pu.id
-            WHERE pu.is_active = 1
+            WHERE pu.is_active = 1 AND pu.concern_id = ?{$productionUnitFilter}
             GROUP BY pu.id, pu.name, pu.code
             ORDER BY pu.id ASC
-        ");
+        ", array_merge([$concernId ?? 0], $productionUnitIds));
         foreach ($pus as $p) {
             $facilityBreakdown[] = [
                 'type'             => 'PRODUCTION',
@@ -213,6 +247,9 @@ class AssetService {
         }
 
         // 2. Warehouses
+        $warehouseFilter = $warehouseIds
+            ? ' AND w.id IN (' . implode(',', array_fill(0, count($warehouseIds), '?')) . ')'
+            : ' AND 1 = 0';
         $whs = Database::fetchAll("
             SELECT 
                 w.id, w.name, w.code, 'WAREHOUSE' as location_type,
@@ -223,10 +260,10 @@ class AssetService {
                 COALESCE(SUM(CASE WHEN a.status = 'DAMAGED' THEN 1 ELSE 0 END), 0) as damaged_count
             FROM warehouses w
             LEFT JOIN assets a ON a.location_type = 'WAREHOUSE' AND a.location_id = w.id
-            WHERE w.is_active = 1
+            WHERE w.is_active = 1 AND w.concern_id = ?{$warehouseFilter}
             GROUP BY w.id, w.name, w.code
             ORDER BY w.id ASC
-        ");
+        ", array_merge([$concernId ?? 0], $warehouseIds));
         foreach ($whs as $w) {
             $facilityBreakdown[] = [
                 'type'             => 'WAREHOUSE',
@@ -241,6 +278,9 @@ class AssetService {
         }
 
         // 3. Shops
+        $shopFilter = $shopIds
+            ? ' AND s.id IN (' . implode(',', array_fill(0, count($shopIds), '?')) . ')'
+            : ' AND 1 = 0';
         $shs = Database::fetchAll("
             SELECT 
                 s.id, s.name, s.code, 'SHOP' as location_type,
@@ -251,10 +291,10 @@ class AssetService {
                 COALESCE(SUM(CASE WHEN a.status = 'DAMAGED' THEN 1 ELSE 0 END), 0) as damaged_count
             FROM shops s
             LEFT JOIN assets a ON a.location_type = 'SHOP' AND a.location_id = s.id
-            WHERE s.is_active = 1
+            WHERE s.is_active = 1 AND s.concern_id = ?{$shopFilter}
             GROUP BY s.id, s.name, s.code
             ORDER BY s.id ASC
-        ");
+        ", array_merge([$concernId ?? 0], $shopIds));
         foreach ($shs as $s) {
             $facilityBreakdown[] = [
                 'type'             => 'SHOP',
@@ -268,8 +308,8 @@ class AssetService {
             ];
         }
 
-        // 4. Head Office
-        $hq = Database::fetchOne("
+        // 4. Head Office assets are visible only to Super Admin.
+        $hq = isSuperAdmin() ? Database::fetchOne("
             SELECT 
                 COUNT(a.id) as asset_count,
                 COALESCE(SUM(a.current_book_value), 0) as total_value,
@@ -278,7 +318,7 @@ class AssetService {
                 COALESCE(SUM(CASE WHEN a.status = 'DAMAGED' THEN 1 ELSE 0 END), 0) as damaged_count
             FROM assets a
             WHERE a.location_type = 'OFFICE'
-        ");
+        ") : [];
         $facilityBreakdown[] = [
             'type'             => 'OFFICE',
             'id'               => 1,
@@ -291,38 +331,43 @@ class AssetService {
         ];
 
         // Monthly Maintenance Spending Trends (Last 6 Months)
+        [$assetScopeSql, $assetScopeParams] = self::assetConcernScope('a');
         $monthlyTrend = Database::fetchAll("
             SELECT 
-                DATE_FORMAT(service_date, '%b %Y') as month_label,
-                DATE_FORMAT(service_date, '%Y-%m') as ym_code,
-                COUNT(id) as tickets_count,
-                COALESCE(SUM(service_cost), 0) as total_cost,
-                COALESCE(SUM(downtime_hours), 0) as total_downtime
-            FROM asset_maintenance_logs
-            WHERE service_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+                DATE_FORMAT(m.service_date, '%b %Y') as month_label,
+                DATE_FORMAT(m.service_date, '%Y-%m') as ym_code,
+                COUNT(m.id) as tickets_count,
+                COALESCE(SUM(m.service_cost), 0) as total_cost,
+                COALESCE(SUM(m.downtime_hours), 0) as total_downtime
+            FROM asset_maintenance_logs m
+            JOIN assets a ON m.asset_id = a.id
+            WHERE {$assetScopeSql}
+              AND m.service_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
             GROUP BY ym_code, month_label
             ORDER BY ym_code ASC
-        ");
+        ", $assetScopeParams);
 
         // Service Due Soon
         $serviceDue = Database::fetchAll("
             SELECT m.*, a.name as asset_name, a.asset_code, a.location_type, a.location_id
             FROM asset_maintenance_logs m
             JOIN assets a ON m.asset_id = a.id
-            WHERE m.next_due_date IS NOT NULL 
+            WHERE {$assetScopeSql}
+              AND m.next_due_date IS NOT NULL
               AND m.next_due_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
             ORDER BY m.next_due_date ASC
             LIMIT 5
-        ");
+        ", $assetScopeParams);
 
         // Recent Inter-Unit Transfers
         $recentTransfers = Database::fetchAll("
             SELECT t.*, a.name as asset_name, a.asset_code, a.barcode_qr
             FROM asset_transfers t
             JOIN assets a ON t.asset_id = a.id
+            WHERE {$assetScopeSql}
             ORDER BY t.transfer_date DESC
             LIMIT 5
-        ");
+        ", $assetScopeParams);
 
         return [
             'summary'           => $summary,
@@ -339,8 +384,8 @@ class AssetService {
      * Get Filtered Asset List.
      */
     public static function getAssetsList(array $filters = []): array {
-        $where = "WHERE 1=1";
-        $params = [];
+        [$scopeSql, $params] = self::assetConcernScope('a');
+        $where = "WHERE {$scopeSql}";
 
         if (!empty($filters['location_type'])) {
             $where .= " AND a.location_type = ?";
@@ -406,6 +451,7 @@ class AssetService {
      * Get Single Asset by ID with full 360 profile.
      */
     public static function getAssetById(int $id): ?array {
+        [$scopeSql, $scopeParams] = self::assetConcernScope('a');
         $asset = Database::fetchOne("
             SELECT 
                 a.*,
@@ -417,8 +463,8 @@ class AssetService {
             FROM assets a
             JOIN asset_categories c ON a.category_id = c.id
             LEFT JOIN users u ON a.created_by = u.id
-            WHERE a.id = ?
-        ", [$id]);
+            WHERE a.id = ? AND {$scopeSql}
+        ", array_merge([$id], $scopeParams));
 
         if (!$asset) return null;
 
@@ -428,10 +474,11 @@ class AssetService {
         $transfers = Database::fetchAll("
             SELECT t.*, u.full_name as transferred_by_name
             FROM asset_transfers t
+            JOIN assets a ON t.asset_id = a.id
             LEFT JOIN users u ON t.transferred_by = u.id
-            WHERE t.asset_id = ?
+            WHERE t.asset_id = ? AND {$scopeSql}
             ORDER BY t.transfer_date DESC
-        ", [$id]);
+        ", array_merge([$id], $scopeParams));
 
         foreach ($transfers as &$trf) {
             $trf['from_display'] = self::resolveLocationName($trf['from_location_type'], (int)$trf['from_location_id']);
@@ -442,10 +489,11 @@ class AssetService {
         $maintenanceLogs = Database::fetchAll("
             SELECT m.*, u.full_name as logged_by_name
             FROM asset_maintenance_logs m
+            JOIN assets a ON m.asset_id = a.id
             LEFT JOIN users u ON m.created_by = u.id
-            WHERE m.asset_id = ?
+            WHERE m.asset_id = ? AND {$scopeSql}
             ORDER BY m.service_date DESC, m.id DESC
-        ", [$id]);
+        ", array_merge([$id], $scopeParams));
 
         $asset['transfers'] = $transfers;
         $asset['maintenance_logs'] = $maintenanceLogs;
@@ -460,16 +508,18 @@ class AssetService {
         $clean = trim($code);
         if ($clean === '') return null;
 
+        [$scopeSql, $scopeParams] = self::assetConcernScope('a');
         // 1. Exact match across all identification tags
         $asset = Database::fetchOne("
-            SELECT id FROM assets 
-            WHERE asset_code = ? 
-               OR barcode_qr = ? 
-               OR serial_number = ? 
-               OR model_number = ? 
-               OR invoice_number = ?
+            SELECT a.id FROM assets a
+            WHERE {$scopeSql}
+              AND (a.asset_code = ?
+               OR a.barcode_qr = ?
+               OR a.serial_number = ?
+               OR a.model_number = ?
+               OR a.invoice_number = ?)
             LIMIT 1
-        ", [$clean, $clean, $clean, $clean, $clean]);
+        ", array_merge($scopeParams, [$clean, $clean, $clean, $clean, $clean]));
 
         if ($asset) {
             return self::getAssetById((int)$asset['id']);
@@ -478,24 +528,25 @@ class AssetService {
         // 2. Fallback prefix/substring match if exact was not found
         $like = '%' . $clean . '%';
         $asset = Database::fetchOne("
-            SELECT id FROM assets 
-            WHERE asset_code LIKE ? 
-               OR barcode_qr LIKE ? 
-               OR serial_number LIKE ? 
-               OR model_number LIKE ? 
-               OR invoice_number LIKE ?
-               OR name LIKE ?
-               OR brand LIKE ?
+            SELECT a.id FROM assets a
+            WHERE {$scopeSql}
+              AND (a.asset_code LIKE ?
+               OR a.barcode_qr LIKE ?
+               OR a.serial_number LIKE ?
+               OR a.model_number LIKE ?
+               OR a.invoice_number LIKE ?
+               OR a.name LIKE ?
+               OR a.brand LIKE ?)
             ORDER BY 
-                CASE 
-                    WHEN asset_code = ? THEN 1
-                    WHEN barcode_qr = ? THEN 2
-                    WHEN serial_number = ? THEN 3
-                    WHEN asset_code LIKE ? THEN 4
+                CASE
+                    WHEN a.asset_code = ? THEN 1
+                    WHEN a.barcode_qr = ? THEN 2
+                    WHEN a.serial_number = ? THEN 3
+                    WHEN a.asset_code LIKE ? THEN 4
                     ELSE 5
-                END, id DESC
+                END, a.id DESC
             LIMIT 1
-        ", [$like, $like, $like, $like, $like, $like, $like, $clean, $clean, $clean, $clean . '%']);
+        ", array_merge($scopeParams, [$like, $like, $like, $like, $like, $like, $like, $clean, $clean, $clean, $clean . '%']));
 
         return $asset ? self::getAssetById((int)$asset['id']) : null;
     }
@@ -508,6 +559,7 @@ class AssetService {
         if ($clean === '') return [];
 
         $like = '%' . $clean . '%';
+        [$scopeSql, $scopeParams] = self::assetConcernScope('a');
         $sql = "
             SELECT 
                 a.*,
@@ -516,15 +568,17 @@ class AssetService {
                 c.depreciation_rate_annual
             FROM assets a
             JOIN asset_categories c ON a.category_id = c.id
-            WHERE a.asset_code LIKE ? 
+            WHERE {$scopeSql} AND (
+               a.asset_code LIKE ?
                OR a.barcode_qr LIKE ? 
                OR a.serial_number LIKE ? 
-               OR a.model_number LIKE ? 
+               OR a.model_number LIKE ?
                OR a.invoice_number LIKE ?
                OR a.name LIKE ?
                OR a.brand LIKE ?
                OR a.custodian_name LIKE ?
                OR a.floor_area LIKE ?
+            )
             ORDER BY 
                 CASE 
                     WHEN a.asset_code = ? THEN 1
@@ -536,11 +590,11 @@ class AssetService {
             LIMIT ?
         ";
 
-        $rows = Database::fetchAll($sql, [
+        $rows = Database::fetchAll($sql, array_merge($scopeParams, [
             $like, $like, $like, $like, $like, $like, $like, $like, $like,
             $clean, $clean, $clean, $clean . '%',
             $limit
-        ]);
+        ]));
 
         foreach ($rows as &$r) {
             $r['location_display'] = self::resolveLocationName($r['location_type'], (int)$r['location_id']);
@@ -554,7 +608,8 @@ class AssetService {
      */
     public static function createAsset(array $data, ?int $userId = null): int {
         $locationType = $data['location_type'] ?? 'PRODUCTION';
-        $locationId = (int)($data['location_id'] ?? 1);
+        $locationId = (int)($data['location_id'] ?? 0);
+        self::assertLocationBelongsToCurrentConcern((string)$locationType, $locationId, true);
         $categoryId = (int)($data['category_id'] ?? 1);
 
         $assetCode = !empty($data['asset_code']) ? trim($data['asset_code']) : self::generateAssetCode($locationType);
@@ -627,6 +682,11 @@ class AssetService {
     public static function updateAsset(int $id, array $data, ?int $userId = null): bool {
         $asset = self::getAssetById($id);
         if (!$asset) return false;
+        self::assertLocationBelongsToCurrentConcern(
+            (string)($data['location_type'] ?? $asset['location_type']),
+            (int)($data['location_id'] ?? $asset['location_id']),
+            true
+        );
 
         $categoryId = (int)($data['category_id'] ?? $asset['category_id']);
         $cat = Database::fetchOne("SELECT depreciation_rate_annual FROM asset_categories WHERE id = ?", [$categoryId]);
@@ -701,6 +761,9 @@ class AssetService {
      * Delete Asset.
      */
     public static function deleteAsset(int $id): bool {
+        if (!self::getAssetById($id)) {
+            return false;
+        }
         return Database::execute("DELETE FROM assets WHERE id = ?", [$id]);
     }
 
@@ -716,6 +779,7 @@ class AssetService {
 
         $toLocationType = $data['to_location_type'];
         $toLocationId   = (int)$data['to_location_id'];
+        self::assertLocationBelongsToCurrentConcern((string)$toLocationType, $toLocationId, true);
         $toFloorArea    = trim($data['to_floor_area'] ?? '');
         $reason         = trim($data['reason'] ?? '');
         $notes          = trim($data['notes'] ?? '');
@@ -850,8 +914,8 @@ class AssetService {
      * Get All Inter-Unit Transfers Manifest List.
      */
     public static function getAllTransfers(array $filters = []): array {
-        $where = "WHERE 1=1";
-        $params = [];
+        [$scopeSql, $params] = self::assetConcernScope('a');
+        $where = "WHERE {$scopeSql}";
 
         if (!empty($filters['status'])) {
             $where .= " AND t.status = ?";
@@ -894,8 +958,8 @@ class AssetService {
      * Get All Maintenance Service Tickets List.
      */
     public static function getAllMaintenanceLogs(array $filters = []): array {
-        $where = "WHERE 1=1";
-        $params = [];
+        [$scopeSql, $params] = self::assetConcernScope('a');
+        $where = "WHERE {$scopeSql}";
 
         if (!empty($filters['status'])) {
             $where .= " AND m.status = ?";
@@ -997,39 +1061,34 @@ class AssetService {
         $managerName = trim($data['manager_name'] ?? '');
 
         $type = strtoupper($type);
-        $table = '';
-        $prefix = '';
-
-        if ($type === 'PRODUCTION') {
-            $table = 'production_units';
-            $prefix = 'PU';
-        } elseif ($type === 'WAREHOUSE') {
-            $table = 'warehouses';
-            $prefix = 'WH';
-        } elseif ($type === 'SHOP') {
-            $table = 'shops';
-            $prefix = 'SH';
-        } else {
+        if (!in_array($type, ['PRODUCTION', 'WAREHOUSE', 'SHOP'], true)) {
             throw new InvalidArgumentException("Invalid facility type: {$type}. Must be PRODUCTION, WAREHOUSE, or SHOP.");
         }
-
-        if (empty($code)) {
-            $maxId = (int)(Database::fetchOne("SELECT MAX(id) as m FROM {$table}")['m'] ?? 0) + 1;
-            $code = "{$prefix}{$maxId}";
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null || !Concern::hasFacilityModules($concernId, $type)) {
+            throw new InvalidArgumentException('Choose an active concern with a compatible module before creating a facility.');
         }
 
-        // Check duplicate code
-        $existing = Database::fetchOne("SELECT id FROM {$table} WHERE code = ?", [$code]);
+        $table = ['PRODUCTION' => 'production_units', 'WAREHOUSE' => 'warehouses', 'SHOP' => 'shops'][$type];
+        $existing = $code === '' ? null : Database::fetchOne("SELECT id FROM {$table} WHERE code = ? AND concern_id = ?", [$code, $concernId]);
         if ($existing) {
-            $code = $code . '_' . rand(10, 99);
+            throw new InvalidArgumentException('A facility with this code already exists in the active concern.');
         }
 
-        Database::query("
-            INSERT INTO {$table} (name, code, address, phone, manager_name, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, NOW())
-        ", [$name, $code, $address, $phone, $managerName]);
-
-        $unitId = (int)Database::lastInsertId();
+        $facilityData = [
+            'name' => $name,
+            'code' => $code,
+            'address' => $address,
+            'phone' => $phone,
+            'manager_name' => $managerName,
+            'is_active' => 1,
+            'concern_id' => $concernId,
+        ];
+        $unitId = match ($type) {
+            'PRODUCTION' => ProductionUnit::create($facilityData),
+            'WAREHOUSE' => Warehouse::create($facilityData),
+            'SHOP' => Shop::create($facilityData),
+        };
 
         return [
             'id'       => $unitId,
@@ -1038,5 +1097,65 @@ class AssetService {
             'type'     => $type,
             'display'  => self::resolveLocationName($type, $unitId)
         ];
+    }
+
+    private static function assetConcernScope(string $alias): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return ['1 = 0', []];
+        }
+        $sql = "(
+                ({$alias}.location_type = 'PRODUCTION' AND EXISTS (SELECT 1 FROM production_units pu_scope WHERE pu_scope.id = {$alias}.location_id AND pu_scope.concern_id = ?))
+                OR ({$alias}.location_type = 'WAREHOUSE' AND EXISTS (SELECT 1 FROM warehouses w_scope WHERE w_scope.id = {$alias}.location_id AND w_scope.concern_id = ?))
+                OR ({$alias}.location_type = 'SHOP' AND EXISTS (SELECT 1 FROM shops s_scope WHERE s_scope.id = {$alias}.location_id AND s_scope.concern_id = ?))
+                OR ({$alias}.location_type = 'OFFICE' AND ? = 1)
+            )";
+        $params = [$concernId, $concernId, $concernId, isSuperAdmin() ? 1 : 0];
+        foreach ([
+            'PRODUCTION' => 'currentProductionUnitId',
+            'WAREHOUSE' => 'currentWarehouseId',
+            'SHOP' => 'currentShopId',
+        ] as $locationType => $helper) {
+            $assignedId = function_exists($helper) ? $helper() : null;
+            if ($assignedId === 0) {
+                $sql .= " AND {$alias}.location_type != '{$locationType}'";
+            } elseif ($assignedId !== null) {
+                $sql .= " AND ({$alias}.location_type != '{$locationType}' OR {$alias}.location_id = ?)";
+                $params[] = $assignedId;
+            }
+        }
+        return [$sql, $params];
+    }
+
+    private static function locationBelongsToCurrentConcern(string $locationType, int $locationId, bool $activeOnly = false): bool {
+        if ($locationType === 'OFFICE') {
+            return isSuperAdmin();
+        }
+        $tables = [
+            'PRODUCTION' => ['production_units', 'currentProductionUnitId'],
+            'WAREHOUSE' => ['warehouses', 'currentWarehouseId'],
+            'SHOP' => ['shops', 'currentShopId'],
+        ];
+        $locationType = strtoupper($locationType);
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null || $locationId <= 0 || !isset($tables[$locationType])) {
+            return false;
+        }
+        [$table, $assignmentHelper] = $tables[$locationType];
+        $assignedId = function_exists($assignmentHelper) ? $assignmentHelper() : null;
+        if ($assignedId === 0 || ($assignedId !== null && $assignedId !== $locationId)) {
+            return false;
+        }
+        $activeClause = $activeOnly ? ' AND is_active = 1' : '';
+        return (bool)Database::fetchOne(
+            "SELECT id FROM {$table} WHERE id = ? AND concern_id = ?{$activeClause}",
+            [$locationId, $concernId]
+        );
+    }
+
+    private static function assertLocationBelongsToCurrentConcern(string $locationType, int $locationId, bool $activeOnly = false): void {
+        if (!self::locationBelongsToCurrentConcern($locationType, $locationId, $activeOnly)) {
+            throw new InvalidArgumentException('The selected asset location must be active and belong to the active concern.');
+        }
     }
 }

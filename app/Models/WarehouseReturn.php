@@ -9,28 +9,45 @@ require_once BASE_PATH . '/app/Models/WarehouseReturnItem.php';
 class WarehouseReturn {
 
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedWarehouseId = function_exists('currentWarehouseId') ? currentWarehouseId() : null;
+        if ($concernId === null || $assignedWarehouseId === 0) {
+            return null;
+        }
+        $warehouseFilter = $assignedWarehouseId !== null
+            ? ' AND (wr.warehouse_id = ? OR wr.destination_warehouse_id = ?)'
+            : '';
+        $params = [$concernId, $concernId, $concernId, $concernId, $id];
+        if ($assignedWarehouseId !== null) {
+            $params[] = $assignedWarehouseId;
+            $params[] = $assignedWarehouseId;
+        }
         $return = Database::fetchOne(
             "SELECT wr.*, 
-                    COALESCE(w_dest.name, w.name, 'Main Central Warehouse') as warehouse_name, 
-                    COALESCE(w_dest.code, w.code, 'WH-01') as warehouse_code,
+                    COALESCE(w_dest.name, w.name) as warehouse_name,
+                    COALESCE(w_dest.code, w.code) as warehouse_code,
                     u_insp.full_name as inspected_by_name,
                     u_rec.full_name as received_by_name
              FROM warehouse_returns wr
-             LEFT JOIN warehouses w ON wr.warehouse_id = w.id
-             LEFT JOIN warehouses w_dest ON wr.destination_warehouse_id = w_dest.id
+             LEFT JOIN warehouses w ON wr.warehouse_id = w.id AND w.concern_id = ?
+             LEFT JOIN warehouses w_dest ON wr.destination_warehouse_id = w_dest.id AND w_dest.concern_id = ?
+             LEFT JOIN shops s ON wr.source_type = 'SHOP' AND wr.source_id = s.id AND s.concern_id = ?
+             LEFT JOIN sales_channels sc ON wr.source_type IN ('WHATSAPP', 'WEBSITE') AND wr.source_id = sc.id AND sc.concern_id = ?
              LEFT JOIN users u_insp ON wr.inspected_by = u_insp.id
              LEFT JOIN users u_rec ON wr.received_by = u_rec.id
-             WHERE wr.id = ?",
-            [$id]
+             WHERE wr.id = ? AND w.id IS NOT NULL AND w_dest.id IS NOT NULL
+               AND (wr.source_type != 'SHOP' OR s.id IS NOT NULL)
+               AND (wr.source_type NOT IN ('WHATSAPP', 'WEBSITE') OR sc.id IS NOT NULL){$warehouseFilter}",
+            $params
         );
 
         if ($return) {
             if ($return['source_type'] === 'SHOP' && !empty($return['source_id'])) {
-                $shop = Database::fetchOne("SELECT name, code FROM shops WHERE id = ?", [$return['source_id']]);
+                $shop = Database::fetchOne("SELECT name, code FROM shops WHERE id = ? AND concern_id = ?", [$return['source_id'], $concernId]);
                 $return['source_name'] = $shop ? $shop['name'] . " (" . $shop['code'] . ")" : "Shop #" . $return['source_id'];
                 $return['source_badge_type'] = 'SHOP';
             } elseif (in_array($return['source_type'], ['WHATSAPP', 'WEBSITE']) && !empty($return['source_id'])) {
-                $channel = Database::fetchOne("SELECT name, code FROM sales_channels WHERE id = ?", [$return['source_id']]);
+                $channel = Database::fetchOne("SELECT name, code FROM sales_channels WHERE id = ? AND concern_id = ?", [$return['source_id'], $concernId]);
                 $return['source_name'] = $channel ? $channel['name'] . " (" . $channel['code'] . ")" : ($return['source_type'] . " Channel");
                 $return['source_badge_type'] = $return['source_type'];
             } else {
@@ -49,12 +66,12 @@ class WarehouseReturn {
                 $allocationRows = Database::fetchAll(
                     "SELECT ai.variant_id, ai.selected_qr_codes
                      FROM allocation_items ai
-                     JOIN warehouse_allocations wa ON wa.id = ai.allocation_id
+                     JOIN warehouse_allocations wa ON wa.id = ai.allocation_id AND wa.concern_id = ?
                      WHERE ai.variant_id IN (SELECT variant_id FROM warehouse_return_items WHERE warehouse_return_id = ?)
                        AND (wa.channel_id = ? OR (wa.destination_type = 'CHANNEL' AND wa.destination_id = ?))
                        AND ai.selected_qr_codes IS NOT NULL AND ai.selected_qr_codes != ''
                      ORDER BY wa.id ASC, ai.id ASC",
-                    [$id, (int)$return['source_id'], (int)$return['source_id']]
+                    [$concernId, $id, (int)$return['source_id'], (int)$return['source_id']]
                 );
                 foreach ($allocationRows as $allocationRow) {
                     $raw = json_decode((string)$allocationRow['selected_qr_codes'], true);
@@ -95,9 +112,13 @@ class WarehouseReturn {
     }
 
     public static function getAll(array $filters = []): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
         $sql = "SELECT wr.*, 
-                       COALESCE(w_dest.name, w.name, 'Main Central Warehouse') as warehouse_name, 
-                       COALESCE(w_dest.code, w.code, 'WH-01') as warehouse_code,
+                       COALESCE(w_dest.name, w.name) as warehouse_name,
+                       COALESCE(w_dest.code, w.code) as warehouse_code,
                        s.name as shop_name, s.code as shop_code,
                        sc.name as channel_name, sc.code as channel_code,
                        CASE
@@ -108,11 +129,11 @@ class WarehouseReturn {
                            WHEN wr.source_type = 'WHATSAPP' AND sc.name IS NOT NULL
                                 THEN CONCAT('WhatsApp: ', sc.name, ' (', sc.code, ')')
                            WHEN wr.source_type = 'WHATSAPP'
-                                THEN 'WhatsApp Channel (WA-01)'
+                                THEN 'WhatsApp Channel'
                            WHEN wr.source_type = 'WEBSITE' AND sc.name IS NOT NULL
                                 THEN CONCAT('Website: ', sc.name, ' (', sc.code, ')')
                            WHEN wr.source_type = 'WEBSITE'
-                                THEN 'Website Channel (WEB-01)'
+                                THEN 'Website Channel'
                            ELSE wr.source_type
                        END as source_name,
                        u_insp.full_name as inspected_by_name,
@@ -123,13 +144,15 @@ class WarehouseReturn {
                        (SELECT COALESCE(SUM(defective_qty), 0) FROM warehouse_return_items WHERE warehouse_return_id = wr.id AND classification = 'DEFECTIVE') as total_defective_qty,
                        (SELECT COALESCE(SUM(defective_qty), 0) FROM warehouse_return_items WHERE warehouse_return_id = wr.id AND classification = 'WRONG_SIZE') as total_rework_qty
                 FROM warehouse_returns wr
-                LEFT JOIN warehouses w ON wr.warehouse_id = w.id
-                LEFT JOIN warehouses w_dest ON wr.destination_warehouse_id = w_dest.id
-                LEFT JOIN shops s ON (wr.source_type = 'SHOP' AND wr.source_id = s.id)
-                LEFT JOIN sales_channels sc ON ((wr.source_type = 'WHATSAPP' OR wr.source_type = 'WEBSITE') AND wr.source_id = sc.id)
+                LEFT JOIN warehouses w ON wr.warehouse_id = w.id AND w.concern_id = ?
+                LEFT JOIN warehouses w_dest ON wr.destination_warehouse_id = w_dest.id AND w_dest.concern_id = ?
+                LEFT JOIN shops s ON (wr.source_type = 'SHOP' AND wr.source_id = s.id AND s.concern_id = ?)
+                LEFT JOIN sales_channels sc ON ((wr.source_type = 'WHATSAPP' OR wr.source_type = 'WEBSITE') AND wr.source_id = sc.id AND sc.concern_id = ?)
                 LEFT JOIN users u_insp ON wr.inspected_by = u_insp.id
-                WHERE 1=1";
-        $params = [];
+                WHERE w.id IS NOT NULL AND w_dest.id IS NOT NULL
+                  AND (wr.source_type != 'SHOP' OR s.id IS NOT NULL)
+                  AND (wr.source_type NOT IN ('WHATSAPP', 'WEBSITE') OR sc.id IS NOT NULL)";
+        $params = [$concernId, $concernId, $concernId, $concernId];
 
         if (!empty($filters['status']) && $filters['status'] !== 'ALL') {
             $sql .= " AND wr.status = ?";
@@ -174,6 +197,24 @@ class WarehouseReturn {
     }
 
     public static function create(array $data): int {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $warehouseId = (int)($data['warehouse_id'] ?? 0);
+        $destinationWarehouseId = (int)($data['destination_warehouse_id'] ?? $warehouseId);
+        if ($concernId === null || !Warehouse::find($warehouseId) || !Warehouse::find($destinationWarehouseId)) {
+            throw new InvalidArgumentException('Return warehouses must belong to the active concern.');
+        }
+        $sourceType = strtoupper((string)($data['source_type'] ?? ''));
+        $sourceId = (int)($data['source_id'] ?? 0);
+        if ($sourceType === 'SHOP' && !Shop::find($sourceId)) {
+            throw new InvalidArgumentException('The return shop must belong to the active concern.');
+        }
+        if (in_array($sourceType, ['WHATSAPP', 'WEBSITE'], true)) {
+            $channels = function_exists('getScopedSalesChannels') ? getScopedSalesChannels($sourceType) : [];
+            $channelIds = array_map('intval', array_column($channels, 'id'));
+            if (!in_array($sourceId, $channelIds, true)) {
+                throw new InvalidArgumentException('The return channel must be enabled for the active concern.');
+            }
+        }
         Database::execute(
             "INSERT INTO warehouse_returns 
              (return_number, source_type, source_id, warehouse_id, destination_warehouse_id, reason, status, notes)
@@ -193,15 +234,26 @@ class WarehouseReturn {
     }
 
     public static function updateStatus(int $id, string $status, ?int $inspectedBy = null): bool {
+        if (!self::find($id)) {
+            return false;
+        }
         if ($inspectedBy) {
             return Database::execute(
-                "UPDATE warehouse_returns SET status = ?, inspected_by = ?, updated_at = NOW() WHERE id = ?",
-                [$status, $inspectedBy, $id]
+                "UPDATE warehouse_returns
+                 SET status = ?, inspected_by = ?, updated_at = NOW()
+                 WHERE id = ? AND warehouse_id IN (
+                     SELECT id FROM warehouses WHERE concern_id = ?
+                 )",
+                [$status, $inspectedBy, $id, (int)currentConcernId()]
             );
         }
         return Database::execute(
-            "UPDATE warehouse_returns SET status = ?, updated_at = NOW() WHERE id = ?",
-            [$status, $id]
+            "UPDATE warehouse_returns
+             SET status = ?, updated_at = NOW()
+             WHERE id = ? AND warehouse_id IN (
+                 SELECT id FROM warehouses WHERE concern_id = ?
+             )",
+            [$status, $id, (int)currentConcernId()]
         );
     }
 

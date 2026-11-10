@@ -6,6 +6,12 @@ $userRoleName = $authUser['role_name'] ?? ($isSuperAdminUser ? 'Super Admin' : '
 $userRoleSlug = strtolower($authUser['role_slug'] ?? ($isSuperAdminUser ? 'super-admin' : ''));
 $userDept = $authUser['department'] ?? '';
 $isAdminRole = $isSuperAdminUser || ($authUser['role_id'] ?? 0) === 1 || str_contains($userRoleSlug, 'admin');
+$availableConcerns = [];
+$activeConcern = null;
+if (!empty($authUser['id']) && class_exists('Concern')) {
+    $availableConcerns = Concern::getAccessibleToUser((int)$authUser['id'], $isSuperAdminUser);
+    $activeConcern = Concern::getActiveForCurrentUser();
+}
 
 // Extract all assigned units defined by admin
 $userAssignedUnits = [];
@@ -533,6 +539,7 @@ if (!empty($authUser['shop_name'])) {
                             <?php endif; ?>
                             <?php if (hasPermission('staff', 'view')): ?>
                             <li><a href="<?= url('admin/staff?department=all') ?>" class="<?= in_array(($activeMenu ?? ''), ['staff', 'staff-all', 'staff-production', 'staff-warehouse', 'staff-whatsapp', 'staff-website', 'staff-shop', 'staff-reports']) ? 'active' : '' ?>">Total Staffs</a></li>
+                            <li><a href="<?= url('admin/staff/concerns') ?>" class="<?= ($activeMenu ?? '') === 'staff-concerns' ? 'active' : '' ?>">Concerns &amp; Modules</a></li>
                             <?php endif; ?>
                             <?php if (hasPermission('roles', 'view')): ?>
                             <li><a href="<?= url('admin/roles') ?>" class="<?= ($activeMenu ?? '') === 'roles' ? 'active' : '' ?>">Role Assign / Permissions</a></li>
@@ -601,6 +608,12 @@ if (!empty($authUser['shop_name'])) {
                     <?php endif; ?>
                 </div>
                 <div class="navbar-right">
+                    <?php if ($availableConcerns): ?>
+                    <a class="btn btn-sm <?= $activeConcern ? 'btn-outline-primary' : 'btn-warning' ?> me-2" href="<?= url('admin/concern/select') ?>">
+                        <i class="bi bi-diagram-3 me-1"></i>
+                        <?= $activeConcern ? e($activeConcern['name']) : 'Select Concern' ?>
+                    </a>
+                    <?php endif; ?>
                     <!-- User Dropdown -->
                     <div class="dropdown">
                         <button class="user-dropdown" data-bs-toggle="dropdown">

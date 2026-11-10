@@ -5,9 +5,9 @@ class ProductionInwardService {
 
     public static function getLocations(): array {
         return [
-            'WAREHOUSE' => Database::fetchAll("SELECT id, name, code FROM warehouses WHERE is_active = 1 ORDER BY name"),
-            'SHOP' => Database::fetchAll("SELECT id, name, code FROM shops WHERE is_active = 1 ORDER BY name"),
-            'PRODUCTION_UNIT' => Database::fetchAll("SELECT id, name, code FROM production_units WHERE is_active = 1 ORDER BY name"),
+            'WAREHOUSE' => function_exists('getScopedWarehouses') ? getScopedWarehouses() : [],
+            'SHOP' => function_exists('getScopedShops') ? getScopedShops() : [],
+            'PRODUCTION_UNIT' => function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [],
         ];
     }
 
@@ -493,7 +493,14 @@ class ProductionInwardService {
     }
 
     private static function assertDestination(int $unitId): void {
-        if ($unitId <= 0 || !Database::fetchOne("SELECT id FROM production_units WHERE id = ? AND is_active = 1", [$unitId])) {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $assignedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($unitId <= 0 || $concernId === null || $assignedUnitId === 0
+            || ($assignedUnitId !== null && $assignedUnitId !== $unitId)
+            || !Database::fetchOne(
+                "SELECT id FROM production_units WHERE id = ? AND concern_id = ? AND is_active = 1",
+                [$unitId, $concernId]
+            )) {
             throw new InvalidArgumentException('Select an active destination production unit.');
         }
     }

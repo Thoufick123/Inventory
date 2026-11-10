@@ -67,6 +67,35 @@ class Router {
                     }
                 }
 
+                $hasAuthMiddleware = in_array('AuthMiddleware', $route['middleware'], true);
+                if ($hasAuthMiddleware && !$this->hasPermissionMiddleware($route['middleware'])) {
+                    $this->enforceInferredPermission($url, $method, $route);
+                }
+
+                $allowedStaffPaths = [
+                    'admin/staff',
+                    'admin/roles',
+                    'admin/concern/select',
+                    'concern/activate',
+                    'admin/change-password',
+                    'production/dashboard',
+                    'logout',
+                ];
+                $normalizedUrl = trim($url, '/');
+                $isStaffAdminPath = false;
+                foreach ($allowedStaffPaths as $allowedPath) {
+                    if ($normalizedUrl === $allowedPath
+                        || str_starts_with($normalizedUrl, $allowedPath . '/')
+                        || str_starts_with($normalizedUrl, $allowedPath . '?')) {
+                        $isStaffAdminPath = true;
+                        break;
+                    }
+                }
+                if ($hasAuthMiddleware && !isSuperAdmin() && !$isStaffAdminPath) {
+                    Response::error(503, 'This module is temporarily unavailable while its concern-specific data isolation is being completed.');
+                    return;
+                }
+
                 // Load and instantiate controller
                 $controllerFile = BASE_PATH . '/app/Controllers/' . $route['controller'] . '.php';
                 if (!file_exists($controllerFile)) {
@@ -90,6 +119,357 @@ class Router {
 
         // No route matched
         Response::error(404, "Page not found");
+    }
+
+    private function hasPermissionMiddleware(array $middleware): bool {
+        foreach ($middleware as $mw) {
+            if (is_array($mw) && ($mw[0] ?? null) === 'PermissionMiddleware') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function enforceInferredPermission(string $url, string $method, array $route): void {
+        $path = trim($url, '/');
+
+        if (in_array($path, ['admin/concern/select', 'concern/activate', 'admin/change-password'], true)) {
+            return;
+        }
+        if ($path === 'admin/dashboard') {
+            if (!isSuperAdmin()) {
+                Response::error(503, 'The dashboard is temporarily unavailable until its concern-specific data isolation is completed.');
+            }
+            return;
+        }
+
+        $access = $this->inferRoutePermission($path, $method, $route['action']);
+        if ($access === null) {
+            Response::error(403, 'This authenticated route has no configured access policy.');
+        }
+
+        $modules = $access['modules'];
+        $action = $access['action'];
+        $concern = currentConcern();
+        $roleHasPermission = false;
+
+        $requirements = $access['requirements'] ?? array_map(
+            static fn(string $module): array => ['module' => $module, 'action' => $action],
+            $modules
+        );
+        foreach ($requirements as $requirement) {
+            $module = $requirement['module'];
+            $requiredAction = $requirement['action'];
+            if (hasRolePermission($module, $requiredAction)) {
+                $roleHasPermission = true;
+                if (concernHasModule($module)) {
+                    return;
+                }
+            }
+        }
+
+        if (!$roleHasPermission) {
+            Response::error(403, 'Your assigned role does not have permission to perform this action.');
+        }
+        if (!$concern) {
+            Response::redirect(url('admin/concern/select'), 'error', 'Select an active concern before opening operational modules.');
+        }
+
+        Response::error(403, 'This module is not assigned to the active concern.');
+    }
+
+    private function inferRoutePermission(string $path, string $httpMethod, string $controllerAction): ?array {
+        $path = strtolower($path);
+        $action = $this->inferAction($path, $httpMethod, $controllerAction);
+
+        if ($path === 'admin/staff/check-phone') {
+            return ['modules' => ['staff'], 'action' => 'view'];
+        }
+
+        if (preg_match('#^system/(notifications|audit|settings|backup)(?:/|$)#', $path, $matches)) {
+            $module = $matches[1];
+            if ($module === 'audit' && str_contains($path, '/export')) {
+                $action = 'export';
+            } elseif ($module === 'backup') {
+                if (str_contains($path, '/restore')) {
+                    $action = 'restore';
+                } elseif (str_contains($path, '/delete') || str_contains($path, '/wipe-')) {
+                    $action = 'delete';
+                } elseif (str_contains($path, '/export') || str_contains($path, '/download') || str_contains($path, '/send-email')) {
+                    $action = 'export';
+                } elseif (str_contains($path, '/create') || str_contains($path, '/import')) {
+                    $action = 'create';
+                } else {
+                    $action = 'view';
+                }
+            } elseif ($module === 'settings' && str_contains($path, '/update')) {
+                $action = 'edit';
+            } elseif ($module === 'notifications' && (str_contains($path, '/read') || str_contains($path, '/clear'))) {
+                $action = 'edit';
+            }
+            return ['modules' => [$module], 'action' => $action];
+        }
+        if ($path === 'api/notifications/unread') {
+            return ['modules' => ['notifications'], 'action' => 'view'];
+        }
+
+        if (str_starts_with($path, 'admin/production-units/')) {
+            return ['modules' => ['production'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'admin/warehouses/')) {
+            return ['modules' => ['warehouse'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'admin/shops/')) {
+            return ['modules' => ['shop'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'admin/channels/')) {
+            return ['modules' => ['sales_channels'], 'action' => $action];
+        }
+        if ($path === 'api/admin/production-units/quick-add') {
+            return ['modules' => ['production'], 'action' => 'create'];
+        }
+
+        if (str_starts_with($path, 'master/')) {
+            return ['modules' => ['master'], 'action' => $action];
+        }
+
+        if (preg_match('#^reports/(export|pdf|print)/([^/]+)$#', $path, $matches)) {
+            $reportModules = [
+                'overview' => 'reports_overview',
+                'profitability' => 'reports_profitability',
+                'website' => 'reports_website',
+                'sales_website' => 'reports_website',
+                'whatsapp' => 'reports_whatsapp',
+                'sales_whatsapp' => 'reports_whatsapp',
+                'online' => 'reports_online',
+                'sales' => 'reports_sales',
+                'sales_pos' => 'reports_sales',
+                'sales_warehouse' => 'reports_sales',
+                'production' => 'reports_production',
+                'warehouse' => 'reports_warehouse',
+                'purchase' => 'reports_purchase',
+                'shop' => 'reports_shop',
+                'inventory' => 'reports_inventory',
+            ];
+            $module = $reportModules[$matches[2]] ?? null;
+            if ($module === null) {
+                return null;
+            }
+            return [
+                'modules' => [$module],
+                'action' => $matches[1] === 'print' ? 'print' : 'export',
+            ];
+        }
+
+        if (str_starts_with($path, 'production/')) {
+            return $this->productionRoutePermission(substr($path, strlen('production/')), $action);
+        }
+        if (str_starts_with($path, 'warehouse/')) {
+            return $this->warehouseRoutePermission(substr($path, strlen('warehouse/')), $action);
+        }
+        if (str_starts_with($path, 'api/production/')) {
+            return $this->productionRoutePermission(substr($path, strlen('api/production/')), $action);
+        }
+        if (str_starts_with($path, 'api/warehouse/')) {
+            return $this->warehouseRoutePermission(substr($path, strlen('api/warehouse/')), $action);
+        }
+        if (str_starts_with($path, 'api/whatsapp/')) {
+            return $this->channelRoutePermission('whatsapp', substr($path, strlen('api/whatsapp/')), $action);
+        }
+        if (str_starts_with($path, 'api/website/')) {
+            return $this->channelRoutePermission('website', substr($path, strlen('api/website/')), $action);
+        }
+        if (str_starts_with($path, 'api/admin/')) {
+            return null;
+        }
+        if (in_array($path, ['api/products/search', 'api/variants/search'], true)) {
+            return [
+                'modules' => [
+                    'master', 'catalog', 'wh_catalog', 'production_billing', 'production_billing_returns',
+                    'inventory', 'batches', 'stock', 'shop_stock', 'pos', 'sales', 'purchases',
+                    'website_orders', 'website_inventory', 'whatsapp_orders', 'whatsapp_inventory',
+                ],
+                'action' => 'view',
+            ];
+        }
+        if (str_starts_with($path, 'api/categories')
+            || str_starts_with($path, 'api/subcategories')
+            || str_starts_with($path, 'api/sub-subcategories')
+            || str_starts_with($path, 'api/brands/')
+            || str_starts_with($path, 'api/sizes/')
+            || str_starts_with($path, 'api/colors/')) {
+            return ['modules' => ['master', 'catalog', 'wh_catalog'], 'action' => $action];
+        }
+        if ($path === 'api/stock/check' || str_starts_with($path, 'api/stock/check/')) {
+            return [
+                'modules' => ['stock', 'inventory', 'shop_stock', 'website_inventory', 'whatsapp_inventory'],
+                'action' => 'view',
+            ];
+        }
+        if (str_starts_with($path, 'api/programs/')) {
+            return ['modules' => ['programs'], 'action' => 'view'];
+        }
+        if (str_starts_with($path, 'api/cutting/')) {
+            return ['modules' => ['cutting'], 'action' => 'view'];
+        }
+        if (str_starts_with($path, 'api/stitching/')) {
+            return ['modules' => ['stitching'], 'action' => 'view'];
+        }
+        if (str_starts_with($path, 'api/catalog/')) {
+            return ['modules' => ['catalog'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'api/sellers/')) {
+            return ['modules' => ['sellers'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'api/shops/') || str_starts_with($path, 'api/shop/')) {
+            return ['modules' => ['shop'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'api/channels/') || str_starts_with($path, 'api/sales-channel/')) {
+            return ['modules' => ['sales_channels'], 'action' => $action];
+        }
+        if (str_starts_with($path, 'api/asset/')) {
+            return ['modules' => ['assets', 'asset_scanner'], 'action' => $action];
+        }
+
+        return null;
+    }
+
+    private function productionRoutePermission(string $path, string $action): ?array {
+        $firstSegment = explode('/', trim($path, '/'))[0] ?? '';
+        $moduleBySegment = [
+            'dashboard' => 'production',
+            'inward' => 'production_inward',
+            'billing' => str_starts_with($path, 'billing/returns') ? 'production_billing_returns' : 'production_billing',
+            'sellers' => 'sellers',
+            'purchases' => 'sellers',
+            'damages' => 'damages',
+            'inventory-damages' => 'damages',
+            'catalog' => 'catalog',
+            'programs' => 'programs',
+            'cutting' => 'cutting',
+            'stitching' => 'stitching',
+            'stitching-wastage' => 'stitching_wastage',
+            'wastage' => 'wastage',
+            'expenses' => 'production_expenses',
+            'cash' => 'production_cash',
+            'labels' => 'labels',
+            'qc' => 'qc',
+            'inventory' => 'inventory',
+            'batches' => 'batches',
+            'outward' => 'outward',
+            'warehouse-rework' => 'warehouse_rework',
+        ];
+        $module = $moduleBySegment[$firstSegment] ?? null;
+        return $module === null ? null : ['modules' => [$module], 'action' => $action];
+    }
+
+    private function warehouseRoutePermission(string $path, string $action): ?array {
+        $firstSegment = explode('/', trim($path, '/'))[0] ?? '';
+        if ($path === 'warehouse-variant-stock') {
+            return ['requirements' => [
+                ['module' => 'stock', 'action' => 'view'],
+                ['module' => 'purchases', 'action' => 'view'],
+                ['module' => 'purchases', 'action' => 'create'],
+                ['module' => 'purchases', 'action' => 'edit'],
+            ], 'modules' => [], 'action' => $action];
+        }
+        if (str_starts_with($path, 'purchases/lookup-scan')) {
+            return ['requirements' => [
+                ['module' => 'stock', 'action' => 'adjust'],
+                ['module' => 'purchases', 'action' => 'receive'],
+                ['module' => 'purchases', 'action' => 'view'],
+                ['module' => 'purchases', 'action' => 'create'],
+                ['module' => 'purchases', 'action' => 'edit'],
+                ['module' => 'purchases_returns', 'action' => 'view'],
+                ['module' => 'purchases_returns', 'action' => 'process'],
+            ], 'modules' => [], 'action' => $action];
+        }
+        if (str_starts_with($path, 'customers/')) {
+            return ['requirements' => [
+                ['module' => 'purchases', 'action' => 'view'],
+                ['module' => 'purchases', 'action' => 'create'],
+                ['module' => 'purchases', 'action' => 'edit'],
+            ], 'modules' => [], 'action' => $action];
+        }
+        if ($path === 'labels/confirm-stickered-inward') {
+            return ['requirements' => [
+                ['module' => 'inward', 'action' => 'verify'],
+                ['module' => 'inward', 'action' => 'create'],
+                ['module' => 'purchases', 'action' => 'receive'],
+                ['module' => 'returns', 'action' => 'classify'],
+            ], 'modules' => [], 'action' => $action];
+        }
+        if ($firstSegment === 'whatsapp-orders') {
+            return $this->channelRoutePermission('whatsapp', substr($path, strlen('whatsapp-orders')), $action);
+        }
+        if ($firstSegment === 'website-orders') {
+            return $this->channelRoutePermission('website', substr($path, strlen('website-orders')), $action);
+        }
+        if ($firstSegment === 'customers') {
+            return ['modules' => ['customers', 'website_customers', 'whatsapp_customers'], 'action' => $action];
+        }
+
+        $moduleBySegment = [
+            'dashboard' => 'warehouse',
+            'inward' => 'inward',
+            'stock' => 'stock',
+            'damage' => 'damage',
+            'allocation' => str_starts_with($path, 'allocation/outward') ? 'allocation_outward' : 'allocation',
+            'catalog' => 'wh_catalog',
+            'sellers' => 'wh_sellers',
+            'purchases' => str_starts_with($path, 'purchases/returns') ? 'purchases_returns' : 'purchases',
+            'returns' => 'returns',
+            'labels' => 'wh_labels',
+            'shop-requests' => 'shop_requests',
+            'expenses' => 'warehouse_expenses',
+        ];
+        $module = $moduleBySegment[$firstSegment] ?? null;
+        return $module === null ? null : ['modules' => [$module], 'action' => $action];
+    }
+
+    private function channelRoutePermission(string $channel, string $path, string $action): array {
+        $path = trim($path, '/');
+        $segment = explode('/', $path)[0] ?? '';
+        $suffix = [
+            '' => 'dashboard',
+            'dashboard' => 'dashboard',
+            'inward' => 'inward',
+            'inventory' => 'inventory',
+            'allocations' => 'inventory',
+            'orders' => 'orders',
+            'history' => 'orders',
+            'requests' => 'orders',
+            'damage' => 'damage',
+            'returns' => str_starts_with($path, 'returns/return-to-warehouse') ? 'return_to_wh' : 'returns',
+            'return-to-warehouse' => 'return_to_wh',
+            'customers' => 'customers',
+            'expenses' => 'expenses',
+        ][$segment] ?? 'orders';
+        return ['modules' => [$channel . '_' . $suffix], 'action' => $action];
+    }
+
+    private function inferAction(string $path, string $httpMethod, string $controllerAction): string {
+        $name = strtolower($controllerAction);
+        $target = strtolower($path . '/' . $name);
+        foreach (['delete', 'remove'] as $verb) {
+            if (str_contains($target, $verb)) return 'delete';
+        }
+        foreach (['approve', 'receive', 'dispatch', 'deliver', 'inspect', 'classify', 'resolve', 'process', 'restore'] as $verb) {
+            if (str_contains($target, $verb)) return $verb;
+        }
+        foreach (['export', 'download', 'print', 'invoice', 'gatepass', 'label', 'voucher', 'receipt'] as $verb) {
+            if (str_contains($target, $verb)) return in_array($verb, ['export', 'download'], true) ? 'export' : 'print';
+        }
+        foreach (['update', 'edit', 'toggle', 'status', 'read', 'confirm', 'mark', 'close'] as $verb) {
+            if (str_contains($target, $verb)) return 'edit';
+        }
+        foreach (['lookup', 'search', 'scan', 'check', 'details', 'history', 'list', 'view', 'get', 'index', 'dashboard'] as $verb) {
+            if (str_contains($target, $verb)) return 'view';
+        }
+        foreach (['create', 'store', 'add', 'quickadd', 'quick-add', 'save', 'generate', 'open'] as $verb) {
+            if (str_contains($target, $verb)) return 'create';
+        }
+        return strtoupper($httpMethod) === 'GET' ? 'view' : 'create';
     }
 
     /**
@@ -116,6 +496,8 @@ class Router {
         // ==========================================
         // ADMIN ROUTES
         // ==========================================
+        $this->get('admin/concern/select', 'ConcernController', 'select', ['AuthMiddleware']);
+        $this->post('concern/activate', 'ConcernController', 'activate', ['AuthMiddleware']);
         $this->get('admin/dashboard', 'AdminController', 'dashboard', ['AuthMiddleware']);
         $this->get('admin/staff', 'AdminController', 'staffList', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'view']]);
         $this->get('admin/staff/check-phone', 'AdminController', 'checkPhoneAvailability', ['AuthMiddleware']);
@@ -126,6 +508,10 @@ class Router {
         $this->post('admin/staff/update/{id}', 'AdminController', 'updateStaff', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
         $this->post('admin/staff/toggle/{id}', 'AdminController', 'toggleStaff', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
         $this->post('admin/staff/delete/{id}', 'AdminController', 'deleteStaff', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'delete']]);
+        $this->get('admin/staff/concerns', 'AdminController', 'concerns', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'view']]);
+        $this->post('admin/staff/concerns/store', 'AdminController', 'storeConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'create']]);
+        $this->post('admin/staff/concerns/update/{id}', 'AdminController', 'updateConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
+        $this->post('admin/staff/concerns/delete/{id}', 'AdminController', 'deleteConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'delete']]);
         $this->get('admin/roles', 'AdminController', 'roles', ['AuthMiddleware', ['PermissionMiddleware', 'roles', 'view']]);
         $this->get('admin/roles/create', 'AdminController', 'createRole', ['AuthMiddleware', ['PermissionMiddleware', 'roles', 'create']]);
         $this->post('admin/roles/store', 'AdminController', 'storeRole', ['AuthMiddleware', ['PermissionMiddleware', 'roles', 'create']]);

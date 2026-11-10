@@ -48,18 +48,20 @@ class User {
      */
     public static function findByUsername(string $username): ?array {
         self::ensureSchema();
+        $facilityScope = self::facilityJoinScope();
+        $params = array_merge($facilityScope['params'], [$username, $username]);
         return Database::fetchOne(
             "SELECT u.*, r.name as role_name, r.slug as role_slug,
                     pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name,
                     sc.name as channel_name, sc.code as channel_code, sc.channel_type as channel_type
              FROM users u 
              LEFT JOIN roles r ON u.role_id = r.id 
-             LEFT JOIN production_units pu ON u.production_unit_id = pu.id
-             LEFT JOIN warehouses w ON u.warehouse_id = w.id
-             LEFT JOIN shops s ON u.shop_id = s.id
-             LEFT JOIN sales_channels sc ON u.channel_id = sc.id
+             LEFT JOIN production_units pu ON u.production_unit_id = pu.id {$facilityScope['production']}
+             LEFT JOIN warehouses w ON u.warehouse_id = w.id {$facilityScope['warehouse']}
+             LEFT JOIN shops s ON u.shop_id = s.id {$facilityScope['shop']}
+             LEFT JOIN sales_channels sc ON u.channel_id = sc.id {$facilityScope['channel']}
              WHERE u.username = ? OR u.email = ?",
-            [$username, $username]
+            $params
         );
     }
 
@@ -68,18 +70,20 @@ class User {
      */
     public static function findById(int $id): ?array {
         self::ensureSchema();
+        $facilityScope = self::facilityJoinScope();
+        $params = array_merge($facilityScope['params'], [$id]);
         return Database::fetchOne(
             "SELECT u.*, r.name as role_name, r.slug as role_slug,
                     pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name,
                     sc.name as channel_name, sc.code as channel_code, sc.channel_type as channel_type
              FROM users u 
              LEFT JOIN roles r ON u.role_id = r.id 
-             LEFT JOIN production_units pu ON u.production_unit_id = pu.id
-             LEFT JOIN warehouses w ON u.warehouse_id = w.id
-             LEFT JOIN shops s ON u.shop_id = s.id
-             LEFT JOIN sales_channels sc ON u.channel_id = sc.id
+             LEFT JOIN production_units pu ON u.production_unit_id = pu.id {$facilityScope['production']}
+             LEFT JOIN warehouses w ON u.warehouse_id = w.id {$facilityScope['warehouse']}
+             LEFT JOIN shops s ON u.shop_id = s.id {$facilityScope['shop']}
+             LEFT JOIN sales_channels sc ON u.channel_id = sc.id {$facilityScope['channel']}
              WHERE u.id = ?",
-            [$id]
+            $params
         );
     }
 
@@ -88,17 +92,21 @@ class User {
      */
     public static function getAll(array $filters = []): array {
         self::ensureSchema();
+        $facilityScope = self::facilityJoinScope();
+        $params = $facilityScope['params'];
         $sql = "SELECT u.*, r.name as role_name, r.slug as role_slug,
                        pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name,
-                       sc.name as channel_name, sc.code as channel_code, sc.channel_type as channel_type
+                       sc.name as channel_name, sc.code as channel_code, sc.channel_type as channel_type,
+                       (SELECT GROUP_CONCAT(c.name ORDER BY c.name SEPARATOR ', ')
+                        FROM user_concerns uc JOIN concerns c ON c.id = uc.concern_id
+                        WHERE uc.user_id = u.id) AS concern_names
                 FROM users u 
                 LEFT JOIN roles r ON u.role_id = r.id 
-                LEFT JOIN production_units pu ON u.production_unit_id = pu.id
-                LEFT JOIN warehouses w ON u.warehouse_id = w.id
-                LEFT JOIN shops s ON u.shop_id = s.id
-                LEFT JOIN sales_channels sc ON u.channel_id = sc.id
+                LEFT JOIN production_units pu ON u.production_unit_id = pu.id {$facilityScope['production']}
+                LEFT JOIN warehouses w ON u.warehouse_id = w.id {$facilityScope['warehouse']}
+                LEFT JOIN shops s ON u.shop_id = s.id {$facilityScope['shop']}
+                LEFT JOIN sales_channels sc ON u.channel_id = sc.id {$facilityScope['channel']}
                 WHERE 1=1";
-        $params = [];
 
         // Exclude root Super Administrator from staff directory
         $includeSuperAdmin = $filters['include_superadmin'] ?? false;
@@ -130,6 +138,13 @@ class User {
             $sql .= " AND u.channel_id = ?";
             $params[] = $filters['channel_id'];
         }
+        if (!empty($filters['concern_id'])) {
+            $sql .= " AND EXISTS (
+                SELECT 1 FROM user_concerns uc
+                WHERE uc.user_id = u.id AND uc.concern_id = ?
+            )";
+            $params[] = (int)$filters['concern_id'];
+        }
         if (isset($filters['is_active'])) {
             $sql .= " AND u.is_active = ?";
             $params[] = $filters['is_active'];
@@ -142,6 +157,27 @@ class User {
 
         $sql .= " ORDER BY u.created_at DESC";
         return Database::fetchAll($sql, $params);
+    }
+
+    private static function facilityJoinScope(): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null || $concernId <= 0) {
+            return [
+                'production' => 'AND 1 = 0',
+                'warehouse' => 'AND 1 = 0',
+                'shop' => 'AND 1 = 0',
+                'channel' => 'AND 1 = 0',
+                'params' => [],
+            ];
+        }
+
+        return [
+            'production' => 'AND pu.concern_id = ?',
+            'warehouse' => 'AND w.concern_id = ?',
+            'shop' => 'AND s.concern_id = ?',
+            'channel' => 'AND sc.concern_id = ?',
+            'params' => [$concernId, $concernId, $concernId, $concernId],
+        ];
     }
 
     /**
@@ -158,6 +194,17 @@ class User {
         $puId = ($dept === 'PRODUCTION') ? (!empty($data['production_unit_id']) ? (int)$data['production_unit_id'] : null) : null;
         $whId = ($dept === 'WAREHOUSE') ? (!empty($data['warehouse_id']) ? (int)$data['warehouse_id'] : null) : null;
         $shopId = ($dept === 'SHOP') ? (!empty($data['shop_id']) ? (int)$data['shop_id'] : null) : null;
+        $assignmentData = array_merge($data, [
+            'department' => $dept,
+            'production_unit_id' => $puId,
+            'warehouse_id' => $whId,
+            'shop_id' => $shopId,
+            'channel_id' => $channelId,
+        ]);
+        Concern::validateFacilityAssignments(
+            $assignmentData,
+            is_array($data['concern_ids'] ?? null) ? $data['concern_ids'] : []
+        );
 
         Database::execute(
             "INSERT INTO users (username, email, password_hash, full_name, phone, role_id, department, production_unit_id, warehouse_id, shop_id, channel_id, reports_access, is_active, created_at, updated_at) 
@@ -179,9 +226,15 @@ class User {
         );
         $userId = (int) Database::lastInsertId();
 
-        // Save customized permissions if provided (strictly scoped to department)
+        if (array_key_exists('concern_ids', $data)) {
+            Concern::syncUserConcerns($userId, is_array($data['concern_ids']) ? $data['concern_ids'] : []);
+        }
+
         if (isset($data['permissions']) && is_array($data['permissions'])) {
-            $filteredPerms = Role::filterPermissionsForDepartment($data['permissions'], $dept);
+            $filteredPerms = Concern::filterPermissionIds(
+                $data['permissions'],
+                is_array($data['concern_ids'] ?? null) ? $data['concern_ids'] : []
+            );
             self::savePermissions($userId, $filteredPerms);
         }
 
@@ -221,7 +274,18 @@ class User {
             $data['production_unit_id'] = null;
             $data['warehouse_id'] = null;
             $data['channel_id'] = null;
+        } elseif ($targetDept === 'ALL') {
+            $data['production_unit_id'] = null;
+            $data['warehouse_id'] = null;
+            $data['shop_id'] = null;
+            $data['channel_id'] = null;
         }
+
+        $concernIds = is_array($data['concern_ids'] ?? null)
+            ? $data['concern_ids']
+            : Concern::getUserConcernIds($id);
+        $data['department'] = $targetDept;
+        Concern::validateFacilityAssignments($data, $concernIds);
 
         $fields = [];
         $params = [];
@@ -250,14 +314,15 @@ class User {
             $params
         );
 
-        // Update customized permissions if provided (strictly scoped to department)
+        if (array_key_exists('concern_ids', $data)) {
+            Concern::syncUserConcerns($id, is_array($data['concern_ids']) ? $data['concern_ids'] : []);
+        }
+
         if (isset($data['permissions']) && is_array($data['permissions'])) {
-            $dept = !empty($data['department']) ? strtoupper($data['department']) : null;
-            if (empty($dept)) {
-                $existing = self::findById($id);
-                $dept = $existing['department'] ?? 'GENERAL';
-            }
-            $filteredPerms = Role::filterPermissionsForDepartment($data['permissions'], $dept);
+            $concernIds = is_array($data['concern_ids'] ?? null)
+                ? $data['concern_ids']
+                : Concern::getUserConcernIds($id);
+            $filteredPerms = Concern::filterPermissionIds($data['permissions'], $concernIds);
             self::savePermissions($id, $filteredPerms);
         }
     }
@@ -299,14 +364,24 @@ class User {
         self::ensureSchema();
         // Check if user has explicit custom permissions
         $customRows = Database::fetchAll(
-            "SELECT CONCAT(p.module, '.', p.action) as permission_key 
+            "SELECT up.permission_id, CONCAT(p.module, '.', p.action) as permission_key
              FROM user_permissions up 
              JOIN permissions p ON up.permission_id = p.id 
              WHERE up.user_id = ?",
             [$userId]
         );
         if (!empty($customRows)) {
-            return array_column($customRows, 'permission_key');
+            $allowedIds = array_fill_keys(
+                self::filterPermissionIdsForUserConcerns($userId, array_column($customRows, 'permission_id')),
+                true
+            );
+            return array_values(array_map(
+                static fn(array $row): string => $row['permission_key'],
+                array_filter(
+                    $customRows,
+                    static fn(array $row): bool => isset($allowedIds[(int)$row['permission_id']])
+                )
+            ));
         }
         if (self::hasPermissionOverride($userId)) {
             return [];
@@ -334,7 +409,10 @@ class User {
             [$userId]
         );
         if (!empty($customRows)) {
-            return array_map('intval', array_column($customRows, 'permission_id'));
+            return self::filterPermissionIdsForUserConcerns(
+                $userId,
+                array_column($customRows, 'permission_id')
+            );
         }
         if (self::hasPermissionOverride($userId)) {
             return [];
@@ -355,6 +433,10 @@ class User {
             "SELECT user_id FROM user_permission_overrides WHERE user_id = ?",
             [$userId]
         );
+    }
+
+    private static function filterPermissionIdsForUserConcerns(int $userId, array $permissionIds): array {
+        return Concern::filterPermissionIds($permissionIds, Concern::getUserConcernIds($userId));
     }
 
     /**
