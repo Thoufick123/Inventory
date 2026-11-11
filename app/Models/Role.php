@@ -290,7 +290,7 @@ class Role {
                     'inventory'           => ['name' => 'Inventory', 'icon' => 'bi-boxes', 'desc' => 'Unassigned lot staging bays and finished goods floor storage', 'department' => 'PRODUCTION'],
                     'batches'             => ['name' => 'Batches', 'icon' => 'bi-box-seam', 'desc' => 'Carton packing, SKU bundles, and master box packaging', 'department' => 'PRODUCTION'],
                     'outward'             => ['name' => 'Outward', 'icon' => 'bi-truck', 'desc' => 'Delivery challans and outward dispatch to Central Warehouses', 'department' => 'PRODUCTION'],
-                    'production_inward'  => ['name' => 'Inward / GRN', 'icon' => 'bi-box-arrow-in-down', 'desc' => 'Receive transferred products into a production unit', 'department' => 'PRODUCTION'],
+                    'production_inward'  => ['name' => 'Inward / GRN', 'icon' => 'bi-box-arrow-in-down', 'desc' => 'Receive transferred products into concern or production-unit inventory', 'department' => 'PRODUCTION'],
                     'production_cash'    => ['name' => 'Cash & Cash Flow', 'icon' => 'bi-cash-stack', 'desc' => 'Production cash registers, shifts, expenses, and deposits', 'department' => 'PRODUCTION'],
                     'warehouse_rework'    => ['name' => 'Warehouse Rework', 'icon' => 'bi-tools', 'desc' => 'Repair and dispatch damaged warehouse goods', 'department' => 'PRODUCTION'],
                 ]
@@ -433,11 +433,19 @@ class Role {
         foreach ($modules as $modKey => &$modData) {
             foreach ($modData['submodules'] as $subKey => &$subData) {
                 $subData['permissions'] = $permsMap[$subKey] ?? [];
+                if (isRetiredConcernModule($subKey)) {
+                    unset($modData['submodules'][$subKey]);
+                }
                 if (!isset($subData['department'])) {
                     $subData['department'] = $modData['department'] ?? 'ALL';
                 }
             }
+            if (in_array($modKey, ['warehouse', 'whatsapp', 'website', 'shop'], true)
+                || empty($modData['submodules'])) {
+                unset($modules[$modKey]);
+            }
         }
+        unset($subData, $modData);
 
         return $modules;
     }
@@ -469,7 +477,9 @@ class Role {
         ];
 
         foreach ($permissions as $action => $permission) {
-            if (isset($columns[$action])) {
+            if ($action === 'receive' && ($permission['module'] ?? '') === 'production_inward') {
+                $columns['create'][$action] = $permission;
+            } elseif (isset($columns[$action])) {
                 $columns[$action][$action] = $permission;
             }
         }
@@ -478,7 +488,7 @@ class Role {
     }
 
     /**
-     * Keep only valid permission IDs for CRUD actions.
+     * Keep valid CRUD permissions and the Production Inward receive action.
      */
     public static function filterCrudPermissionIds(array $permissionIds): array {
         $permissionIds = array_values(array_unique(array_filter(
@@ -491,7 +501,10 @@ class Role {
 
         $placeholders = implode(',', array_fill(0, count($permissionIds), '?'));
         $rows = Database::fetchAll(
-            "SELECT id FROM permissions WHERE id IN ($placeholders) AND action IN ('view', 'create', 'edit', 'delete')",
+            "SELECT id FROM permissions
+             WHERE id IN ($placeholders)
+               AND (action IN ('view', 'create', 'edit', 'delete')
+                    OR (module = 'production_inward' AND action = 'receive'))",
             $permissionIds
         );
         $allowedIds = array_fill_keys(array_map('intval', array_column($rows, 'id')), true);

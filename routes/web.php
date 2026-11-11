@@ -15,6 +15,10 @@ class Router {
      * Register a GET route.
      */
     public function get(string $path, string $controller, string $method, array $middleware = []): void {
+        if ($this->isRetiredModuleRoute($path)) {
+            return;
+        }
+
         $this->routes[] = [
             'method'     => 'GET',
             'path'       => $path,
@@ -28,6 +32,10 @@ class Router {
      * Register a POST route.
      */
     public function post(string $path, string $controller, string $method, array $middleware = []): void {
+        if ($this->isRetiredModuleRoute($path)) {
+            return;
+        }
+
         $this->routes[] = [
             'method'     => 'POST',
             'path'       => $path,
@@ -35,6 +43,35 @@ class Router {
             'action'     => $method,
             'middleware'  => $middleware,
         ];
+    }
+
+    private function isRetiredModuleRoute(string $path): bool {
+        $path = trim($path, '/');
+        $retiredPrefixes = [
+            'warehouse/', 'shop/', 'api/warehouse/', 'api/warehouse-', 'api/shop/', 'api/shops/',
+            'api/website/', 'api/whatsapp/', 'sales/website/', 'sales/whatsapp/',
+            'admin/production-units/', 'admin/warehouses/', 'admin/shops/', 'admin/channels/',
+            'api/admin/production-units/',
+        ];
+
+        foreach ($retiredPrefixes as $prefix) {
+            if (str_starts_with($path, $prefix)) {
+                return true;
+            }
+        }
+
+        $retiredReports = ['website', 'sales_website', 'whatsapp', 'sales_whatsapp', 'online', 'warehouse', 'purchase', 'shop', 'inventory'];
+        if (in_array($path, [
+            'reports/website', 'reports/whatsapp', 'reports/online', 'reports/warehouse',
+            'reports/purchase', 'reports/shop', 'reports/inventory',
+        ], true)) {
+            return true;
+        }
+
+        return (bool)preg_match(
+            '#^reports/(?:export|pdf|print)/(?:' . implode('|', $retiredReports) . ')(?:/|$)#',
+            $path
+        );
     }
 
     /**
@@ -46,6 +83,11 @@ class Router {
         }
         if ($url === 'grm_inventory') {
             $url = '';
+        }
+
+        if ($this->isRetiredModuleRoute($url)) {
+            Response::error(404, 'Page not found');
+            return;
         }
 
         foreach ($this->routes as $route) {
@@ -74,59 +116,15 @@ class Router {
                     }
                 }
 
-                $allowedStaffPaths = [
-                    'admin/staff',
-                    'admin/legacy-data',
-                    'admin/roles',
-                    'admin/dashboard',
-                    'admin/concern/select',
-                    'concern/activate',
-                    'admin/change-password',
-                    'logout',
-                ];
-                $normalizedUrl = trim($url, '/');
-                $isStaffAdminPath = false;
-                foreach ($allowedStaffPaths as $allowedPath) {
-                    if ($normalizedUrl === $allowedPath
-                        || str_starts_with($normalizedUrl, $allowedPath . '/')
-                        || str_starts_with($normalizedUrl, $allowedPath . '?')) {
-                        $isStaffAdminPath = true;
-                        break;
-                    }
-                }
-                if ($hasAuthMiddleware && !isSuperAdmin() && !$isStaffAdminPath) {
-                    $modules = $this->getEligibleRouteModules($normalizedUrl, $method, $route);
-                    if (!in_array('__global__', $modules, true)) {
-                        if (!$modules) {
-                            Response::error(503, 'This workflow remains unavailable to staff until its isolation policy is verified.');
-                            return;
-                        }
-
-                        $moduleEnabled = false;
-                        foreach ($modules as $module) {
-                            if (ConcernModuleRollout::isEnabled($module)) {
-                                $moduleEnabled = true;
-                                break;
-                            }
-                        }
-                        if (!$moduleEnabled) {
-                            $moduleNames = implode(', ', array_map(
-                                static fn(string $module): string => ucwords(str_replace('_', ' ', $module)),
-                                $modules
-                            ));
-                            Response::error(503, $moduleNames . ' is not enabled for staff yet. It will be available after its complete concern-isolation checks pass.');
-                            return;
-                        }
-                    }
-                }
-
                 // Load and instantiate controller
-                $controllerFile = BASE_PATH . '/app/Controllers/' . $route['controller'] . '.php';
-                if (!file_exists($controllerFile)) {
-                    Response::error(500, "Controller not found: {$route['controller']}");
-                    return;
+                if (!class_exists($route['controller'])) {
+                    $controllerFile = BASE_PATH . '/app/Controllers/' . $route['controller'] . '.php';
+                    if (!file_exists($controllerFile)) {
+                        Response::error(500, "Controller not found: {$route['controller']}");
+                        return;
+                    }
+                    require_once $controllerFile;
                 }
-                require_once $controllerFile;
 
                 $controller = new $route['controller']();
                 $action = $route['action'];
@@ -163,53 +161,6 @@ class Router {
         return false;
     }
 
-    private function getEligibleRouteModules(string $path, string $method, array $route): array {
-        foreach ($route['middleware'] as $mw) {
-            if (!is_array($mw)) {
-                continue;
-            }
-
-            if (($mw[0] ?? null) === 'PermissionMiddleware' && !empty($mw[1])) {
-                $module = (string)$mw[1];
-                return isGlobalConcernModule($module) ? ['__global__'] : [$module];
-            }
-            if (($mw[0] ?? null) === 'ConcernTransferPermissionMiddleware') {
-                return ['warehouse'];
-            }
-        }
-
-        $access = $this->inferRoutePermission($path, $method, $route['action']);
-        if ($access === null) {
-            return [];
-        }
-
-        $requirements = $access['requirements'] ?? array_map(
-            static fn(string $module): array => ['module' => $module, 'action' => $access['action']],
-            $access['modules']
-        );
-        $eligibleModules = [];
-        $hasEligibleGlobalModule = false;
-        foreach ($requirements as $requirement) {
-            $module = (string)$requirement['module'];
-            if (!hasRolePermission($module, (string)$requirement['action'])) {
-                continue;
-            }
-            if (isGlobalConcernModule($module)) {
-                $hasEligibleGlobalModule = true;
-                continue;
-            }
-            if (!concernHasModule($module)) {
-                continue;
-            }
-            $eligibleModules[] = $module;
-        }
-
-        if ($eligibleModules) {
-            return array_values(array_unique($eligibleModules));
-        }
-        return $hasEligibleGlobalModule ? ['__global__'] : [];
-    }
-
     private function enforceInferredPermission(string $url, string $method, array $route): void {
         $path = trim($url, '/');
 
@@ -229,6 +180,10 @@ class Router {
         $action = $access['action'];
         $concern = currentConcern();
         $roleHasPermission = false;
+        $user = class_exists('Session') ? (Session::user() ?? []) : [];
+        $isSuperAdminUser = isSuperAdmin()
+            || (int)($user['role_id'] ?? 0) === 1
+            || strtolower($user['role_slug'] ?? '') === 'super_admin';
 
         $requirements = $access['requirements'] ?? array_map(
             static fn(string $module): array => ['module' => $module, 'action' => $action],
@@ -239,7 +194,7 @@ class Router {
             $requiredAction = $requirement['action'];
             if (hasRolePermission($module, $requiredAction)) {
                 $roleHasPermission = true;
-                if (concernHasModule($module)) {
+                if (isGlobalConcernModule($module) || ($concern && ($isSuperAdminUser || concernHasModule($module)))) {
                     return;
                 }
             }
@@ -249,6 +204,17 @@ class Router {
             Response::error(403, 'Your assigned role does not have permission to perform this action.');
         }
         if (!$concern) {
+            $isAjax = !empty($_SERVER['HTTP_X_REQUESTED_WITH'])
+                && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+            if ($isAjax) {
+                Response::json([
+                    'success' => false,
+                    'error'   => 'Select an active concern before opening operational modules.',
+                ], 403);
+            }
+            if ($method === 'GET' && !empty($_SERVER['REQUEST_URI']) && class_exists('Session')) {
+                Session::set('_intended_url', $_SERVER['REQUEST_URI']);
+            }
             Response::redirect(url('admin/concern/select'), 'error', 'Select an active concern before opening operational modules.');
         }
 
@@ -288,22 +254,6 @@ class Router {
         }
         if ($path === 'api/notifications/unread') {
             return ['modules' => ['notifications'], 'action' => 'view'];
-        }
-
-        if (str_starts_with($path, 'admin/production-units/')) {
-            return ['modules' => ['production'], 'action' => $action];
-        }
-        if (str_starts_with($path, 'admin/warehouses/')) {
-            return ['modules' => ['warehouse'], 'action' => $action];
-        }
-        if (str_starts_with($path, 'admin/shops/')) {
-            return ['modules' => ['shop'], 'action' => $action];
-        }
-        if (str_starts_with($path, 'admin/channels/')) {
-            return ['modules' => ['sales_channels'], 'action' => $action];
-        }
-        if ($path === 'api/admin/production-units/quick-add') {
-            return ['modules' => ['production'], 'action' => 'create'];
         }
 
         if (str_starts_with($path, 'master/')) {
@@ -588,6 +538,7 @@ class Router {
         $this->get('admin/staff/concerns', 'AdminController', 'concerns', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'view']]);
         $this->post('admin/staff/concerns/store', 'AdminController', 'storeConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'create']]);
         $this->post('admin/staff/concerns/update/{id}', 'AdminController', 'updateConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
+        $this->post('admin/staff/concerns/toggle/{id}', 'AdminController', 'toggleConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
         $this->post('admin/staff/concerns/delete/{id}', 'AdminController', 'deleteConcern', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'delete']]);
         $this->get('admin/legacy-data', 'AdminController', 'legacyConcernData', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'view']]);
         $this->post('admin/legacy-data/assign', 'AdminController', 'assignLegacyConcernData', ['AuthMiddleware', ['PermissionMiddleware', 'staff', 'edit']]);
@@ -603,30 +554,6 @@ class Router {
         $this->get('admin/audit-logs', 'SystemController', 'auditLogs', ['AuthMiddleware', ['PermissionMiddleware', 'audit', 'view']]);
         $this->get('admin/change-password', 'AuthController', 'changePasswordForm', ['AuthMiddleware']);
         $this->post('admin/change-password', 'AuthController', 'changePassword', ['AuthMiddleware']);
-
-        // Production Units Management
-        $this->post('admin/production-units/store', 'AdminController', 'storeProductionUnit', ['AuthMiddleware']);
-        $this->post('admin/production-units/update/{id}', 'AdminController', 'updateProductionUnit', ['AuthMiddleware']);
-        $this->post('admin/production-units/delete/{id}', 'AdminController', 'deleteProductionUnit', ['AuthMiddleware']);
-        $this->post('admin/production-units/toggle/{id}', 'AdminController', 'toggleProductionUnit', ['AuthMiddleware']);
-        $this->post('api/admin/production-units/quick-add', 'AdminController', 'ajaxAddProductionUnit', ['AuthMiddleware']);
-
-        // Warehouses Management
-        $this->post('admin/warehouses/store', 'AdminController', 'storeWarehouse', ['AuthMiddleware']);
-        $this->post('admin/warehouses/update/{id}', 'AdminController', 'updateWarehouse', ['AuthMiddleware']);
-        $this->post('admin/warehouses/delete/{id}', 'AdminController', 'deleteWarehouse', ['AuthMiddleware']);
-        $this->post('admin/warehouses/toggle/{id}', 'AdminController', 'toggleWarehouse', ['AuthMiddleware']);
-
-        // Shops Management
-        $this->post('admin/shops/store', 'AdminController', 'storeShop', ['AuthMiddleware']);
-        $this->post('admin/shops/update/{id}', 'AdminController', 'updateShop', ['AuthMiddleware']);
-        $this->post('admin/shops/delete/{id}', 'AdminController', 'deleteShop', ['AuthMiddleware']);
-        $this->post('admin/shops/toggle/{id}', 'AdminController', 'toggleShop', ['AuthMiddleware']);
-
-        $this->post('admin/channels/store', 'AdminController', 'storeChannel', ['AuthMiddleware']);
-        $this->post('admin/channels/update/{id}', 'AdminController', 'updateChannel', ['AuthMiddleware']);
-        $this->post('admin/channels/delete/{id}', 'AdminController', 'deleteChannel', ['AuthMiddleware']);
-        $this->post('admin/channels/toggle/{id}', 'AdminController', 'toggleChannel', ['AuthMiddleware']);
 
         // ==========================================
         // MASTER DATA ROUTES
@@ -787,6 +714,8 @@ class Router {
         $this->get('production/dashboard', 'ProductionController', 'dashboard', ['AuthMiddleware', ['PermissionMiddleware', 'production', 'view']]);
         $this->get('production/inward', 'ProductionController', 'productionInwardIndex', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
         $this->post('production/inward/receive', 'ProductionController', 'receiveProductionInward', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
+        $this->post('production/inward/receive-batch', 'ProductionController', 'receiveConcernProductionBatch', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
+        $this->post('production/inward/update-batch-statuses', 'ProductionController', 'updateConcernBatchReceiptStatuses', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
         $this->get('api/production/inward/lookup', 'ProductionController', 'productionInwardLookup', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
         
         // Production Sellers
@@ -948,6 +877,7 @@ class Router {
         // Production Inventory (Post-QC Passed Inventory)
         $this->get('production/inventory', 'ProductionController', 'productionInventory', ['AuthMiddleware', ['PermissionMiddleware', 'inventory', 'view']]);
         $this->get('production/inventory/batch/{id}', 'ProductionController', 'productionInventoryBatch', ['AuthMiddleware', ['PermissionMiddleware', 'inventory', 'view']]);
+        $this->get('production/inventory/inward/{variantId}', 'ProductionController', 'productionInwardInventoryVariant', ['AuthMiddleware', ['PermissionMiddleware', 'inventory', 'view']]);
         $this->post('production/inventory/delete-piece', 'ProductionController', 'deleteProductionInventoryPiece', ['AuthMiddleware', ['PermissionMiddleware', 'inventory', 'delete']]);
 
         // Batch & Outward

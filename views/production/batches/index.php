@@ -25,7 +25,7 @@
                 </select>
             </div>
             <div class="col-md-3">
-                <label for="batchesWarehouseFilter" class="form-label small text-muted fw-semibold">Destination Warehouse</label>
+                <label for="batchesWarehouseFilter" class="form-label small text-muted fw-semibold">Legacy Warehouse Filter</label>
                 <select name="warehouse_id" id="batchesWarehouseFilter" class="form-select form-select-sm" onchange="document.getElementById('batchesFilterForm').submit()">
                     <option value="">All Warehouses</option>
                     <?php foreach ($warehouses as $w): ?>
@@ -43,7 +43,7 @@
                            name="search" 
                            id="batchesSearchInput" 
                            class="form-control form-control-sm border-start-0" 
-                           placeholder="Batch #, Program #, Product name, Warehouse..." 
+                           placeholder="Batch #, Program #, Product name, destination..."
                            value="<?= e($filters['search'] ?? '') ?>" 
                            autocomplete="off">
                     <?php if (!empty($filters['search'])): ?>
@@ -75,7 +75,7 @@
                         <th>Product</th>
                         <th>Total Pieces</th>
                         <th>Box Count</th>
-                        <th>Destination Warehouse</th>
+                        <th>Destination Concern / Warehouse</th>
                         <th>Packed By</th>
                         <th>Status</th>
                         <th class="text-end">Actions</th>
@@ -112,7 +112,8 @@
                                 $searchData = strtolower(
                                     ($b['batch_number'] ?? '') . ' ' . 
                                     ($b['program_number'] ?? '') . ' ' . 
-                                    ($b['product_name'] ?? '') . ' ' . 
+                                    ($b['product_name'] ?? '') . ' ' .
+                                    ($b['destination_concern_name'] ?? '') . ' ' .
                                     ($b['warehouse_name'] ?? '') . ' ' . 
                                     ($b['warehouse_code'] ?? '') . ' ' . 
                                     ($b['prepared_by_name'] ?? '') . ' ' . 
@@ -144,13 +145,13 @@
                                 </td>
                                 <td class="text-success fw-bold"><?= number_format($b['total_qty']) ?> pcs</td>
                                 <td><span class="fw-semibold"><?= number_format($b['box_count']) ?></span> boxes</td>
-                                <td><span class="badge bg-light text-dark border"><?= e($b['warehouse_name'] ?: 'Unassigned') ?></span></td>
+                                <td><span class="badge bg-light text-dark border"><?= e($b['destination_concern_name'] ?: $b['warehouse_name'] ?: 'Unassigned') ?></span></td>
                                 <td><?= e($b['prepared_by_name'] ?: 'Staff') ?></td>
                                 <td><span class="badge <?= $statusClass ?>"><?= e($b['status']) ?></span></td>
                                 <td class="text-end">
                                     <div class="d-inline-flex gap-1">
-                                        <a href="<?= url('production/batches/label/' . $b['id']) ?>" target="_blank" class="btn btn-sm btn-outline-secondary" title="Print Carton QR Label">
-                                            <i class="bi bi-qr-code me-1"></i> QR Sticker
+                                        <a href="<?= url('production/batches/label/' . $b['id']) ?>" target="_blank" class="btn btn-sm btn-outline-secondary" title="Print the outward batch QR label for inward receiving">
+                                            <i class="bi bi-qr-code me-1"></i> Batch Label
                                         </a>
                                         <?php if ($b['status'] === 'PREPARING' && hasPermission('batches', 'approve')): ?>
                                             <form method="POST" action="<?= url('production/batches/approve/' . $b['id']) ?>" class="d-inline" onsubmit="return confirm('Approve this batch for outward dispatch?');">
@@ -341,7 +342,7 @@ function viewBatchDispatchDetails(batchId) {
             if (elProgNum) elProgNum.textContent = batch.program_number || ('Program #' + batch.program_id);
 
             const elWhName = document.getElementById('vbdWarehouseName');
-            if (elWhName) elWhName.textContent = batch.warehouse_name || 'Unassigned';
+            if (elWhName) elWhName.textContent = batch.destination_concern_name || batch.warehouse_name || 'Unassigned';
             
             const totalQty = parseInt(batch.total_qty || 0);
             const boxCount = parseInt(batch.box_count || 1);

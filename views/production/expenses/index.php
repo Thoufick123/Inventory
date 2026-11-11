@@ -242,7 +242,7 @@
                                             'BOTH_UNITS'   => 'bg-dark text-white',
                                             default        => 'bg-secondary text-white'
                                         };
-                                        $unitLabel = match($e['production_unit']) {
+                                        $unitLabel = $productionUnitOptions[$e['production_unit']] ?? match($e['production_unit']) {
                                             'PRODUCTION_1' => 'Production Unit 1',
                                             'PRODUCTION_2' => 'Production Unit 2',
                                             'BOTH_UNITS'   => 'Both Units / Common',
@@ -429,6 +429,16 @@
             <form method="POST" action="<?= url('production/expenses/store') ?>" id="recordExpenseForm" enctype="multipart/form-data">
                 <?= CSRF::field() ?>
                 <div class="modal-body p-4">
+                    <?php if (!empty($productionUnits) && count($productionUnits) > 1): ?>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-dark required mb-1" for="newExpenseUnitId">Production Unit</label>
+                        <select name="production_unit_id" id="newExpenseUnitId" class="form-select" required>
+                            <?php foreach ($productionUnits as $unit): ?>
+                                <option value="<?= (int)$unit['id'] ?>"><?= e($unit['name']) ?><?= !empty($unit['code']) ? ' (' . e($unit['code']) . ')' : '' ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <?php endif; ?>
                     <div id="expenseLineItems" class="d-flex flex-column gap-2 mb-3"></div>
                     <div id="expenseItemsTotal" class="d-none p-2 bg-primary-subtle rounded-3 text-end fw-bold text-primary mb-3"></div>
                     <!-- 1. Expense Type Input with Side (+) Button -->

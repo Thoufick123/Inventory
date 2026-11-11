@@ -4,6 +4,14 @@ class ProductionInventoryDamage
 {
     public static function getAll(array $filters = []): array
     {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT d.*, qi.size_name, qi.color_name, qi.catalog_hierarchy,
                        qb.batch_number AS qc_batch_number,
                        pp.program_number, pp.name AS program_name,
@@ -16,15 +24,23 @@ class ProductionInventoryDamage
                 JOIN qc_batches qb ON qb.id = d.qc_batch_id
                 JOIN production_programs pp ON pp.id = d.program_id
                 LEFT JOIN products p ON p.id = pp.product_id
-                LEFT JOIN production_units pu ON pu.id = d.production_unit_id
+                LEFT JOIN production_units pu ON pu.id = COALESCE(d.production_unit_id, pp.production_unit_id)
                 LEFT JOIN users reporter ON reporter.id = d.reported_by
                 LEFT JOIN users resolver ON resolver.id = d.resolved_by
-                WHERE 1 = 1";
-        $params = [];
+                WHERE pu.concern_id = ?";
+        $params = [$concernId];
+        if ($scopedUnitId !== null) {
+            $sql .= " AND COALESCE(d.production_unit_id, pp.production_unit_id) = ?";
+            $params[] = $scopedUnitId;
+        }
 
         foreach (['status', 'source_stage', 'production_unit_id'] as $field) {
             if (!empty($filters[$field])) {
-                $sql .= " AND d.{$field} = ?";
+                if ($field === 'production_unit_id') {
+                    $sql .= " AND COALESCE(d.production_unit_id, pp.production_unit_id) = ?";
+                } else {
+                    $sql .= " AND d.{$field} = ?";
+                }
                 $params[] = $filters[$field];
             }
         }
@@ -43,6 +59,20 @@ class ProductionInventoryDamage
 
     public static function find(int $id): ?array
     {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND COALESCE(d.production_unit_id, pp.production_unit_id) = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT d.*, qi.size_name, qi.color_name, qi.catalog_hierarchy,
                     qb.batch_number AS qc_batch_number,
@@ -56,11 +86,11 @@ class ProductionInventoryDamage
              JOIN qc_batches qb ON qb.id = d.qc_batch_id
              JOIN production_programs pp ON pp.id = d.program_id
              LEFT JOIN products p ON p.id = pp.product_id
-             LEFT JOIN production_units pu ON pu.id = d.production_unit_id
+             LEFT JOIN production_units pu ON pu.id = COALESCE(d.production_unit_id, pp.production_unit_id)
              LEFT JOIN users reporter ON reporter.id = d.reported_by
              LEFT JOIN users resolver ON resolver.id = d.resolved_by
-             WHERE d.id = ?",
-            [$id]
+             WHERE d.id = ? AND pu.concern_id = ?{$unitClause}",
+            $params
         );
     }
 
@@ -115,21 +145,46 @@ class ProductionInventoryDamage
 
     public static function getSummaryStats(?int $productionUnitId = null): array
     {
-        $where = '';
-        $params = [];
-        if ($productionUnitId !== null) {
-            $where = ' WHERE production_unit_id = ?';
-            $params[] = $productionUnitId;
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [
+                'total_cases' => 0,
+                'quarantined_pieces' => 0,
+                'rework_pieces' => 0,
+                'restored_pieces' => 0,
+                'written_off_pieces' => 0,
+                'at_risk_value' => 0.0,
+            ];
+        }
+        $effectiveUnitId = $productionUnitId ?? (function_exists('currentProductionUnitId') ? currentProductionUnitId() : null);
+        if ($effectiveUnitId === 0) {
+            return [
+                'total_cases' => 0,
+                'quarantined_pieces' => 0,
+                'rework_pieces' => 0,
+                'restored_pieces' => 0,
+                'written_off_pieces' => 0,
+                'at_risk_value' => 0.0,
+            ];
+        }
+
+        $where = ' WHERE pu.concern_id = ?';
+        $params = [$concernId];
+        if ($effectiveUnitId !== null) {
+            $where .= ' AND COALESCE(d.production_unit_id, pp.production_unit_id) = ?';
+            $params[] = $effectiveUnitId;
         }
 
         $row = Database::fetchOne(
             "SELECT COUNT(*) AS total_cases,
-                    COALESCE(SUM(CASE WHEN status NOT IN ('REPAIRED','RESTOCKED') THEN 1 ELSE 0 END), 0) AS quarantined_pieces,
-                    COALESCE(SUM(CASE WHEN status = 'REWORK' THEN 1 ELSE 0 END), 0) AS rework_pieces,
-                    COALESCE(SUM(CASE WHEN status IN ('REPAIRED','RESTOCKED') THEN 1 ELSE 0 END), 0) AS restored_pieces,
-                    COALESCE(SUM(CASE WHEN status = 'WRITTEN_OFF' THEN 1 ELSE 0 END), 0) AS written_off_pieces,
-                    COALESCE(SUM(CASE WHEN status NOT IN ('REPAIRED','RESTOCKED','WRITTEN_OFF') THEN unit_value ELSE 0 END), 0) AS at_risk_value
-             FROM production_inventory_damages{$where}",
+                    COALESCE(SUM(CASE WHEN d.status NOT IN ('REPAIRED','RESTOCKED') THEN 1 ELSE 0 END), 0) AS quarantined_pieces,
+                    COALESCE(SUM(CASE WHEN d.status = 'REWORK' THEN 1 ELSE 0 END), 0) AS rework_pieces,
+                    COALESCE(SUM(CASE WHEN d.status IN ('REPAIRED','RESTOCKED') THEN 1 ELSE 0 END), 0) AS restored_pieces,
+                    COALESCE(SUM(CASE WHEN d.status = 'WRITTEN_OFF' THEN 1 ELSE 0 END), 0) AS written_off_pieces,
+                    COALESCE(SUM(CASE WHEN d.status NOT IN ('REPAIRED','RESTOCKED','WRITTEN_OFF') THEN d.unit_value ELSE 0 END), 0) AS at_risk_value
+             FROM production_inventory_damages d
+             JOIN production_programs pp ON pp.id = d.program_id
+             LEFT JOIN production_units pu ON pu.id = COALESCE(d.production_unit_id, pp.production_unit_id){$where}",
             $params
         ) ?: [];
 

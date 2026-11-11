@@ -332,6 +332,10 @@ function hasPermission(string $module, ?string $action = null): bool {
     }
     $action = $action ?? 'view';
 
+    if (isRetiredConcernModule($module)) {
+        return false;
+    }
+
     if (!hasRolePermission($module, $action)) {
         return false;
     }
@@ -343,7 +347,27 @@ function hasPermission(string $module, ?string $action = null): bool {
         return false;
     }
 
-    return isGlobalConcernModule($module) || concernHasModule($module);
+    return $isSuperAdminUser || isGlobalConcernModule($module) || concernHasModule($module);
+}
+
+function isRetiredConcernModule(string $module): bool {
+    static $retiredModules = [
+        'warehouse', 'inward', 'stock', 'wh_sellers', 'wh_catalog', 'wh_labels', 'purchases',
+        'purchases_returns', 'allocation', 'wh_batches', 'allocation_outward', 'damage', 'returns',
+        'shop_requests', 'warehouse_expenses',
+        'whatsapp_dashboard', 'whatsapp_orders', 'whatsapp_inward', 'whatsapp_inventory',
+        'whatsapp_damage', 'whatsapp_returns', 'whatsapp_return_to_wh', 'whatsapp_customers',
+        'whatsapp_expenses',
+        'website_dashboard', 'website_orders', 'website_inward', 'website_inventory',
+        'website_damage', 'website_returns', 'website_return_to_wh', 'website_customers',
+        'website_expenses',
+        'shop', 'shop_cash', 'shop_inward', 'shop_stock', 'shop_damage', 'pos', 'sales',
+        'customers', 'shop_returns', 'return_to_warehouse',
+        'reports_online', 'reports_website', 'reports_whatsapp', 'reports_warehouse',
+        'reports_purchase', 'reports_shop', 'reports_inventory',
+    ];
+
+    return in_array($module, $retiredModules, true);
 }
 
 function isGlobalConcernModule(string $module): bool {
@@ -439,8 +463,15 @@ function isSuperAdmin(): bool {
 
 function currentConcern(): ?array {
     static $resolved = false;
+    static $cachedUserId = null;
+    static $cachedConcernId = null;
     static $activeConcern = null;
-    if ($resolved) {
+
+    $user = currentUser();
+    $userId = (int)($user['id'] ?? 0);
+    $sessionConcernId = (int)Session::get('active_concern_id', 0);
+
+    if ($resolved && $cachedUserId === $userId && $cachedConcernId === $sessionConcernId) {
         return $activeConcern;
     }
 
@@ -448,6 +479,8 @@ function currentConcern(): ?array {
         require_once (defined('BASE_PATH') ? BASE_PATH : dirname(__DIR__, 2)) . '/app/Models/Concern.php';
     }
     $activeConcern = Concern::getActiveForCurrentUser();
+    $cachedUserId = $userId;
+    $cachedConcernId = (int)Session::get('active_concern_id', 0);
     $resolved = true;
     return $activeConcern;
 }

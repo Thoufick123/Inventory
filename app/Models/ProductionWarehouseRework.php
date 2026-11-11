@@ -10,6 +10,20 @@ class ProductionWarehouseRework {
      * Find rework record by ID.
      */
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND pwr.production_unit_id = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT pwr.*, 
                     w.name as warehouse_name, w.code as warehouse_code,
@@ -34,8 +48,8 @@ class ProductionWarehouseRework {
              LEFT JOIN production_units pu ON pwr.production_unit_id = pu.id
              LEFT JOIN users u_rec ON pwr.received_by = u_rec.id
              LEFT JOIN users u_cre ON pwr.created_by = u_cre.id
-             WHERE pwr.id = ?",
-            [$id]
+             WHERE pwr.id = ? AND COALESCE(pu.concern_id, pb.concern_id) = ?{$unitClause}",
+            $params
         );
     }
 
@@ -43,6 +57,14 @@ class ProductionWarehouseRework {
      * Get all rework records with filters.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $scopedUnitId = $filters['production_unit_id'] ?? (function_exists('currentProductionUnitId') ? currentProductionUnitId() : null);
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT pwr.*, 
                        w.name as warehouse_name, w.code as warehouse_code,
                        pv.sku, pv.qr_code, pv.selling_price, pv.mrp, pv.production_cost,
@@ -66,8 +88,8 @@ class ProductionWarehouseRework {
                 LEFT JOIN production_units pu ON pwr.production_unit_id = pu.id
                 LEFT JOIN users u_rec ON pwr.received_by = u_rec.id
                 LEFT JOIN users u_cre ON pwr.created_by = u_cre.id
-                WHERE 1=1";
-        $params = [];
+                WHERE COALESCE(pu.concern_id, pb.concern_id) = ?";
+        $params = [$concernId];
 
         if (!empty($filters['status'])) {
             $sql .= " AND pwr.status = ?";
@@ -94,9 +116,9 @@ class ProductionWarehouseRework {
             $params[] = $filters['date_to'];
         }
 
-        if (!empty($filters['production_unit_id'])) {
-            $sql .= " AND (pwr.production_unit_id = ? OR pwr.production_unit_id IS NULL)";
-            $params[] = (int)$filters['production_unit_id'];
+        if ($scopedUnitId !== null && $scopedUnitId !== '') {
+            $sql .= " AND pwr.production_unit_id = ?";
+            $params[] = (int)$scopedUnitId;
         }
 
         if (!empty($filters['search'])) {
@@ -217,25 +239,54 @@ class ProductionWarehouseRework {
      * Compute statistics for KPIs.
      */
     public static function getStats(array $filters = []): array {
-        $scopedUnitId = $filters['production_unit_id'] ?? null;
-        $unitClause = $scopedUnitId ? " AND (pwr.production_unit_id = $scopedUnitId OR pwr.production_unit_id IS NULL)" : "";
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [
+                'total_records' => 0, 'total_pieces' => 0,
+                'count_received' => 0, 'qty_received' => 0,
+                'count_in_rework' => 0, 'qty_in_rework' => 0,
+                'count_repaired' => 0, 'qty_repaired' => 0,
+                'count_scrapped' => 0, 'qty_scrapped' => 0,
+                'count_redispatched' => 0, 'qty_redispatched' => 0,
+            ];
+        }
+        $scopedUnitId = $filters['production_unit_id'] ?? (function_exists('currentProductionUnitId') ? currentProductionUnitId() : null);
+        if ($scopedUnitId === 0) {
+            return [
+                'total_records' => 0, 'total_pieces' => 0,
+                'count_received' => 0, 'qty_received' => 0,
+                'count_in_rework' => 0, 'qty_in_rework' => 0,
+                'count_repaired' => 0, 'qty_repaired' => 0,
+                'count_scrapped' => 0, 'qty_scrapped' => 0,
+                'count_redispatched' => 0, 'qty_redispatched' => 0,
+            ];
+        }
+        $params = [$concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null && $scopedUnitId !== '') {
+            $unitClause = ' AND pwr.production_unit_id = ?';
+            $params[] = (int)$scopedUnitId;
+        }
 
         $row = Database::fetchOne(
             "SELECT 
                 COUNT(*) as total_records,
-                COALESCE(SUM(quantity), 0) as total_pieces,
-                COALESCE(SUM(CASE WHEN status = 'RECEIVED' THEN 1 ELSE 0 END), 0) as count_received,
-                COALESCE(SUM(CASE WHEN status = 'RECEIVED' THEN quantity ELSE 0 END), 0) as qty_received,
-                COALESCE(SUM(CASE WHEN status = 'IN_REWORK' THEN 1 ELSE 0 END), 0) as count_in_rework,
-                COALESCE(SUM(CASE WHEN status = 'IN_REWORK' THEN quantity ELSE 0 END), 0) as qty_in_rework,
-                COALESCE(SUM(CASE WHEN status = 'REPAIRED' THEN 1 ELSE 0 END), 0) as count_repaired,
-                COALESCE(SUM(repaired_qty), 0) as qty_repaired,
-                COALESCE(SUM(CASE WHEN status = 'SCRAPPED' THEN 1 ELSE 0 END), 0) as count_scrapped,
-                COALESCE(SUM(scrapped_qty), 0) as qty_scrapped,
-                COALESCE(SUM(CASE WHEN status = 'RE_DISPATCHED' THEN 1 ELSE 0 END), 0) as count_redispatched,
-                COALESCE(SUM(CASE WHEN status = 'RE_DISPATCHED' THEN quantity ELSE 0 END), 0) as qty_redispatched
+                COALESCE(SUM(pwr.quantity), 0) as total_pieces,
+                COALESCE(SUM(CASE WHEN pwr.status = 'RECEIVED' THEN 1 ELSE 0 END), 0) as count_received,
+                COALESCE(SUM(CASE WHEN pwr.status = 'RECEIVED' THEN pwr.quantity ELSE 0 END), 0) as qty_received,
+                COALESCE(SUM(CASE WHEN pwr.status = 'IN_REWORK' THEN 1 ELSE 0 END), 0) as count_in_rework,
+                COALESCE(SUM(CASE WHEN pwr.status = 'IN_REWORK' THEN pwr.quantity ELSE 0 END), 0) as qty_in_rework,
+                COALESCE(SUM(CASE WHEN pwr.status = 'REPAIRED' THEN 1 ELSE 0 END), 0) as count_repaired,
+                COALESCE(SUM(pwr.repaired_qty), 0) as qty_repaired,
+                COALESCE(SUM(CASE WHEN pwr.status = 'SCRAPPED' THEN 1 ELSE 0 END), 0) as count_scrapped,
+                COALESCE(SUM(pwr.scrapped_qty), 0) as qty_scrapped,
+                COALESCE(SUM(CASE WHEN pwr.status = 'RE_DISPATCHED' THEN 1 ELSE 0 END), 0) as count_redispatched,
+                COALESCE(SUM(CASE WHEN pwr.status = 'RE_DISPATCHED' THEN pwr.quantity ELSE 0 END), 0) as qty_redispatched
              FROM production_warehouse_reworks pwr
-             WHERE 1=1 $unitClause"
+             LEFT JOIN production_units pu ON pwr.production_unit_id = pu.id
+             LEFT JOIN production_batches pb ON pwr.production_batch_id = pb.id
+             WHERE COALESCE(pu.concern_id, pb.concern_id) = ?{$unitClause}",
+            $params
         );
 
         return [

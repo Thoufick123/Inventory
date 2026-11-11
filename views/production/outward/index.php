@@ -1,7 +1,7 @@
 <div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4">
     <div>
         <h2 class="mb-1"><i class="bi bi-truck me-2 text-primary"></i>Production Outward &amp; Dispatch</h2>
-        <span class="text-muted">Dispatch finished production boxes to central warehouses with vehicle tracking</span>
+        <span class="text-muted">Dispatch finished production batches to their selected destination with vehicle tracking</span>
     </div>
     <?php if (!empty($approvedBatches) && hasPermission('outward', 'create')): ?>
         <button type="button" class="btn btn-primary shadow-sm" onclick="openDispatchModal(null)">
@@ -13,7 +13,7 @@
 <div class="card border-0 shadow-sm mb-4">
     <div class="card-body">
         <form method="GET" action="<?= url('production/outward') ?>" class="row g-3 align-items-end">
-            <div class="col-lg-5"><label class="form-label small fw-semibold">Search outward, batch, vehicle, transporter</label><input type="search" name="search" class="form-control" value="<?= e($search) ?>" placeholder="Outward #, batch #, program, vehicle, LR"></div>
+            <div class="col-lg-5"><label class="form-label small fw-semibold">Search outward, batch, destination, vehicle, transporter</label><input type="search" name="search" class="form-control" value="<?= e($search) ?>" placeholder="Outward #, batch #, concern, vehicle, LR"></div>
             <div class="col-lg-3"><label class="form-label small fw-semibold">Destination Warehouse</label><select name="warehouse_id" class="form-select"><option value="">All warehouses</option><?php foreach ($warehouses as $warehouse): ?><option value="<?= (int)$warehouse['id'] ?>" <?= (int)$warehouseId === (int)$warehouse['id'] ? 'selected' : '' ?>><?= e($warehouse['name']) ?><?= !empty($warehouse['code']) ? ' (' . e($warehouse['code']) . ')' : '' ?></option><?php endforeach; ?></select></div>
             <div class="col-lg-2"><label class="form-label small fw-semibold">Status</label><select name="status" class="form-select"><option value="">All statuses</option><?php foreach (['DISPATCHED', 'RECEIVED', 'DISCREPANCY'] as $statusOption): ?><option value="<?= e($statusOption) ?>" <?= $currentStatus === $statusOption ? 'selected' : '' ?>><?= e($statusOption) ?></option><?php endforeach; ?></select></div>
             <div class="col-lg-2 d-flex gap-2"><button class="btn btn-primary flex-grow-1" type="submit"><i class="bi bi-funnel me-1"></i>Filter</button><a class="btn btn-outline-secondary" href="<?= url('production/outward') ?>" title="Clear filters"><i class="bi bi-x-lg"></i></a></div>
@@ -44,7 +44,7 @@
                             <th style="width: 50px;">#</th>
                             <th>Production Batch</th>
                             <th>Product &amp; Program</th>
-                            <th>Destination Warehouse</th>
+                            <th>Destination Concern / Warehouse</th>
                             <th>Total Pieces &amp; Boxes</th>
                             <th>Status</th>
                             <th class="text-end" style="min-width: 160px;">Action</th>
@@ -68,7 +68,7 @@
                                 </td>
                                 <td>
                                     <span class="badge bg-light text-dark border px-2 py-1">
-                                        <i class="bi bi-geo-alt text-primary me-1"></i><?= e($ab['warehouse_name']) ?>
+                                        <i class="bi bi-geo-alt text-primary me-1"></i><?= e($ab['destination_concern_name'] ?: $ab['warehouse_name'] ?: 'Unassigned') ?>
                                     </span>
                                 </td>
                                 <td>
@@ -142,6 +142,7 @@
                                     ($o['outward_number'] ?? '') . ' ' . 
                                     ($o['batch_number'] ?? '') . ' ' . 
                                     ($o['product_name'] ?? '') . ' ' . 
+                                    ($o['destination_concern_name'] ?? '') . ' ' .
                                     ($o['warehouse_name'] ?? '') . ' ' . 
                                     ($o['vehicle_number'] ?? '') . ' ' . 
                                     ($o['driver_name'] ?? '') . ' ' .
@@ -161,7 +162,7 @@
                                 </td>
                                 <td><code class="fw-bold text-dark"><?= e($o['batch_number']) ?></code></td>
                                 <td><?= e($o['product_name']) ?></td>
-                                <td><span class="badge bg-light text-dark border"><?= e($o['warehouse_name']) ?></span></td>
+                                <td><span class="badge bg-light text-dark border"><?= e($o['destination_concern_name'] ?: $o['warehouse_name'] ?: 'Unassigned') ?></span></td>
                                 <td class="text-success fw-bold"><?= number_format($o['total_qty']) ?> pcs (<?= $o['box_count'] ?> <?= $o['box_count'] == 1 ? 'box' : 'boxes' ?>)</td>
                                 <td><span class="badge bg-dark font-monospace"><?= e($o['vehicle_number'] ?: 'Direct Handover') ?></span></td>
                                 <td><?= formatDateTime($o['dispatch_date']) ?></td>
@@ -171,6 +172,11 @@
                                     <?php if (!empty($o['received_date'])): ?><small class="d-block text-muted mt-1">Received <?= e(formatDateTime($o['received_date'])) ?></small><?php endif; ?>
                                 </td>
                                 <td class="text-end">
+                                    <?php if (!empty($o['production_batch_id']) && hasPermission('batches', 'print')): ?>
+                                        <a href="<?= url('production/batches/label/' . (int)$o['production_batch_id']) ?>" target="_blank" class="btn btn-sm btn-outline-secondary fw-semibold" title="Print the QR label for receiving this outward batch">
+                                            <i class="bi bi-qr-code me-1"></i> Batch Label
+                                        </a>
+                                    <?php endif; ?>
                                     <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" onclick="viewOutwardDispatchDetails(<?= $o['id'] ?>)" title="View Outward & Product Breakdown">
                                         <i class="bi bi-eye me-1"></i> View
                                     </button>
@@ -263,6 +269,16 @@
                         <div class="p-2 bg-white border rounded small text-dark" id="vodNotes"></div>
                     </div>
 
+                    <div class="alert alert-warning mb-4" id="vodDiscrepancyContainer" style="display: none;">
+                        <h6 class="fw-bold mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Receipt discrepancy reported by receiving concern</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-bordered align-middle mb-0 bg-white">
+                                <thead class="table-light"><tr><th>SKU / Variant</th><th>Dispatched</th><th>Received</th><th>Missing QR codes</th><th>Extra QR codes</th></tr></thead>
+                                <tbody id="vodDiscrepancyTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     <div>
                         <h6 class="fw-bold mb-2"><i class="bi bi-layers-fill text-primary me-1"></i> Dispatched Variant Items Breakdown</h6>
                         <div class="table-responsive border rounded-3">
@@ -319,10 +335,10 @@
                                 <option value="<?= $ab['id'] ?>" 
                                         data-batch-number="<?= e($ab['batch_number']) ?>"
                                         data-product="<?= e($ab['product_name']) ?>"
-                                        data-warehouse="<?= e($ab['warehouse_name']) ?>"
+                                        data-warehouse="<?= e($ab['destination_concern_name'] ?: $ab['warehouse_name'] ?: 'Unassigned') ?>"
                                         data-qty="<?= $ab['total_qty'] ?>"
                                         data-boxes="<?= $ab['box_count'] ?>">
-                                    <?= e($ab['batch_number']) ?> — <?= e($ab['product_name']) ?> (<?= number_format($ab['total_qty']) ?> pcs &rarr; <?= e($ab['warehouse_name']) ?>)
+                                    <?= e($ab['batch_number']) ?> — <?= e($ab['product_name']) ?> (<?= number_format($ab['total_qty']) ?> pcs &rarr; <?= e($ab['destination_concern_name'] ?: $ab['warehouse_name'] ?: 'Unassigned') ?>)
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -366,7 +382,7 @@
 </div>
 
 <script>
-window.approvedBatchesData = <?= json_encode($approvedBatches) ?>;
+window.approvedBatchesData = <?= json_encode($approvedBatches, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
 
 function openDispatchModal(batchData) {
     const modalEl = document.getElementById('newOutwardModal');
@@ -398,8 +414,8 @@ function updateModalBatchSummary(batchId) {
 
     const batch = window.approvedBatchesData.find(b => b.id == batchId);
     if (batch) {
-        titleEl.innerHTML = `<i class="bi bi-box-seam me-1 text-primary"></i> ${batch.batch_number} — ${batch.product_name}`;
-        detailsEl.innerHTML = `<strong>Destination:</strong> ${batch.warehouse_name} &nbsp;|&nbsp; <strong>Quantity:</strong> <span class="text-success fw-bold">${parseInt(batch.total_qty).toLocaleString()} pcs</span> (${batch.box_count} ${batch.box_count == 1 ? 'box' : 'boxes'})`;
+        titleEl.textContent = `${batch.batch_number} — ${batch.product_name}`;
+        detailsEl.textContent = `Destination: ${batch.destination_concern_name || batch.warehouse_name || 'Unassigned'} | Quantity: ${parseInt(batch.total_qty).toLocaleString()} pcs (${batch.box_count} ${batch.box_count == 1 ? 'box' : 'boxes'})`;
         const boxInput = document.getElementById('outward_total_boxes');
         if (boxInput) boxInput.value = Math.max(1, parseInt(batch.box_count || 1));
     } else {
@@ -467,6 +483,7 @@ function viewOutwardDispatchDetails(outwardId) {
             const outward = data.outward || {};
             const batch = data.batch || {};
             const items = data.items || [];
+            const discrepancies = data.discrepancies || [];
             const outwardStatus = outward.status || 'DISPATCHED';
 
             document.getElementById('vodOutwardNumber').textContent = outward.outward_number || ('Outward #' + outward.id);
@@ -476,7 +493,7 @@ function viewOutwardDispatchDetails(outwardId) {
             document.getElementById('vodBatchNumber').textContent = batch.batch_number || outward.batch_number || '—';
             document.getElementById('vodProductName').textContent = batch.product_name || outward.product_name || 'Finished Product';
             document.getElementById('vodProgramNumber').textContent = batch.program_number || outward.program_number || '—';
-            document.getElementById('vodWarehouseName').textContent = batch.warehouse_name || outward.warehouse_name || 'Unassigned';
+            document.getElementById('vodWarehouseName').textContent = batch.destination_concern_name || outward.destination_concern_name || batch.warehouse_name || outward.warehouse_name || 'Unassigned';
 
             const totalQty = parseInt(outward.total_qty || batch.total_qty || 0);
             const boxCount = parseInt(outward.box_count || batch.box_count || 1);
@@ -500,6 +517,29 @@ function viewOutwardDispatchDetails(outwardId) {
                 notesContainer.style.display = 'block';
             } else {
                 notesContainer.style.display = 'none';
+            }
+
+            const discrepancyContainer = document.getElementById('vodDiscrepancyContainer');
+            const discrepancyBody = document.getElementById('vodDiscrepancyTableBody');
+            discrepancyBody.replaceChildren();
+            if (discrepancies.some(item => Number(item.missing_qty || 0) > 0 || Number(item.excess_qty || 0) > 0 || Number(item.damaged_qty || 0) > 0)) {
+                discrepancies.forEach(item => {
+                    if (Number(item.missing_qty || 0) === 0 && Number(item.excess_qty || 0) === 0 && Number(item.damaged_qty || 0) === 0) return;
+                    const row = discrepancyBody.insertRow();
+                    const variant = row.insertCell();
+                    variant.textContent = [item.sku || '—', item.product_name, item.size_name, item.color_name].filter(Boolean).join(' · ');
+                    const dispatched = row.insertCell();
+                    dispatched.textContent = Number(item.dispatched_qty || 0).toLocaleString();
+                    const received = row.insertCell();
+                    received.textContent = `${(Number(item.quantity || 0) + Number(item.damaged_qty || 0)).toLocaleString()} (${Number(item.damaged_qty || 0).toLocaleString()} damaged)`;
+                    const missing = row.insertCell();
+                    missing.textContent = item.missing_codes || (Number(item.missing_qty || 0) ? `${Number(item.missing_qty).toLocaleString()} QR code(s) not identified` : '—');
+                    const extra = row.insertCell();
+                    extra.textContent = item.excess_codes || '—';
+                });
+                discrepancyContainer.style.display = 'block';
+            } else {
+                discrepancyContainer.style.display = 'none';
             }
 
             // Variant Items Breakdown

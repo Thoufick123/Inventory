@@ -204,7 +204,7 @@ foreach ($hierarchicalModules as $m) {
                                         <tr class="text-uppercase small text-muted" style="font-size: 11px;">
                                             <th class="ps-3 py-2" style="width: 36%;">Submodule</th>
                                             <th class="text-center py-2" style="width: 14%;">View</th>
-                                            <th class="text-center py-2" style="width: 14%;">Create</th>
+                                            <th class="text-center py-2" style="width: 14%;">Create / Receive</th>
                                             <th class="text-center py-2" style="width: 14%;">Edit</th>
                                             <th class="text-center py-2" style="width: 14%;">Delete</th>
                                             <th class="text-center pe-3 py-2" style="width: 8%;">Row All</th>
@@ -238,8 +238,9 @@ foreach ($hierarchicalModules as $m) {
                                                         <?php if (!empty($columnPermissions)): ?>
                                                             <div class="d-flex flex-column align-items-center gap-1">
                                                                 <?php foreach ($columnPermissions as $permissionAction => $permission): ?>
+                                                                    <?php $permissionColumnAction = $permissionAction === 'receive' ? 'receive' : $crudAction; ?>
                                                                     <label class="form-check-label d-inline-flex align-items-center justify-content-center gap-1 small" title="<?= e($permission['description'] ?? ucfirst($permissionAction)) ?>">
-                                                                        <input class="form-check-input perm-check perm-<?= e($crudAction) ?> mod-<?= e($modKey) ?> row-<?= e($subKey) ?>"
+                                                                        <input class="form-check-input perm-check perm-<?= e($permissionColumnAction) ?> mod-<?= e($modKey) ?> row-<?= e($subKey) ?>"
                                                                                type="checkbox"
                                                                                name="permissions[]"
                                                                                value="<?= $permission['id'] ?>"
@@ -389,8 +390,8 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     document.getElementById('btnSelectAllView')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-view', true); });
     document.getElementById('btnDeselectAllView')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-view', false); });
-    document.getElementById('btnSelectAllCreate')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-create', true); });
-    document.getElementById('btnDeselectAllCreate')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-create', false); });
+    document.getElementById('btnSelectAllCreate')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-create, .perm-receive', true); });
+    document.getElementById('btnDeselectAllCreate')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-create, .perm-receive', false); });
     document.getElementById('btnSelectAllEdit')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-edit', true); });
     document.getElementById('btnDeselectAllEdit')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-edit', false); });
     document.getElementById('btnSelectAllDelete')?.addEventListener('click', (e) => { e.preventDefault(); setColState('.perm-delete', true); });

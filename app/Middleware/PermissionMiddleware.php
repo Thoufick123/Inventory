@@ -15,9 +15,25 @@ class PermissionMiddleware {
         if (!isGlobalConcernModule($module)) {
             $concern = function_exists('currentConcern') ? currentConcern() : null;
             if (!$concern) {
+                if ($this->isAjax()) {
+                    Response::json([
+                        'success' => false,
+                        'error'   => 'Select an active concern before opening operational modules.',
+                    ], 403);
+                }
+                if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET' && !empty($_SERVER['REQUEST_URI']) && class_exists('Session')) {
+                    Session::set('_intended_url', $_SERVER['REQUEST_URI']);
+                }
                 Response::redirect(url('admin/concern/select'), 'error', 'Select an active concern before opening operational modules.');
             }
-            if (!concernHasModule($module)) {
+            $isSuperAdminUser = function_exists('isSuperAdmin') && isSuperAdmin();
+            if (!$isSuperAdminUser && !concernHasModule($module)) {
+                if ($this->isAjax()) {
+                    Response::json([
+                        'success' => false,
+                        'error'   => 'This module is not assigned to the active concern.',
+                    ], 403);
+                }
                 Response::error(403, 'This module is not assigned to the active concern.');
             }
         }
@@ -35,7 +51,6 @@ class PermissionMiddleware {
 
             Response::error(403, "Your assigned role does not have permission to {$readableAction} in {$readableModule}.");
         }
-
     }
 
     /**

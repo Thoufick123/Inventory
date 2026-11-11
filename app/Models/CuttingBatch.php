@@ -10,6 +10,20 @@ class CuttingBatch {
      * Find cutting batch by ID.
      */
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND COALESCE(cb.production_unit_id, pp.production_unit_id) = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT cb.*, 
                     pp.name as program_name, pp.program_number, pp.target_date, pp.start_date, pp.end_date,
@@ -28,11 +42,11 @@ class CuttingBatch {
              LEFT JOIN categories c ON (cb.category_id = c.id OR pp.category_id = c.id)
              LEFT JOIN subcategories sc ON (cb.subcategory_id = sc.id OR pp.subcategory_id = sc.id)
              LEFT JOIN sub_subcategories ssc ON (cb.sub_subcategory_id = ssc.id OR pp.sub_subcategory_id = ssc.id)
-             LEFT JOIN production_units pu ON (cb.production_unit_id = pu.id OR pp.production_unit_id = pu.id)
+             LEFT JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN users u ON cb.operator_id = u.id
-             WHERE cb.id = ?",
-            [$id]
+             WHERE cb.id = ? AND pu.concern_id = ?{$unitClause}",
+            $params
         );
     }
 
@@ -40,12 +54,27 @@ class CuttingBatch {
      * Find cutting batch by batch number.
      */
     public static function findByNumber(string $batchNumber): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$batchNumber, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND COALESCE(cb.production_unit_id, pp.production_unit_id) = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT cb.*, pp.name as program_name, pp.program_number 
              FROM cutting_batches cb
              LEFT JOIN production_programs pp ON cb.program_id = pp.id
-             WHERE cb.batch_number = ?",
-            [$batchNumber]
+             LEFT JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id
+             WHERE cb.batch_number = ? AND pu.concern_id = ?{$unitClause}",
+            $params
         );
     }
 
@@ -53,6 +82,14 @@ class CuttingBatch {
      * Get all cutting batches with filters.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT cb.*, 
                        pp.name as program_name, pp.program_number, 
                        sr.roll_number, sr.color as roll_color, sr.design_name as roll_design,
@@ -70,11 +107,15 @@ class CuttingBatch {
                 LEFT JOIN categories c ON (cb.category_id = c.id OR pp.category_id = c.id)
                 LEFT JOIN subcategories sc ON (cb.subcategory_id = sc.id OR pp.subcategory_id = sc.id)
                 LEFT JOIN sub_subcategories ssc ON (cb.sub_subcategory_id = ssc.id OR pp.sub_subcategory_id = ssc.id)
-                LEFT JOIN production_units pu ON (cb.production_unit_id = pu.id OR pp.production_unit_id = pu.id)
+                LEFT JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN users u ON cb.operator_id = u.id
-                WHERE 1=1";
-        $params = [];
+                WHERE pu.concern_id = ?";
+        $params = [$concernId];
+        if ($scopedUnitId !== null) {
+            $sql .= " AND COALESCE(cb.production_unit_id, pp.production_unit_id) = ?";
+            $params[] = $scopedUnitId;
+        }
 
         if (!empty($filters['status'])) {
             $sql .= " AND cb.status = ?";

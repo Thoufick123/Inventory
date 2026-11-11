@@ -638,6 +638,12 @@ class StockService {
                 $assignmentHelper = 'currentProductionUnitId';
                 $facilityType = 'PRODUCTION';
                 break;
+            case 'CONCERN':
+                $facility = Database::fetchOne(
+                    "SELECT id FROM concerns WHERE id = ? AND id = ? AND is_active = 1",
+                    [$locationId, $concernId]
+                );
+                break;
             case 'CHANNEL':
                 $facility = Database::fetchOne(
                     "SELECT id, channel_type, name, code
@@ -669,6 +675,9 @@ class StockService {
 
         if (!$facility) {
             throw new InvalidArgumentException('The stock facility must be active and belong to the active concern.');
+        }
+        if ($locationType === 'CONCERN') {
+            return $concernId;
         }
         if ($facilityType === null || !Concern::hasFacilityModules($concernId, $facilityType)) {
             throw new InvalidArgumentException('The active concern does not have a compatible module enabled for this stock facility.');

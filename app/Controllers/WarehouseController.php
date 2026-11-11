@@ -14149,39 +14149,6 @@ class WarehouseController {
         Response::redirect(url('warehouse/expenses'));
     }
 
-    // ==========================================
-    // DELEGATED WHATSAPP & WEBSITE CONTROLLER METHODS
-    // (Maintained for backwards compatibility)
-    // ==========================================
-
-    public function whatsappChannelOrders(): void { (new WhatsappController())->index(); }
-    public function whatsappInwardIndex(): void { (new WhatsappController())->whatsappInwardIndex(); }
-    public function receiveWhatsappInward(int $id): void { (new WhatsappController())->receiveWhatsappInward($id); }
-    public function whatsappAllocations(): void { (new WhatsappController())->whatsappAllocations(); }
-    public function createWhatsappStockRequest(): void { (new WhatsappController())->createWhatsappStockRequest(); }
-    public function storeWhatsappStockRequest(): void { (new WhatsappController())->storeWhatsappStockRequest(); }
-    public function whatsappOrdersHistory(): void { (new WhatsappController())->whatsappOrdersHistory(); }
-    public function whatsappReturnsIndex(): void { (new WhatsappController())->whatsappReturnsIndex(); }
-    public function whatsappReturnsLookup(): void { (new WhatsappController())->whatsappReturnsLookup(); }
-    public function processWhatsappReturn(): void { (new WhatsappController())->processWhatsappReturn(); }
-    public function whatsappReturnInvoice(int $id): void { (new WhatsappController())->whatsappReturnInvoice($id); }
-    public function whatsappReturnView(int $id): void { (new WhatsappController())->whatsappReturnView($id); }
-    public function whatsappCustomers(): void { (new WhatsappController())->whatsappCustomers(); }
-
-    public function websiteChannelOrders(): void { (new WebsiteController())->index(); }
-    public function websiteInwardIndex(): void { (new WebsiteController())->websiteInwardIndex(); }
-    public function receiveWebsiteInward(int $id): void { (new WebsiteController())->receiveWebsiteInward($id); }
-    public function websiteAllocations(): void { (new WebsiteController())->websiteAllocations(); }
-    public function createWebsiteStockRequest(): void { (new WebsiteController())->createWebsiteStockRequest(); }
-    public function storeWebsiteStockRequest(): void { (new WebsiteController())->storeWebsiteStockRequest(); }
-    public function websiteOrdersHistory(): void { (new WebsiteController())->websiteOrdersHistory(); }
-    public function websiteReturnsIndex(): void { (new WebsiteController())->websiteReturnsIndex(); }
-    public function websiteReturnsLookup(): void { (new WebsiteController())->websiteReturnsLookup(); }
-    public function processWebsiteReturn(): void { (new WebsiteController())->processWebsiteReturn(); }
-    public function websiteReturnInvoice(int $id): void { (new WebsiteController())->websiteReturnInvoice($id); }
-    public function websiteReturnView(int $id): void { (new WebsiteController())->websiteReturnView($id); }
-    public function websiteCustomers(): void { (new WebsiteController())->websiteCustomers(); }
-
     /**
      * Resolve an existing product variant by SKU/name, or create product + variant on-the-fly.
      * Used by storeSeller() and storeThirdPartyPurchase() when the user enters text-based product lines.

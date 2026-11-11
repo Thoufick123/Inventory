@@ -10,6 +10,20 @@ class QCBatch {
      * Find QC batch by ID.
      */
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND pp.production_unit_id = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT qb.*, 
                     pp.program_number, pp.target_date, pp.name as program_name,
@@ -25,6 +39,7 @@ class QCBatch {
                     u.full_name as inspector_name
              FROM qc_batches qb
              JOIN production_programs pp ON qb.program_id = pp.id
+             LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN categories c ON p.category_id = c.id
              LEFT JOIN categories c_pp ON pp.category_id = c_pp.id
@@ -35,8 +50,8 @@ class QCBatch {
              LEFT JOIN stitching_batches sb ON qb.stitching_batch_id = sb.id
              LEFT JOIN label_batches lb ON qb.label_batch_id = lb.id
              LEFT JOIN users u ON qb.inspector_id = u.id
-             WHERE qb.id = ?",
-            [$id]
+             WHERE qb.id = ? AND pu.concern_id = ?{$unitClause}",
+            $params
         );
     }
 
@@ -44,6 +59,14 @@ class QCBatch {
      * Get all QC batches with filters.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT qb.*, 
                        pp.program_number, pp.name as program_name,
                        p.name as product_name, p.code as product_code,
@@ -59,10 +82,15 @@ class QCBatch {
                        (SELECT pb.status FROM production_batches pb WHERE pb.qc_batch_id = qb.id AND pb.status != 'CANCELLED' ORDER BY pb.id DESC LIMIT 1) as packed_batch_status
                 FROM qc_batches qb
                 LEFT JOIN production_programs pp ON qb.program_id = pp.id
+                LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN users u ON qb.inspector_id = u.id
-                WHERE 1=1";
-        $params = [];
+                WHERE pu.concern_id = ?";
+        $params = [$concernId];
+        if ($scopedUnitId !== null) {
+            $sql .= " AND pp.production_unit_id = ?";
+            $params[] = $scopedUnitId;
+        }
 
         if (!empty($filters['status'])) {
             $st = strtoupper(trim($filters['status']));

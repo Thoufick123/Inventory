@@ -1,6 +1,6 @@
 <div class="page-header mb-4">
     <h2><i class="bi bi-box-seam me-2 text-success"></i>Pack Finished Production Batch</h2>
-    <span class="text-muted">Pack QC-passed goods into delivery boxes and assign destination warehouse</span>
+    <span class="text-muted">Pack QC-passed goods and choose the concern that will receive them through Production Inward</span>
 </div>
 
 <?php if ($selectedQC && ($selectedQC['remaining_qty'] ?? 1) <= 0 && ($selectedQC['already_packed_qty'] ?? 0) > 0): ?>
@@ -21,8 +21,8 @@
                         <?php foreach ($existingBatches as $eb): ?>
                             <span class="badge bg-white text-dark border shadow-xs p-2">
                                 <i class="bi bi-box-seam me-1 text-primary"></i> <strong>Batch #<?= e($eb['batch_number']) ?></strong> &bull; <?= $eb['total_qty'] ?> pcs &bull; Status: <span class="badge bg-<?= $eb['status'] === 'DISPATCHED' ? 'warning-subtle text-dark border' : 'success' ?>"><?= e($eb['status']) ?></span>
-                                <?php if (!empty($eb['warehouse_name'])): ?>
-                                    &rarr; <?= e($eb['warehouse_name']) ?>
+                                <?php if (!empty($eb['destination_concern_name']) || !empty($eb['warehouse_name'])): ?>
+                                    &rarr; <?= e($eb['destination_concern_name'] ?: $eb['warehouse_name']) ?>
                                 <?php endif; ?>
                             </span>
                         <?php endforeach; ?>
@@ -95,13 +95,17 @@
                     <?php endif; ?>
 
                     <div class="mb-3">
-                        <label class="form-label fw-semibold required">Destination Warehouse <span class="text-danger">*</span></label>
-                        <select name="destination_warehouse_id" id="destination_warehouse_id" class="form-select" required>
-                            <option value="">-- Select Warehouse --</option>
-                            <?php foreach ($warehouses as $w): ?>
-                                <option value="<?= $w['id'] ?>"><?= e($w['name']) ?> (<?= e($w['code']) ?>)</option>
+                        <label class="form-label fw-semibold required">Destination Concern <span class="text-danger">*</span></label>
+                        <select name="destination_concern_id" id="destination_concern_id" class="form-select" required>
+                            <option value="">-- Select Receiving Concern --</option>
+                            <?php foreach ($destinationConcerns as $concern): ?>
+                                <option value="<?= (int)$concern['id'] ?>"><?= e($concern['name']) ?></option>
                             <?php endforeach; ?>
                         </select>
+                        <div class="form-text small text-muted">The selected concern will receive this batch in its Production Inward module after dispatch.</div>
+                        <?php if (empty($destinationConcerns)): ?>
+                            <div class="alert alert-warning py-2 px-3 small mt-2 mb-0">No other active concern currently has Production Inward enabled.</div>
+                        <?php endif; ?>
                     </div>
 
                     <div class="mb-3">
@@ -391,7 +395,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (form) {
         form.addEventListener('submit', function(e) {
             const qcBatchSelect = document.getElementById('qc_batch_id');
-            const warehouseSelect = document.getElementById('destination_warehouse_id');
+            const concernSelect = document.getElementById('destination_concern_id');
             const boxCountInput = document.getElementById('box_count');
 
             // 1. Validate QC Batch selection
@@ -407,17 +411,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 qcBatchSelect.classList.remove('is-invalid', 'border-danger');
             }
 
-            // 2. Validate Destination Warehouse
-            if (!warehouseSelect || !warehouseSelect.value) {
+            // 2. Validate Destination Concern
+            if (!concernSelect || !concernSelect.value) {
                 e.preventDefault();
-                alert('Please select a Destination Warehouse.');
-                if (warehouseSelect) {
-                    warehouseSelect.classList.add('is-invalid', 'border-danger');
-                    warehouseSelect.focus();
+                alert('Please select a Destination Concern.');
+                if (concernSelect) {
+                    concernSelect.classList.add('is-invalid', 'border-danger');
+                    concernSelect.focus();
                 }
                 return false;
             } else {
-                warehouseSelect.classList.remove('is-invalid', 'border-danger');
+                concernSelect.classList.remove('is-invalid', 'border-danger');
             }
 
             // 3. Validate Box Count

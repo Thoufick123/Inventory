@@ -853,11 +853,24 @@ class ProductionService {
             $availableByItem[$itemId] = $available;
         }
 
-        $returnedRows = Database::fetchAll(
-            "SELECT qc_item_id, variant_id, new_tag_code FROM production_return_inventory
-             WHERE qc_batch_id = ? AND status = 'AVAILABLE'",
+        $batchConcernRow = Database::fetchOne(
+            "SELECT pu.concern_id AS concern_id
+             FROM qc_batches qb
+             JOIN production_programs pp ON pp.id = qb.program_id
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE qb.id = ?",
             [$qcBatchId]
         );
+        $batchConcernId = (int)($batchConcernRow['concern_id'] ?? 0);
+        $returnedRows = $batchConcernId > 0
+            ? Database::fetchAll(
+                "SELECT ri.qc_item_id, ri.variant_id, ri.new_tag_code
+                 FROM production_return_inventory ri
+                 JOIN production_bill_returns pbr ON pbr.id = ri.return_id
+                 WHERE ri.qc_batch_id = ? AND pbr.concern_id = ? AND ri.status = 'AVAILABLE'",
+                [$qcBatchId, $batchConcernId]
+            )
+            : [];
         foreach ($returnedRows as $row) {
             $itemId = (int)$row['qc_item_id'];
             $variantId = (int)($row['variant_id'] ?? 0);
@@ -880,21 +893,37 @@ class ProductionService {
             return [];
         }
 
+        $batchConcernRow = Database::fetchOne(
+            "SELECT pu.concern_id AS concern_id
+             FROM qc_batches qb
+             JOIN production_programs pp ON pp.id = qb.program_id
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE qb.id = ?",
+            [$qcBatchId]
+        );
+        $batchConcernId = (int)($batchConcernRow['concern_id'] ?? 0);
+        if ($batchConcernId <= 0) {
+            return [];
+        }
+
         $rows = Database::fetchAll(
             "SELECT t.qc_item_id, t.tag_code
              FROM production_bill_item_tags t
+             JOIN production_bills pb ON pb.id = t.bill_id
              JOIN qc_items qi ON qi.id = t.qc_item_id
-             WHERE qi.qc_batch_id = ? AND t.status IN ('BILLED', 'DAMAGED', 'RETURNED')",
-            [$qcBatchId]
+             WHERE qi.qc_batch_id = ? AND pb.concern_id = ? AND t.status IN ('BILLED', 'DAMAGED', 'RETURNED')",
+            [$qcBatchId, $batchConcernId]
         );
         $tagsByItem = [];
         foreach ($rows as $row) {
             $tagsByItem[(int)$row['qc_item_id']][strtoupper(trim((string)$row['tag_code']))] = true;
         }
         $returnedRows = Database::fetchAll(
-            "SELECT qc_item_id, new_tag_code FROM production_return_inventory
-             WHERE qc_batch_id = ? AND status IN ('BILLED', 'DAMAGED', 'RETIRED')",
-            [$qcBatchId]
+            "SELECT ri.qc_item_id, ri.new_tag_code
+             FROM production_return_inventory ri
+             JOIN production_bill_returns pbr ON pbr.id = ri.return_id
+             WHERE ri.qc_batch_id = ? AND pbr.concern_id = ? AND ri.status IN ('BILLED', 'DAMAGED', 'RETIRED')",
+            [$qcBatchId, $batchConcernId]
         );
         foreach ($returnedRows as $row) {
             $tagsByItem[(int)$row['qc_item_id']][strtoupper(trim((string)$row['new_tag_code']))] = true;
@@ -1142,14 +1171,28 @@ class ProductionService {
      * Get Production Dashboard KPIs.
      */
     public static function getDashboardStats(?int $unitId = null, ?int $concernId = null): array {
-        $unitClauseProg = $unitId !== null ? " AND production_unit_id = $unitId" : "";
-        $unitClausePP = $unitId !== null ? " AND pp.production_unit_id = $unitId" : "";
-        if ($concernId !== null && $concernId > 0) {
-            $unitClauseProg .= " AND production_unit_id IN (SELECT id FROM production_units WHERE concern_id = $concernId)";
-            $unitClausePP .= " AND pp.production_unit_id IN (SELECT id FROM production_units WHERE concern_id = $concernId)";
+        $concernValid = $concernId !== null && $concernId > 0 && $unitId !== 0;
+        $safeConcernId = $concernValid ? (int)$concernId : 0;
+        $safeUnitId = $unitId !== null ? (int)$unitId : null;
+
+        $unitClauseProg = '';
+        $unitClausePP = '';
+        $batchScopeClause = '';
+        if ($concernValid) {
+            if ($safeUnitId !== null) {
+                $unitClauseProg = " AND production_unit_id = {$safeUnitId} AND production_unit_id IN (SELECT id FROM production_units WHERE concern_id = {$safeConcernId})";
+                $unitClausePP = " AND pp.production_unit_id = {$safeUnitId} AND pp.production_unit_id IN (SELECT id FROM production_units WHERE concern_id = {$safeConcernId})";
+                $batchScopeClause = $unitClausePP;
+            } else {
+                $unitClauseProg = " AND production_unit_id IN (SELECT id FROM production_units WHERE concern_id = {$safeConcernId})";
+                $unitClausePP = " AND pp.production_unit_id IN (SELECT id FROM production_units WHERE concern_id = {$safeConcernId})";
+                $batchScopeClause = " AND ((pb.concern_id = {$safeConcernId} AND (pp.id IS NULL OR pp.production_unit_id IN (SELECT id FROM production_units WHERE concern_id = {$safeConcernId})))"
+                    . " OR (pb.concern_id IS NULL AND pp.production_unit_id IN (SELECT id FROM production_units WHERE concern_id = {$safeConcernId})))";
+            }
         } else {
-            $unitClauseProg .= " AND 1 = 0";
-            $unitClausePP .= " AND 1 = 0";
+            $unitClauseProg = ' AND 1 = 0';
+            $unitClausePP = ' AND 1 = 0';
+            $batchScopeClause = ' AND 1 = 0';
         }
 
         // Active Programs
@@ -1159,7 +1202,7 @@ class ProductionService {
              WHERE status IN ('APPROVED', 'SCHEDULED', 'IN_PROGRESS')
                AND (is_active IS NULL OR is_active = 1)
                AND (COALESCE(planned_quantity, 0) <= 0 OR COALESCE(completed_quantity, 0) < COALESCE(planned_quantity, 0))$unitClauseProg"
-        );
+        ) ?: ['count' => 0, 'total_planned' => 0, 'total_completed' => 0];
 
         // Pending Cutting
         $pendingCutting = Database::fetchOne(
@@ -1167,7 +1210,7 @@ class ProductionService {
              FROM cutting_batches cb
              LEFT JOIN production_programs pp ON cb.program_id = pp.id
              WHERE cb.status IN ('PENDING', 'IN_PROGRESS')$unitClausePP"
-        );
+        ) ?: ['count' => 0, 'total_qty' => 0];
 
         // Pending Stitching
         $pendingStitching = Database::fetchOne(
@@ -1175,7 +1218,7 @@ class ProductionService {
              FROM stitching_batches sb
              LEFT JOIN production_programs pp ON sb.program_id = pp.id
              WHERE sb.status IN ('PENDING', 'IN_PROGRESS')$unitClausePP"
-        );
+        ) ?: ['count' => 0, 'total_qty' => 0];
 
         // Pending QC
         $pendingQC = Database::fetchOne(
@@ -1183,15 +1226,15 @@ class ProductionService {
              FROM qc_batches qb
              LEFT JOIN production_programs pp ON qb.program_id = pp.id
              WHERE qb.status IN ('PENDING', 'PARTIAL', 'REWORK')$unitClausePP"
-        );
+        ) ?: ['count' => 0, 'total_qty' => 0];
 
         // Ready for Dispatch
         $readyDispatch = Database::fetchOne(
             "SELECT COUNT(*) as count, COALESCE(SUM(pb.total_qty), 0) as total_qty
              FROM production_batches pb
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
-             WHERE pb.status = 'APPROVED'$unitClausePP"
-        );
+             WHERE pb.status = 'APPROVED'$batchScopeClause"
+        ) ?: ['count' => 0, 'total_qty' => 0];
 
         // This month outward
         $monthOutward = Database::fetchOne(
@@ -1199,8 +1242,8 @@ class ProductionService {
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
-             WHERE MONTH(po.created_at) = MONTH(CURRENT_DATE()) AND YEAR(po.created_at) = YEAR(CURRENT_DATE())$unitClausePP"
-        );
+             WHERE MONTH(po.created_at) = MONTH(CURRENT_DATE()) AND YEAR(po.created_at) = YEAR(CURRENT_DATE())$batchScopeClause"
+        ) ?: ['count' => 0, 'total_qty' => 0];
 
         // Active programs not yet completed against their planned quantity
         $recentPrograms = Database::fetchAll(
@@ -1227,14 +1270,121 @@ class ProductionService {
 
         // Recent Outward dispatches
         $recentOutwards = Database::fetchAll(
-            "SELECT po.*, pb.batch_number, pb.total_qty, w.name as warehouse_name
+            "SELECT po.*, pb.batch_number, pb.total_qty, w.name as warehouse_name, dc.name as destination_concern_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
-             JOIN warehouses w ON pb.destination_warehouse_id = w.id
-             WHERE 1=1$unitClausePP
+             LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
+             LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+             WHERE 1=1$batchScopeClause
              ORDER BY po.created_at DESC LIMIT 5"
         );
+
+        // Concern / Unit Inward Stock, Pending Inwards, Recent GRNs & Billing Summary
+        $inwardStock = ['variant_count' => 0, 'available_qty' => 0, 'damaged_qty' => 0];
+        $pendingInwards = ['count' => 0, 'total_qty' => 0];
+        $inwardReceipts = ['month_count' => 0, 'month_qty' => 0, 'total_count' => 0];
+        $recentInwards = [];
+        $billingSummary = ['month_count' => 0, 'month_total' => 0.0, 'total_count' => 0, 'total_amount' => 0.0, 'pending_count' => 0];
+        $recentBills = [];
+
+        if ($concernValid) {
+            $stockSql = "SELECT COUNT(DISTINCT CASE WHEN sb.stock_state = 'AVAILABLE' AND sb.quantity > 0 THEN sb.variant_id END) AS variant_count,
+                                COALESCE(SUM(CASE WHEN sb.stock_state = 'AVAILABLE' THEN sb.quantity ELSE 0 END), 0) AS available_qty,
+                                COALESCE(SUM(CASE WHEN sb.stock_state = 'DAMAGED' THEN sb.quantity ELSE 0 END), 0) AS damaged_qty
+                         FROM stock_balances sb
+                         LEFT JOIN production_units pu ON sb.location_type = 'PRODUCTION_UNIT'
+                            AND pu.id = sb.location_id AND pu.concern_id = ?
+                         WHERE sb.concern_id = ?";
+            $stockParams = [$safeConcernId, $safeConcernId];
+            if ($safeUnitId !== null) {
+                $stockSql .= " AND ((sb.location_type = 'PRODUCTION_UNIT' AND pu.id IS NOT NULL AND sb.location_id = ?)
+                                OR (sb.location_type = 'CONCERN' AND sb.location_id = ?))";
+                $stockParams[] = $safeUnitId;
+                $stockParams[] = $safeConcernId;
+            } else {
+                $stockSql .= " AND ((sb.location_type = 'PRODUCTION_UNIT' AND pu.id IS NOT NULL)
+                                OR (sb.location_type = 'CONCERN' AND sb.location_id = ?))";
+                $stockParams[] = $safeConcernId;
+            }
+            $inwardStock = Database::fetchOne($stockSql, $stockParams) ?: $inwardStock;
+
+            $pendingInwards = Database::fetchOne(
+                "SELECT COUNT(*) AS count, COALESCE(SUM(pb.total_qty), 0) AS total_qty
+                 FROM production_batches pb
+                 WHERE pb.destination_concern_id = ?
+                   AND pb.status = 'DISPATCHED'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM production_inwards pi
+                       WHERE pi.source_type = 'PRODUCTION_BATCH'
+                         AND pi.source_id = pb.id
+                         AND pi.status = 'RECEIVED'
+                   )",
+                [$safeConcernId]
+            ) ?: $pendingInwards;
+
+            $inwardScopeSql = 'WHERE pi.concern_id = ? AND pi.status = ?';
+            $inwardParams = [$safeConcernId, 'RECEIVED'];
+            if ($safeUnitId !== null) {
+                $inwardScopeSql .= " AND ((pi.destination_type = 'PRODUCTION_UNIT' AND pi.destination_unit_id = ?) OR pi.destination_type = 'CONCERN')";
+                $inwardParams[] = $safeUnitId;
+            }
+
+            $inwardReceipts = Database::fetchOne(
+                "SELECT COUNT(DISTINCT pi.id) AS total_count,
+                        COUNT(DISTINCT CASE WHEN MONTH(pi.received_at) = MONTH(CURRENT_DATE()) AND YEAR(pi.received_at) = YEAR(CURRENT_DATE()) THEN pi.id END) AS month_count,
+                        COALESCE(SUM(CASE WHEN MONTH(pi.received_at) = MONTH(CURRENT_DATE()) AND YEAR(pi.received_at) = YEAR(CURRENT_DATE()) THEN pii.quantity ELSE 0 END), 0) AS month_qty
+                 FROM production_inwards pi
+                 LEFT JOIN production_inward_items pii ON pii.inward_id = pi.id
+                 {$inwardScopeSql}",
+                $inwardParams
+            ) ?: $inwardReceipts;
+
+            $recentInwards = Database::fetchAll(
+                "SELECT pi.id, pi.grn_number, pi.source_type, pi.source_batch_number, pi.destination_type, pi.received_at,
+                        COALESCE(dest.name, dest_concern.name, 'Concern Inventory') AS destination_name,
+                        COALESCE(SUM(pii.quantity), 0) AS available_qty,
+                        COALESCE(SUM(pii.damaged_qty), 0) AS damaged_qty
+                 FROM production_inwards pi
+                 LEFT JOIN production_units dest ON pi.destination_type = 'PRODUCTION_UNIT'
+                    AND dest.id = pi.destination_unit_id AND dest.concern_id = ?
+                 LEFT JOIN concerns dest_concern ON pi.destination_type = 'CONCERN'
+                    AND dest_concern.id = pi.destination_concern_id AND dest_concern.id = pi.concern_id
+                 LEFT JOIN production_inward_items pii ON pii.inward_id = pi.id
+                 {$inwardScopeSql}
+                 GROUP BY pi.id
+                 ORDER BY pi.received_at DESC, pi.id DESC
+                 LIMIT 5",
+                array_merge([$safeConcernId], $inwardParams)
+            );
+
+            $billWhere = 'WHERE pb.concern_id = ?';
+            $billParams = [$safeConcernId];
+            if ($safeUnitId !== null) {
+                $billWhere .= ' AND pb.production_unit_id = ?';
+                $billParams[] = $safeUnitId;
+            }
+            $billingSummary = Database::fetchOne(
+                "SELECT COUNT(*) AS total_count,
+                        COALESCE(SUM(pb.total_amount), 0) AS total_amount,
+                        COALESCE(SUM(CASE WHEN MONTH(pb.bill_date) = MONTH(CURRENT_DATE()) AND YEAR(pb.bill_date) = YEAR(CURRENT_DATE()) THEN 1 ELSE 0 END), 0) AS month_count,
+                        COALESCE(SUM(CASE WHEN MONTH(pb.bill_date) = MONTH(CURRENT_DATE()) AND YEAR(pb.bill_date) = YEAR(CURRENT_DATE()) THEN pb.total_amount ELSE 0 END), 0) AS month_total,
+                        COALESCE(SUM(CASE WHEN pb.payment_status = 'PENDING' THEN 1 ELSE 0 END), 0) AS pending_count
+                 FROM production_bills pb
+                 {$billWhere}",
+                $billParams
+            ) ?: $billingSummary;
+
+            $recentBills = Database::fetchAll(
+                "SELECT pb.id, pb.bill_number, pb.bill_date, pb.buyer_type, pb.company_name, pb.customer_name,
+                        pb.total_amount, pb.payment_status
+                 FROM production_bills pb
+                 {$billWhere}
+                 ORDER BY pb.bill_date DESC, pb.id DESC
+                 LIMIT 5",
+                $billParams
+            );
+        }
 
         return [
             'activePrograms'   => $activePrograms,
@@ -1246,6 +1396,12 @@ class ProductionService {
             'recentPrograms'   => $recentPrograms,
             'recentQC'         => $recentQC,
             'recentOutwards'   => $recentOutwards,
+            'inwardStock'      => $inwardStock,
+            'pendingInwards'   => $pendingInwards,
+            'inwardReceipts'   => $inwardReceipts,
+            'recentInwards'    => $recentInwards,
+            'billingSummary'   => $billingSummary,
+            'recentBills'      => $recentBills,
         ];
     }
 

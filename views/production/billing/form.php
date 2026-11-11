@@ -3,6 +3,7 @@ $isEdit = !empty($bill);
 $escape = static fn($value): string => htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 $existingItems = array_map(static function (array $item): array {
     return [
+        'item_key' => (string)($item['item_key'] ?? ('qc:' . (int)$item['qc_item_id'])),
         'qc_item_id' => (int)$item['qc_item_id'],
         'product_name' => (string)$item['product_name'],
         'sku' => (string)($item['sku'] ?? ''),
@@ -23,7 +24,7 @@ $existingItems = array_map(static function (array $item): array {
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
     <div>
         <h4 class="mb-1 fw-bold"><?= $isEdit ? 'Edit Production Bill' : 'Create Production Bill' ?></h4>
-        <div class="text-muted small">Scan QR labels from available QC-passed Production Inventory.</div>
+        <div class="text-muted small">Scan QR labels from available Production &amp; Concern Inventory.</div>
     </div>
     <a class="btn btn-outline-secondary" href="<?= url($isEdit ? 'production/billing/view/' . (int)$bill['id'] : 'production/billing') ?>"><i class="bi bi-arrow-left me-1"></i>Back</a>
 </div>
@@ -100,7 +101,7 @@ $existingItems = array_map(static function (array $item): array {
                         <input id="inventorySearch" class="form-control" autocomplete="off" placeholder="Scan QR label or type to search">
                     </div>
                     <div id="searchResults" class="list-group mt-2"></div>
-                    <div id="cartMessage" class="small text-muted mt-2">Only unbilled, available QC-passed QR pieces can be added.</div>
+                    <div id="cartMessage" class="small text-muted mt-2">Only unbilled, available QC-passed or inwarded QR pieces can be added.</div>
                 </div>
             </div>
 
@@ -147,6 +148,7 @@ $existingItems = array_map(static function (array $item): array {
     const cartBody = document.getElementById('billCart');
     const buyerType = document.getElementById('buyerType');
     const money = value => '₹' + Number(value || 0).toFixed(2);
+    const itemKeyOf = item => String(item.item_key || ('qc:' + Number(item.qc_item_id || 0)));
     let searchTimer;
 
     function updateBuyerFields() {
@@ -158,18 +160,23 @@ $existingItems = array_map(static function (array $item): array {
         });
     }
 
-    initialItems.forEach(item => cart.set(Number(item.qc_item_id), {
-        ...item,
-        tags: Array.isArray(item.tags) ? item.tags : [],
-        unit_price: Number(item.unit_price),
-        mrp: Number(item.mrp),
-        gst_percentage: Number(item.gst_percentage),
-        gst_type: item.gst_type || (Number(item.gst_percentage) > 0 ? 'BOTH' : 'EXEMPTED'),
-        tax_input_type: item.tax_input_type || 'PERCENT',
-        sgst_rate: Number(item.sgst_rate ?? Number(item.gst_percentage || 0) / 2),
-        cgst_rate: Number(item.cgst_rate ?? Number(item.gst_percentage || 0) / 2),
-        igst_rate: Number(item.igst_rate || 0)
-    }));
+    initialItems.forEach(item => {
+        const key = itemKeyOf(item);
+        cart.set(key, {
+            ...item,
+            item_key: key,
+            qc_item_id: Number(item.qc_item_id || 0),
+            tags: Array.isArray(item.tags) ? item.tags : [],
+            unit_price: Number(item.unit_price),
+            mrp: Number(item.mrp),
+            gst_percentage: Number(item.gst_percentage),
+            gst_type: item.gst_type || (Number(item.gst_percentage) > 0 ? 'BOTH' : 'EXEMPTED'),
+            tax_input_type: item.tax_input_type || 'PERCENT',
+            sgst_rate: Number(item.sgst_rate ?? Number(item.gst_percentage || 0) / 2),
+            cgst_rate: Number(item.cgst_rate ?? Number(item.gst_percentage || 0) / 2),
+            igst_rate: Number(item.igst_rate || 0)
+        });
+    });
 
     const assignedTags = () => new Set([...cart.values()].flatMap(item => item.tags.map(tag => tag.toUpperCase())));
 
@@ -187,6 +194,7 @@ $existingItems = array_map(static function (array $item): array {
 
         let index = 0;
         [...cart.values()].forEach(item => {
+            const itemKey = itemKeyOf(item);
             const row = cartBody.insertRow();
             const productCell = row.insertCell();
             const name = document.createElement('div');
@@ -208,7 +216,7 @@ $existingItems = array_map(static function (array $item): array {
                 badge.textContent = `${tag} ×`;
                 badge.addEventListener('click', () => {
                     item.tags = item.tags.filter(existing => existing !== tag);
-                    if (!item.tags.length) cart.delete(Number(item.qc_item_id));
+                    if (!item.tags.length) cart.delete(itemKey);
                     renderCart();
                 });
                 tagsWrap.append(badge);
@@ -336,11 +344,11 @@ $existingItems = array_map(static function (array $item): array {
 
             const taxCell = row.insertCell();
             taxCell.className = 'text-end text-nowrap';
-            taxCell.dataset.taxFor = item.qc_item_id;
+            taxCell.dataset.taxFor = itemKey;
 
             const lineTotalCell = row.insertCell();
             lineTotalCell.className = 'text-end text-nowrap fw-semibold';
-            lineTotalCell.dataset.totalFor = item.qc_item_id;
+            lineTotalCell.dataset.totalFor = itemKey;
 
             const removeCell = row.insertCell();
             const removeButton = document.createElement('button');
@@ -349,12 +357,12 @@ $existingItems = array_map(static function (array $item): array {
             removeButton.innerHTML = '<i class="bi bi-trash"></i>';
             removeButton.title = 'Remove product';
             removeButton.addEventListener('click', () => {
-                cart.delete(Number(item.qc_item_id));
+                cart.delete(itemKey);
                 renderCart();
             });
             removeCell.append(removeButton);
 
-            [['qc_item_id', item.qc_item_id]].forEach(([key, value]) => {
+            [['item_key', itemKey], ['qc_item_id', Number(item.qc_item_id || 0)]].forEach(([key, value]) => {
                 const input = document.createElement('input');
                 input.type = 'hidden';
                 input.name = `items[${index}][${key}]`;
@@ -402,8 +410,9 @@ $existingItems = array_map(static function (array $item): array {
             subtotal += taxable;
             taxes += lineTax;
             grandTotal += lineTotal;
-            const lineTotalCell = cartBody.querySelector(`[data-total-for="${item.qc_item_id}"]`);
-            const taxCell = cartBody.querySelector(`[data-tax-for="${item.qc_item_id}"]`);
+            const itemKeyAttr = CSS.escape(itemKeyOf(item));
+            const lineTotalCell = cartBody.querySelector(`[data-total-for="${itemKeyAttr}"]`);
+            const taxCell = cartBody.querySelector(`[data-tax-for="${itemKeyAttr}"]`);
             if (lineTotalCell) lineTotalCell.textContent = money(lineTotal);
             if (taxCell) taxCell.textContent = money(lineTax);
         });
@@ -426,10 +435,16 @@ $existingItems = array_map(static function (array $item): array {
             document.getElementById('cartMessage').textContent = 'No unbilled QR piece is available for this item.';
             return;
         }
-        const key = Number(item.qc_item_id);
+        const key = itemKeyOf(item);
+        const maxQty = item.stock_qty !== undefined ? Number(item.stock_qty) : Infinity;
+        if (cart.has(key) && cart.get(key).tags.length >= maxQty) {
+            document.getElementById('cartMessage').textContent = 'All available stock for this item has already been added.';
+            return;
+        }
         if (!cart.has(key)) {
             cart.set(key, {
-                qc_item_id: key,
+                item_key: key,
+                qc_item_id: Number(item.qc_item_id || 0),
                 product_name: item.product_name,
                 sku: item.sku || '',
                 size_name: item.size_name || '',
@@ -468,6 +483,10 @@ $existingItems = array_map(static function (array $item): array {
             payload.data.items.forEach(item => {
                 const available = item.available_tags.filter(tag => !assigned.has(tag.toUpperCase()));
                 if (!available.length) return;
+                const key = itemKeyOf(item);
+                const alreadyInCart = cart.has(key) ? cart.get(key).tags.length : 0;
+                const stockLeft = item.stock_qty !== undefined ? Math.max(0, Math.min(available.length, Number(item.stock_qty) - alreadyInCart)) : available.length;
+                if (stockLeft <= 0) return;
                 const exactTag = available.find(tag => tag.toUpperCase() === query.toUpperCase());
                 const button = document.createElement('button');
                 button.type = 'button';
@@ -477,7 +496,7 @@ $existingItems = array_map(static function (array $item): array {
                 title.textContent = item.product_name;
                 const subtitle = document.createElement('small');
                 subtitle.className = 'd-block text-muted';
-                subtitle.textContent = [item.sku, item.size_name, item.color_name, `${available.length} available`].filter(Boolean).join(' · ');
+                subtitle.textContent = [item.sku, item.size_name, item.color_name, item.location_label, `${stockLeft} available`].filter(Boolean).join(' · ');
                 details.append(title, subtitle);
                 const code = document.createElement('span');
                 code.className = 'badge text-bg-light font-monospace';

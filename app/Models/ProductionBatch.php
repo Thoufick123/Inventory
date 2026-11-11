@@ -10,11 +10,26 @@ class ProductionBatch {
      * Find production batch by ID.
      */
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND pp.production_unit_id = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT pb.*, 
                     pp.program_number, pp.target_date, pp.name as program_name, pp.production_unit_id,
                     COALESCE(p.name, pp.name, 'Finished Product') as product_name, p.code as product_code,
                     w.name as warehouse_name, w.code as warehouse_code,
+                    dc.name as destination_concern_name,
                     COALESCE(pu.name, 'Main Production Facility') as production_unit_name,
                     COALESCE(pu.code, 'PU1') as production_unit_code,
                     pu.manager_name as production_unit_manager,
@@ -32,13 +47,14 @@ class ProductionBatch {
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
+             LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
              LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN users u_prep ON pb.prepared_by = u_prep.id
              LEFT JOIN users u_appr ON pb.approved_by = u_appr.id
              LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
              LEFT JOIN users u_disp ON po.created_by = u_disp.id
-             WHERE pb.id = ?",
-            [$id]
+             WHERE pb.id = ? AND COALESCE(pb.concern_id, pu.concern_id) = ?{$unitClause}",
+            $params
         );
     }
 
@@ -46,10 +62,25 @@ class ProductionBatch {
      * Find production batch by batch number.
      */
     public static function findByNumber(string $batchNumber): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$batchNumber, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND pp.production_unit_id = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT pb.*, pp.program_number, pp.name as program_name, pp.production_unit_id,
                     COALESCE(p.name, pp.name, 'Finished Product') as product_name,
                     w.name as warehouse_name, w.code as warehouse_code,
+                    dc.name as destination_concern_name,
                     COALESCE(pu.name, 'Main Production Facility') as production_unit_name,
                     COALESCE(pu.code, 'PU1') as production_unit_code,
                     pu.manager_name as production_unit_manager,
@@ -63,11 +94,12 @@ class ProductionBatch {
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
+             LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
              LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
              LEFT JOIN users u_disp ON po.created_by = u_disp.id
-             WHERE pb.batch_number = ?",
-            [$batchNumber]
+             WHERE pb.batch_number = ? AND COALESCE(pb.concern_id, pu.concern_id) = ?{$unitClause}",
+            $params
         );
     }
 
@@ -75,6 +107,16 @@ class ProductionBatch {
      * Get all production batches with filters.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = array_key_exists('concern_id', $filters)
+            ? $filters['concern_id']
+            : (function_exists('currentConcernId') ? currentConcernId() : null);
+        if ($concernId === null || (int)$concernId <= 0) {
+            return [];
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT pb.*, 
                        pp.program_number,
                        pp.name as program_name,
@@ -83,6 +125,7 @@ class ProductionBatch {
                        p.code as product_code,
                        w.name as warehouse_name,
                        w.code as warehouse_code,
+                       dc.name as destination_concern_name,
                        COALESCE(pu.name, 'Main Production Facility') as production_unit_name,
                        COALESCE(pu.code, 'PU1') as production_unit_code,
                        pu.manager_name as production_unit_manager,
@@ -98,13 +141,19 @@ class ProductionBatch {
                 LEFT JOIN production_programs pp ON pb.program_id = pp.id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
+                LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
                 LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
                 LEFT JOIN users u_prep ON pb.prepared_by = u_prep.id
                 LEFT JOIN users u_appr ON pb.approved_by = u_appr.id
                 LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
                 LEFT JOIN users u_disp ON po.created_by = u_disp.id
-                WHERE 1=1";
-        $params = [];
+                WHERE COALESCE(pb.concern_id, pu.concern_id) = ?";
+        $params = [(int)$concernId];
+
+        if ($scopedUnitId !== null) {
+            $sql .= " AND pp.production_unit_id = ?";
+            $params[] = (int)$scopedUnitId;
+        }
 
         if (!empty($filters['status'])) {
             $sql .= " AND pb.status = ?";
@@ -116,7 +165,7 @@ class ProductionBatch {
             $params[] = (int)$filters['program_id'];
         }
 
-        if (!empty($filters['production_unit_id'])) {
+        if (array_key_exists('production_unit_id', $filters) && $filters['production_unit_id'] !== null && $filters['production_unit_id'] !== '') {
             $sql .= " AND pp.production_unit_id = ?";
             $params[] = (int)$filters['production_unit_id'];
         }
@@ -136,6 +185,7 @@ class ProductionBatch {
                 OR p.code LIKE ? 
                 OR w.name LIKE ? 
                 OR w.code LIKE ? 
+                OR dc.name LIKE ?
                 OR pu.name LIKE ?
                 OR pu.code LIKE ?
                 OR u_prep.full_name LIKE ? 
@@ -144,7 +194,7 @@ class ProductionBatch {
                 OR CAST(pb.qc_batch_id AS CHAR) LIKE ?
             )";
             $search = '%' . trim($filters['search']) . '%';
-            $params = array_merge($params, [$search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search]);
+            $params = array_merge($params, [$search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search, $search]);
         }
 
         $sql .= " ORDER BY pb.created_at DESC";
@@ -400,15 +450,17 @@ class ProductionBatch {
         }
         Database::execute(
             "INSERT INTO production_batches 
-             (batch_number, program_id, qc_batch_id, total_qty, box_count, destination_warehouse_id, status, prepared_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (batch_number, program_id, qc_batch_id, total_qty, box_count, destination_warehouse_id, destination_concern_id, concern_id, status, prepared_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $data['batch_number'],
                 $data['program_id'],
                 $data['qc_batch_id'] ?? null,
                 $data['total_qty'] ?? 0,
                 $data['box_count'] ?? 0,
-                $data['destination_warehouse_id'],
+                $data['destination_warehouse_id'] ?? null,
+                $data['destination_concern_id'] ?? null,
+                $data['concern_id'] ?? (function_exists('currentConcernId') ? currentConcernId() : null),
                 $data['status'] ?? 'PREPARING',
                 $data['prepared_by'] ?? null,
             ]
@@ -420,11 +472,15 @@ class ProductionBatch {
      * Approve production batch.
      */
     public static function approve(int $id, int $userId): bool {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return false;
+        }
         return Database::execute(
             "UPDATE production_batches 
              SET status = 'APPROVED', approved_by = ?, approved_at = NOW() 
-             WHERE id = ? AND status = 'PREPARING'",
-            [$userId, $id]
+             WHERE id = ? AND concern_id = ? AND status = 'PREPARING'",
+            [$userId, $id, $concernId]
         ) > 0;
     }
 
@@ -432,9 +488,13 @@ class ProductionBatch {
      * Update batch status.
      */
     public static function updateStatus(int $id, string $status): bool {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return false;
+        }
         return Database::execute(
-            "UPDATE production_batches SET status = ? WHERE id = ?",
-            [$status, $id]
+            "UPDATE production_batches SET status = ? WHERE id = ? AND concern_id = ?",
+            [$status, $id, $concernId]
         ) > 0;
     }
 
@@ -711,6 +771,7 @@ class ProductionBatch {
                     $approvedPieceTags[] = $piece['tag_code'];
                 }
             }
+            $it['approved_piece_tags'] = $approvedPieceTags;
             $previouslyPacked = $previouslyPackedByVariant[$vid] ?? 0;
             $outwardStart = min($previouslyPacked, count($approvedPieceTags));
             $outwardQty = min(max(0, $qty), count($approvedPieceTags) - $outwardStart);

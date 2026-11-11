@@ -15,10 +15,6 @@ require_once BASE_PATH . '/app/Services/LegacyConcernDataService.php';
 
 class AdminController {
 
-    private function isValidGstNumber(string $gstNumber): bool {
-        return $gstNumber === '' || preg_match('/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/', $gstNumber) === 1;
-    }
-
     /**
      * Admin Dashboard.
      */
@@ -27,41 +23,42 @@ class AdminController {
         $stockConcernId = $concernId ?? 0;
         if (!hasPermission('dashboard', 'view')) {
             $landingPages = [
-                'production' => 'production/dashboard',
-                'sellers' => 'production/sellers',
-                'catalog' => 'production/catalog',
-                'programs' => 'production/programs',
-                'cutting' => 'production/cutting',
-                'stitching' => 'production/stitching',
-                'labels' => 'production/labels',
-                'qc' => 'production/qc',
-                'inventory' => 'production/inventory',
-                'batches' => 'production/batches',
-                'outward' => 'production/outward',
-                'warehouse_rework' => 'production/warehouse-rework',
-                'production_billing' => 'production/billing',
-                'production_cash' => 'production/cash',
-                'production_expenses' => 'production/expenses',
-                'warehouse' => 'warehouse/dashboard',
-                'inward' => 'warehouse/inward',
-                'stock' => 'warehouse/stock',
-                'purchases' => 'warehouse/purchases',
-                'allocation' => 'warehouse/allocation',
-                'returns' => 'warehouse/returns',
-                'website_dashboard' => 'warehouse/website-orders',
-                'website_orders' => 'warehouse/website-orders',
-                'whatsapp_dashboard' => 'warehouse/whatsapp-orders',
-                'whatsapp_orders' => 'warehouse/whatsapp-orders',
-                'shop' => 'shop/dashboard',
-                'pos' => 'shop/pos',
-                'assets' => 'asset/dashboard',
-                'reports' => 'reports/sales',
-                'staff' => 'admin/staff?department=all',
-                'roles' => 'admin/roles',
+                'production'                 => 'production/dashboard',
+                'inventory'                  => 'production/inventory',
+                'production_inward'          => 'production/inward',
+                'batches'                    => 'production/batches',
+                'outward'                    => 'production/outward',
+                'production_billing'         => 'production/billing',
+                'production_billing_returns' => 'production/billing/returns',
+                'production_cash'            => 'production/cash',
+                'production_expenses'        => 'production/expenses',
+                'sellers'                    => 'production/sellers',
+                'catalog'                    => 'production/catalog',
+                'programs'                   => 'production/programs',
+                'cutting'                    => 'production/cutting',
+                'stitching'                  => 'production/stitching',
+                'labels'                     => 'production/labels',
+                'qc'                         => 'production/qc',
+                'warehouse_rework'           => 'production/warehouse-rework',
+                'assets'                     => 'asset/dashboard',
+                'reports_overview'           => 'reports/overview',
+                'reports_production'         => 'reports/production',
+                'reports_sales'              => 'reports/sales',
+                'reports_profitability'      => 'reports/profitability',
+                'reports'                    => 'reports',
+                'staff'                      => 'admin/staff?department=all',
+                'roles'                      => 'admin/roles',
             ];
             foreach ($landingPages as $module => $page) {
                 if (hasPermission($module, 'view')) {
                     Response::redirect(url($page));
+                    return;
+                }
+            }
+            if (!$concernId && !isSuperAdmin()) {
+                $accessibleConcerns = Concern::getAccessibleToUser((int)(currentUser()['id'] ?? 0), false);
+                if (!empty($accessibleConcerns)) {
+                    Response::redirect(url('admin/concern/select'));
                     return;
                 }
             }
@@ -75,27 +72,6 @@ class AdminController {
             'activeMenu'   => 'dashboard',
             'breadcrumb'   => [['label' => 'Dashboard']],
         ];
-
-        // Organization Units with rich metrics
-        $productionUnits = ProductionUnit::getWithMetrics();
-        $warehouses      = Warehouse::getWithMetrics();
-        $shops           = Shop::getWithMetrics();
-        $managersList    = User::getAll(['is_active' => 1]);
-        
-        $whatsappChannels = getScopedSalesChannels('WHATSAPP', false);
-        $websiteChannels  = getScopedSalesChannels('WEBSITE', false);
-
-        $data['productionUnits']      = $productionUnits;
-        $data['warehouses']           = $warehouses;
-        $data['shops']                = $shops;
-        $data['managersList']         = $managersList;
-        $data['whatsappChannels']     = $whatsappChannels;
-        $data['websiteChannels']      = $websiteChannels;
-        $data['totalProductionUnits'] = count($productionUnits);
-        $data['totalWarehouses']      = count($warehouses);
-        $data['totalShops']           = count($shops);
-        $data['totalWhatsapp']        = count($whatsappChannels);
-        $data['totalWebsite']         = count($websiteChannels);
 
         // Total products
         $result = Database::fetchOne("SELECT COUNT(*) as cnt FROM products WHERE is_active = 1");
@@ -133,19 +109,29 @@ class AdminController {
 
         // Pending production programs
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM production_programs WHERE status IN ('DRAFT', 'APPROVED', 'SCHEDULED', 'IN_PROGRESS')"
+            "SELECT COUNT(*) as cnt
+             FROM production_programs pp
+             JOIN production_units pu ON pp.production_unit_id = pu.id
+             WHERE pu.concern_id = ? AND pp.status IN ('DRAFT', 'APPROVED', 'SCHEDULED', 'IN_PROGRESS')",
+            [$stockConcernId]
         );
         $data['pendingProduction'] = $result['cnt'] ?? 0;
 
         // Pending QC
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM qc_batches WHERE status = 'PENDING'"
+            "SELECT COUNT(*) as cnt
+             FROM qc_batches qb
+             JOIN production_programs pp ON qb.program_id = pp.id
+             JOIN production_units pu ON pp.production_unit_id = pu.id
+             WHERE pu.concern_id = ? AND qb.status = 'PENDING'",
+            [$stockConcernId]
         );
         $data['pendingQC'] = $result['cnt'] ?? 0;
 
         // Pending allocation
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM warehouse_allocations WHERE status IN ('REQUESTED', 'STOCK_CHECK', 'RESERVED', 'APPROVED')"
+            "SELECT COUNT(*) as cnt FROM warehouse_allocations WHERE concern_id = ? AND status IN ('REQUESTED', 'STOCK_CHECK', 'RESERVED', 'APPROVED')",
+            [$stockConcernId]
         );
         $data['pendingAllocation'] = $result['cnt'] ?? 0;
 
@@ -275,7 +261,13 @@ class AdminController {
         }
 
         $roles            = Role::getActive();
-        $productionUnits  = ProductionUnit::getWithMetrics();
+        $productionUnits  = Database::fetchAll(
+            "SELECT pu.id, pu.name, pu.code, pu.concern_id, c.name AS concern_name
+             FROM production_units pu
+             JOIN concerns c ON c.id = pu.concern_id AND c.is_active = 1
+             WHERE pu.is_active = 1
+             ORDER BY c.name ASC, pu.name ASC"
+        );
         $warehouses       = Warehouse::getWithMetrics();
         $shops            = Shop::getWithMetrics();
         $whatsappChannels = getScopedSalesChannels('WHATSAPP');
@@ -461,7 +453,13 @@ class AdminController {
         }
 
         $roles            = Role::getActive();
-        $productionUnits  = ProductionUnit::getWithMetrics();
+        $productionUnits  = Database::fetchAll(
+            "SELECT pu.id, pu.name, pu.code, pu.concern_id, c.name AS concern_name
+             FROM production_units pu
+             JOIN concerns c ON c.id = pu.concern_id AND c.is_active = 1
+             WHERE pu.is_active = 1
+             ORDER BY c.name ASC, pu.name ASC"
+        );
         $warehouses       = Warehouse::getWithMetrics();
         $shops            = Shop::getWithMetrics();
         $whatsappChannels = getScopedSalesChannels('WHATSAPP');
@@ -837,6 +835,10 @@ class AdminController {
             Response::error(404, 'Role not found.');
             return;
         }
+        if ((int)$role['id'] === 1 || strtolower($role['slug'] ?? '') === 'super_admin') {
+            Response::redirect(url('admin/roles'), 'warning', 'System Super Administrator role cannot be edited or restricted.');
+            return;
+        }
 
         $concerns = Concern::getAll(true);
         $selectedConcernId = (int)($_GET['concern_id'] ?? 0);
@@ -888,6 +890,10 @@ class AdminController {
         $role          = Role::findById($roleId);
         if (!$role) {
             Response::error(404, 'Role not found.');
+            return;
+        }
+        if ($roleId === 1 || strtolower($role['slug'] ?? '') === 'super_admin') {
+            Response::redirect(url('admin/roles'), 'warning', 'System Super Administrator role cannot be edited or restricted.');
             return;
         }
 
@@ -943,6 +949,10 @@ class AdminController {
 
         $role = Role::findById((int) $id);
         if (!$role) Response::error(404, 'Role not found.');
+        if ((int)$role['id'] === 1 || strtolower($role['slug'] ?? '') === 'super_admin') {
+            Response::redirect(url('admin/roles'), 'warning', 'System Super Administrator role has unrestricted module access and cannot be edited here.');
+            return;
+        }
 
         $concerns = Concern::getAll(true);
         $selectedConcernId = (int)($_GET['concern_id'] ?? 0);
@@ -993,6 +1003,15 @@ class AdminController {
         }
 
         $roleId = (int) $id;
+        $role = Role::findById($roleId);
+        if (!$role) {
+            Response::error(404, 'Role not found.');
+            return;
+        }
+        if ($roleId === 1 || strtolower($role['slug'] ?? '') === 'super_admin') {
+            Response::redirect(url('admin/roles'), 'warning', 'System Super Administrator role has unrestricted module access and cannot be edited here.');
+            return;
+        }
         $permissionIds = $_POST['permissions'] ?? [];
         $concernId = (int)($_POST['concern_id'] ?? 0);
         $concern = Concern::find($concernId);
@@ -1185,6 +1204,34 @@ class AdminController {
         }
     }
 
+    public function toggleConcern(string $id): void
+    {
+        if (!hasPermission('staff', 'edit')) {
+            Response::error(403, 'Access denied: You do not have permission to edit concerns.');
+            return;
+        }
+        if (!CSRF::validateRequest()) {
+            Response::back('error', 'Invalid form submission.');
+            return;
+        }
+
+        $concernId = (int)$id;
+        try {
+            $isActive = Concern::toggleActive($concernId);
+            if (!$isActive && (int)Session::get('active_concern_id', 0) === $concernId) {
+                Session::remove('active_concern_id');
+            }
+            AuditService::log('staff', 'toggle_concern', 'concerns', $concernId, null, ['is_active' => $isActive ? 1 : 0]);
+            Response::redirect(
+                url('admin/staff/concerns'),
+                'success',
+                $isActive ? 'Concern activated.' : 'Concern deactivated.'
+            );
+        } catch (\Throwable $e) {
+            Response::redirect(url('admin/staff/concerns'), 'error', $e->getMessage());
+        }
+    }
+
     public function deleteConcern(string $id): void
     {
         if (!hasPermission('staff', 'delete')) {
@@ -1196,14 +1243,22 @@ class AdminController {
             return;
         }
 
-        $concern = Concern::find((int)$id);
+        $concernId = (int)$id;
+        $concern = Concern::find($concernId);
         if (!$concern) {
             Response::redirect(url('admin/staff/concerns'), 'error', 'Concern was not found.');
             return;
         }
-        Concern::delete((int)$id);
-        AuditService::log('staff', 'delete_concern', 'concerns', (int)$id, $concern, null);
-        Response::redirect(url('admin/staff/concerns'), 'success', 'Concern deleted.');
+        try {
+            Concern::delete($concernId);
+            if ((int)Session::get('active_concern_id', 0) === $concernId) {
+                Session::remove('active_concern_id');
+            }
+            AuditService::log('staff', 'delete_concern', 'concerns', $concernId, $concern, null);
+            Response::redirect(url('admin/staff/concerns'), 'success', 'Concern deleted.');
+        } catch (\Throwable $e) {
+            Response::redirect(url('admin/staff/concerns'), 'error', $e->getMessage());
+        }
     }
 
     /**
@@ -1233,645 +1288,4 @@ class AdminController {
         }
     }
 
-    // =========================================================================
-    // PRODUCTION UNITS MANAGEMENT
-    // =========================================================================
-
-    public function storeProductionUnit(): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Invalid security token.');
-        }
-        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if (!$activeConcernId) {
-            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a production unit.');
-        }
-
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production Unit Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Unit Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            $id = ProductionUnit::create([
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'gst_number'   => $gstNumber,
-                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-                'concern_id'   => $activeConcernId,
-            ]);
-
-            AuditService::log('production_units', 'create', 'production_units', $id, null, $_POST);
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'success', "Production Unit '{$name}' created successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Error creating unit: ' . $e->getMessage());
-        }
-    }
-
-    public function updateProductionUnit(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Invalid security token.');
-        }
-
-        $unitId = (int)$id;
-        if (!ProductionUnit::find($unitId)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit not found in the active concern.');
-        }
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production Unit Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Unit Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            if (!ProductionUnit::update($unitId, [
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'gst_number'   => $gstNumber,
-                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-            ])) {
-                Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit could not be updated in the active concern.');
-            }
-
-            AuditService::log('production_units', 'update', 'production_units', $unitId, null, $_POST);
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'success', "Production Unit '{$name}' updated successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Error updating unit: ' . $e->getMessage());
-        }
-    }
-
-    public function deleteProductionUnit(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Invalid security token.');
-        }
-
-        $unitId = (int)$id;
-        if (!ProductionUnit::find($unitId)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit not found in the active concern.');
-        }
-        try {
-            // Check if programs are linked
-            $progCount = (int)(Database::fetchOne("SELECT COUNT(*) as cnt FROM production_programs WHERE production_unit_id = ?", [$unitId])['cnt'] ?? 0);
-            if ($progCount > 0) {
-                Response::redirect(url('admin/dashboard?tab=production-units'), 'error', "Cannot delete unit: {$progCount} production program(s) are assigned to it. You can deactivate it instead.");
-            }
-
-            if (!ProductionUnit::delete($unitId)) {
-                Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit could not be deleted.');
-            }
-            AuditService::log('production_units', 'delete', 'production_units', $unitId);
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'success', 'Production Unit deleted successfully.');
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Error deleting unit: ' . $e->getMessage());
-        }
-    }
-
-    public function toggleProductionUnit(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Invalid security token.');
-        }
-
-        $unitId = (int)$id;
-        if (!ProductionUnit::toggleActive($unitId)) {
-            Response::redirect(url('admin/dashboard?tab=production-units'), 'error', 'Production unit not found in the active concern.');
-        }
-        AuditService::log('production_units', 'toggle_active', 'production_units', $unitId);
-        Response::redirect(url('admin/dashboard?tab=production-units'), 'success', 'Production Unit status updated.');
-    }
-
-    public function ajaxAddProductionUnit(): void {
-        if (!CSRF::validateRequest()) {
-            Response::jsonError('Invalid security token.', [], 403);
-        }
-        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if (!$activeConcernId) {
-            Response::jsonError('Select a concern before creating a production unit.', [], 409);
-        }
-
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::jsonError('Production Unit Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::jsonError('Unit Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::jsonError('Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::jsonError('Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            $id = ProductionUnit::create([
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'gst_number'   => $gstNumber,
-                'is_active'    => 1,
-                'concern_id'   => $activeConcernId,
-            ]);
-
-            $unit = ProductionUnit::find($id);
-            AuditService::log('production_units', 'create_ajax', 'production_units', $id, null, $_POST);
-            Response::jsonSuccess('Production Unit added successfully!', ['unit' => $unit]);
-        } catch (Exception $e) {
-            Response::jsonError('Database error: ' . $e->getMessage());
-        }
-    }
-
-    // =========================================================================
-    // WAREHOUSE MANAGEMENT
-    // =========================================================================
-
-    public function storeWarehouse(): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Invalid security token.');
-        }
-        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if (!$activeConcernId) {
-            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a warehouse.');
-        }
-
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            $id = Warehouse::create([
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'gst_number'   => $gstNumber,
-                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-                'concern_id'   => $activeConcernId,
-            ]);
-
-            AuditService::log('warehouses', 'create', 'warehouses', $id, null, $_POST);
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', "Warehouse '{$name}' created successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Error creating warehouse: ' . $e->getMessage());
-        }
-    }
-
-    public function updateWarehouse(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Invalid security token.');
-        }
-
-        $whId = (int)$id;
-        if (!Warehouse::find($whId)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse not found in the active concern.');
-        }
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            if (!Warehouse::update($whId, [
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'gst_number'   => $gstNumber,
-                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-            ])) {
-                Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse could not be updated in the active concern.');
-            }
-
-            AuditService::log('warehouses', 'update', 'warehouses', $whId, null, $_POST);
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', "Warehouse '{$name}' updated successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Error updating warehouse: ' . $e->getMessage());
-        }
-    }
-
-    public function deleteWarehouse(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Invalid security token.');
-        }
-
-        $whId = (int)$id;
-        if (!Warehouse::find($whId)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse not found in the active concern.');
-        }
-        try {
-            // Check stock balances
-            $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'WAREHOUSE' AND location_id = ? AND concern_id = ?", [$whId, (int)currentConcernId()])['total'] ?? 0);
-            if ($stockCount > 0) {
-                Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', "Cannot delete warehouse: It holds {$stockCount} active inventory units. Please transfer stock or deactivate it.");
-            }
-
-            if (!Warehouse::delete($whId)) {
-                Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse could not be deleted.');
-            }
-            AuditService::log('warehouses', 'delete', 'warehouses', $whId);
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', 'Warehouse deleted successfully.');
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Error deleting warehouse: ' . $e->getMessage());
-        }
-    }
-
-    public function toggleWarehouse(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Invalid security token.');
-        }
-
-        $whId = (int)$id;
-        if (!Warehouse::toggleActive($whId)) {
-            Response::redirect(url('admin/dashboard?tab=warehouses'), 'error', 'Warehouse not found in the active concern.');
-        }
-        AuditService::log('warehouses', 'toggle_active', 'warehouses', $whId);
-        Response::redirect(url('admin/dashboard?tab=warehouses'), 'success', 'Warehouse status updated.');
-    }
-
-    // =========================================================================
-    // SHOP MANAGEMENT
-    // =========================================================================
-
-    public function storeShop(): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Invalid security token.');
-        }
-        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if (!$activeConcernId) {
-            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a shop.');
-        }
-
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            $id = Shop::create([
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'gst_number'   => $gstNumber,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-                'concern_id'   => $activeConcernId,
-            ]);
-
-            AuditService::log('shops', 'create', 'shops', $id, null, $_POST);
-            Response::redirect(url('admin/dashboard?tab=shops'), 'success', "Retail Shop '{$name}' created successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Error creating shop: ' . $e->getMessage());
-        }
-    }
-
-    public function updateShop(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Invalid security token.');
-        }
-
-        $shopId = (int)$id;
-        if (!Shop::find($shopId)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop not found in the active concern.');
-        }
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        $managerName = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-
-        if (empty($name)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop Name is required.');
-        }
-        if (!empty($managerName) && !preg_match('/^[a-zA-Z\s]+$/', $managerName)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop Manager name must contain only alphabets.');
-        }
-        if (!empty($phone) && !preg_match('/^[0-9]{10}$/', $phone)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Contact phone must be exactly 10 digits.');
-        }
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            if (!Shop::update($shopId, [
-                'name'         => $name,
-                'code'         => $code,
-                'manager_name' => $managerName,
-                'manager_id'   => !empty($_POST['manager_id']) ? (int)$_POST['manager_id'] : null,
-                'gst_number'   => $gstNumber,
-                'address'      => trim($_POST['address'] ?? ''),
-                'phone'        => $phone,
-                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
-            ])) {
-                Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop could not be updated in the active concern.');
-            }
-
-            AuditService::log('shops', 'update', 'shops', $shopId, null, $_POST);
-            Response::redirect(url('admin/dashboard?tab=shops'), 'success', "Retail Shop '{$name}' updated successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Error updating shop: ' . $e->getMessage());
-        }
-    }
-
-    public function deleteShop(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Invalid security token.');
-        }
-
-        $shopId = (int)$id;
-        if (!Shop::find($shopId)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop not found in the active concern.');
-        }
-        try {
-            // Check stock balances
-            $stockCount = (float)(Database::fetchOne("SELECT COALESCE(SUM(quantity), 0) as total FROM stock_balances WHERE location_type = 'SHOP' AND location_id = ? AND concern_id = ?", [$shopId, (int)currentConcernId()])['total'] ?? 0);
-            if ($stockCount > 0) {
-                Response::redirect(url('admin/dashboard?tab=shops'), 'error', "Cannot delete shop: It holds {$stockCount} active stock items. Please transfer stock or deactivate it.");
-            }
-
-            if (!Shop::delete($shopId)) {
-                Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop could not be deleted.');
-            }
-            AuditService::log('shops', 'delete', 'shops', $shopId);
-            Response::redirect(url('admin/dashboard?tab=shops'), 'success', 'Retail Shop deleted successfully.');
-        } catch (Exception $e) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Error deleting shop: ' . $e->getMessage());
-        }
-    }
-
-    public function toggleShop(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Invalid security token.');
-        }
-
-        $shopId = (int)$id;
-        if (!Shop::toggleActive($shopId)) {
-            Response::redirect(url('admin/dashboard?tab=shops'), 'error', 'Shop not found in the active concern.');
-        }
-        AuditService::log('shops', 'toggle_active', 'shops', $shopId);
-        Response::redirect(url('admin/dashboard?tab=shops'), 'success', 'Shop status updated.');
-    }
-
-    // =====================================================================
-    // SALES CHANNELS (WHATSAPP, WEBSITE)
-    // =====================================================================
-
-    public function storeChannel(): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
-        }
-        $activeConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if (!$activeConcernId) {
-            Response::redirect(url('admin/concern/select'), 'error', 'Select a concern before creating a sales channel.');
-        }
-
-        $type = strtoupper($_POST['channel_type'] ?? '');
-        if (!in_array($type, ['WHATSAPP', 'WEBSITE'], true)) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Select a supported sales channel type.');
-        }
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        if (empty($name)) {
-            Response::redirect(url("admin/dashboard?tab=" . strtolower($type)), 'error', 'Channel Name is required.');
-        }
-
-        $manager_name = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-        $description = trim($_POST['description'] ?? '');
-        $is_active = isset($_POST['is_active']) ? 1 : 0;
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-        if (!Concern::hasFacilityModules((int)$activeConcernId, $type)) {
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enable a module for this channel type in the active concern first.');
-        }
-
-        try {
-            if (empty($code)) {
-                $prefix = ($type === 'WHATSAPP' ? 'WA' : 'WE') . '-C' . $activeConcernId . '-';
-                $num = 1;
-                do {
-                    $code = $prefix . str_pad((string)$num, 2, '0', STR_PAD_LEFT);
-                    $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
-                    if ($exists) {
-                        $num++;
-                    } else {
-                        break;
-                    }
-                } while (true);
-            } else {
-                $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND concern_id = ?", [$code, $activeConcernId]);
-                if ($exists) {
-                    Response::redirect(url("admin/dashboard?tab=" . strtolower($type)), 'error', 'Channel code already exists.');
-                    return;
-                }
-            }
-
-            Database::execute(
-                "INSERT INTO sales_channels (name, code, manager_name, phone, gst_number, description, channel_type, is_active, concern_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active, $activeConcernId]
-            );
-            $id = Database::lastInsertId();
-            AuditService::log('admin', 'create_channel', 'sales_channels', $id, null, $_POST);
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'success', "Channel '{$name}' created successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Error creating channel: ' . $e->getMessage());
-        }
-    }
-
-    public function updateChannel(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
-        }
-
-        $activeConcernId = currentConcernId();
-        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
-        $channel = $activeConcernId === null ? null : Database::fetchOne(
-            "SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?",
-            [(int)$id, $activeConcernId]
-        );
-        if (!$channel || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== (int)$id)) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Sales channel not found in the active concern.');
-        }
-        $type = strtoupper($_POST['channel_type'] ?? '');
-        if (!in_array($type, ['WHATSAPP', 'WEBSITE'], true) || !Concern::hasFacilityModules((int)$activeConcernId, $type)) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Choose a supported channel type enabled for the active concern.');
-        }
-        $name = trim($_POST['name'] ?? '');
-        $code = trim($_POST['code'] ?? '');
-        if (empty($name)) {
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Channel Name is required.');
-        }
-
-        $manager_name = trim($_POST['manager_name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
-        $gstNumber = strtoupper(trim($_POST['gst_number'] ?? ''));
-        $description = trim($_POST['description'] ?? '');
-        $is_active = isset($_POST['is_active']) ? 1 : 0;
-        if (!$this->isValidGstNumber($gstNumber)) {
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Enter a valid 15-character GSTIN.');
-        }
-
-        try {
-            $exists = Database::fetchOne("SELECT id FROM sales_channels WHERE code = ? AND id != ? AND concern_id = ?", [$code, $id, $activeConcernId]);
-            if ($exists && !empty($code)) {
-                Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Channel code already exists for another channel.');
-                return;
-            }
-
-            Database::execute(
-                "UPDATE sales_channels SET name = ?, code = ?, manager_name = ?, phone = ?, gst_number = ?, description = ?, channel_type = ?, is_active = ? WHERE id = ? AND concern_id = ?",
-                [$name, $code, $manager_name, $phone, $gstNumber ?: null, $description, $type, $is_active, $id, $activeConcernId]
-            );
-            AuditService::log('admin', 'update_channel', 'sales_channels', $id, null, $_POST);
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'success', "Channel '{$name}' updated successfully.");
-        } catch (Exception $e) {
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($type)), 'error', 'Error updating channel: ' . $e->getMessage());
-        }
-    }
-
-    public function deleteChannel(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
-        }
-
-        try {
-            $concernId = currentConcernId();
-            $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
-            $chan = $concernId === null || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== (int)$id)
-                ? null
-                : Database::fetchOne(
-                "SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?",
-                [$id, $concernId]
-            );
-            if ($chan) {
-                Database::execute("DELETE FROM sales_channels WHERE id = ? AND concern_id = ?", [$id, $concernId]);
-                AuditService::log('admin', 'delete_channel', 'sales_channels', $id);
-                Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($chan['channel_type'])), 'success', 'Channel deleted successfully.');
-            } else {
-                Response::redirect(url('admin/dashboard'), 'error', 'Channel not found.');
-            }
-        } catch (Exception $e) {
-            // Cannot delete if in use
-            $concernId = currentConcernId();
-            if ($concernId !== null) {
-                Database::execute("UPDATE sales_channels SET is_active = 0 WHERE id = ? AND concern_id = ?", [$id, $concernId]);
-            }
-            Response::redirect(url('admin/dashboard'), 'warning', 'Channel is in use and was deactivated instead of deleted.');
-        }
-    }
-
-    public function toggleChannel(string $id): void {
-        if (!CSRF::validateRequest()) {
-            Response::redirect(url('admin/dashboard'), 'error', 'Invalid security token.');
-        }
-
-        $concernId = currentConcernId();
-        $assignedChannelId = function_exists('currentChannelId') ? currentChannelId() : null;
-        $chan = $concernId === null || $assignedChannelId === 0 || ($assignedChannelId !== null && $assignedChannelId !== (int)$id)
-            ? null
-            : Database::fetchOne(
-            "SELECT * FROM sales_channels WHERE id = ? AND concern_id = ?",
-            [$id, $concernId]
-        );
-        if ($chan) {
-            $newStatus = $chan['is_active'] ? 0 : 1;
-            Database::execute("UPDATE sales_channels SET is_active = ? WHERE id = ? AND concern_id = ?", [$newStatus, $id, $concernId]);
-            AuditService::log('admin', 'toggle_channel', 'sales_channels', $id);
-            Response::redirect(url("admin/dashboard?tab=tab-" . strtolower($chan['channel_type'])), 'success', 'Channel status updated.');
-        } else {
-            Response::redirect(url('admin/dashboard'), 'error', 'Channel not found.');
-        }
-    }
 }

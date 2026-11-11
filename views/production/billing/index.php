@@ -1,7 +1,7 @@
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
     <div>
         <h4 class="mb-1 fw-bold">Production Billing</h4>
-        <div class="text-muted small">Bills from QC-passed Production Inventory</div>
+        <div class="text-muted small">Bills from QC-passed &amp; concern inwarded Production Inventory</div>
     </div>
     <div class="d-flex gap-2">
         <?php if (hasPermission('production_billing_returns', 'view')): ?>

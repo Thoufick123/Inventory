@@ -185,8 +185,8 @@ $definitions = array_merge($definitions, [
     ['module' => 'labels', 'action' => 'delete', 'desc' => 'Delete Garment Label Batch'],
 
     // Production Inward / GRN
-    ['module' => 'production_inward', 'action' => 'view', 'desc' => 'View production-unit inward receipts and stock'],
-    ['module' => 'production_inward', 'action' => 'receive', 'desc' => 'Receive products into a production unit'],
+    ['module' => 'production_inward', 'action' => 'view', 'desc' => 'View production inward receipts and stock'],
+    ['module' => 'production_inward', 'action' => 'receive', 'desc' => 'Receive products into concern or production-unit inventory'],
 
     // Production Unit Cash Flow
     ['module' => 'production_cash', 'action' => 'view', 'desc' => 'View production-unit cash flow and shift records'],

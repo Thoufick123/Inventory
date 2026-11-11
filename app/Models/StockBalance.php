@@ -29,6 +29,7 @@ class StockBalance {
                     WHEN 'SHOP' THEN (SELECT name FROM shops WHERE id = sb.location_id AND concern_id = sb.concern_id)
                     WHEN 'PRODUCTION_UNIT' THEN (SELECT name FROM production_units WHERE id = sb.location_id AND concern_id = sb.concern_id)
                     WHEN 'CHANNEL' THEN (SELECT name FROM sales_channels WHERE id = sb.location_id AND concern_id = sb.concern_id)
+                    WHEN 'CONCERN' THEN (SELECT name FROM concerns WHERE id = sb.location_id AND id = sb.concern_id)
                 END as location_name
              FROM stock_balances sb WHERE sb.variant_id = ? AND sb.concern_id = ?";
         $params = [$variantId, $concernId];
@@ -45,9 +46,10 @@ class StockBalance {
             OR (sb.location_type = 'CHANNEL' AND EXISTS (
                 SELECT 1 FROM sales_channels sc_scope WHERE sc_scope.id = sb.location_id AND sc_scope.concern_id = ?
             ))
+            OR (sb.location_type = 'CONCERN' AND sb.location_id = ?)
             OR (sb.location_type = 'OFFICE' AND ? = 1)
         )";
-        array_push($params, $concernId, $concernId, $concernId, $concernId, isSuperAdmin() ? 1 : 0);
+        array_push($params, $concernId, $concernId, $concernId, $concernId, $concernId, isSuperAdmin() ? 1 : 0);
         if ($scopedWhId === 0) {
             return [];
         }

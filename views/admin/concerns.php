@@ -108,14 +108,30 @@ $selectedModuleKeys = array_fill_keys($selectedConcern['module_keys'] ?? [], tru
                             <tr><td colspan="3" class="text-center text-muted py-5">No concerns yet. Create one and assign its modules.</td></tr>
                         <?php else: foreach ($concerns as $concern): ?>
                             <tr>
-                                <td class="ps-3"><strong><?= e($concern['name']) ?></strong><?php if (!empty($concern['description'])): ?><small class="d-block text-muted"><?= e($concern['description']) ?></small><?php endif; ?></td>
+                                <td class="ps-3">
+                                    <strong><?= e($concern['name']) ?></strong>
+                                    <?php if (!empty($concern['is_active'])): ?>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle ms-1">Active</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-secondary-subtle text-secondary border ms-1">Inactive</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($concern['description'])): ?><small class="d-block text-muted"><?= e($concern['description']) ?></small><?php endif; ?>
+                                </td>
                                 <td><span class="badge bg-primary-subtle text-primary"><?= count($concern['module_keys']) ?> modules</span></td>
-                                <td class="text-end pe-3">
+                                <td class="text-end pe-3 text-nowrap">
                                     <a class="btn btn-sm btn-outline-primary" href="<?= url('admin/staff/concerns?concern_id=' . (int)$concern['id']) ?>"><i class="bi bi-pencil"></i> Edit</a>
-                                    <?php if (hasPermission('staff', 'delete')): ?>
-                                        <form method="POST" action="<?= url('admin/staff/concerns/delete/' . (int)$concern['id']) ?>" class="d-inline" onsubmit="return confirm('Delete this concern and remove it from assigned staff?')">
+                                    <?php if (hasPermission('staff', 'edit') && (int)$concern['id'] !== 1): ?>
+                                        <form method="POST" action="<?= url('admin/staff/concerns/toggle/' . (int)$concern['id']) ?>" class="d-inline" onsubmit="return confirm('<?= !empty($concern['is_active']) ? 'Deactivate this concern? Staff will not be able to select or transact on it.' : 'Reactivate this concern?' ?>')">
                                             <?= CSRF::field() ?>
-                                            <button class="btn btn-sm btn-outline-danger" type="submit"><i class="bi bi-trash"></i></button>
+                                            <button class="btn btn-sm btn-outline-<?= !empty($concern['is_active']) ? 'warning' : 'success' ?>" type="submit" title="<?= !empty($concern['is_active']) ? 'Deactivate Concern' : 'Activate Concern' ?>">
+                                                <i class="bi bi-<?= !empty($concern['is_active']) ? 'pause-circle' : 'play-circle' ?>"></i>
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
+                                    <?php if (hasPermission('staff', 'delete') && (int)$concern['id'] !== 1): ?>
+                                        <form method="POST" action="<?= url('admin/staff/concerns/delete/' . (int)$concern['id']) ?>" class="d-inline" onsubmit="return confirm('Delete this unused concern? Concerns with existing batches, stock, or transactions cannot be deleted and should be deactivated.')">
+                                            <?= CSRF::field() ?>
+                                            <button class="btn btn-sm btn-outline-danger" type="submit" title="Delete Concern"><i class="bi bi-trash"></i></button>
                                         </form>
                                     <?php endif; ?>
                                 </td>

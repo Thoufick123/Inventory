@@ -10,6 +10,20 @@ class LabelBatch {
      * Find label batch by ID.
      */
     public static function find(int $id): ?array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($scopedUnitId !== null) {
+            $unitClause = ' AND pp.production_unit_id = ?';
+            $params[] = $scopedUnitId;
+        }
         return Database::fetchOne(
             "SELECT lb.*, 
                     sb.batch_number as stitching_batch_number, sb.name as stitching_name, sb.stitched_qty as stitching_total_qty,
@@ -19,12 +33,13 @@ class LabelBatch {
              FROM label_batches lb
              LEFT JOIN stitching_batches sb ON lb.stitching_batch_id = sb.id
              LEFT JOIN production_programs pp ON lb.program_id = pp.id
+             LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN categories cat ON sb.category_id = cat.id
              LEFT JOIN subcategories subcat ON sb.subcategory_id = subcat.id
              LEFT JOIN sub_subcategories subsubcat ON sb.sub_subcategory_id = subsubcat.id
-             WHERE lb.id = ?",
-            [$id]
+             WHERE lb.id = ? AND pu.concern_id = ?{$unitClause}",
+            $params
         );
     }
 
@@ -32,14 +47,27 @@ class LabelBatch {
      * Get all label batches with filters.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT lb.*, 
                        pp.program_number, pp.name as program_name,
                        p.name as product_name, p.code as product_code
                 FROM label_batches lb
                 LEFT JOIN production_programs pp ON lb.program_id = pp.id
+                LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
                 LEFT JOIN products p ON pp.product_id = p.id
-                WHERE 1=1";
-        $params = [];
+                WHERE pu.concern_id = ?";
+        $params = [$concernId];
+        if ($scopedUnitId !== null) {
+            $sql .= " AND pp.production_unit_id = ?";
+            $params[] = $scopedUnitId;
+        }
 
         if (!empty($filters['status'])) {
             $sql .= " AND lb.status = ?";

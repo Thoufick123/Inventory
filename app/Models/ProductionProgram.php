@@ -11,10 +11,18 @@ class ProductionProgram {
      */
     public static function find(int $id): ?array {
         $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        $concernClause = $concernId !== null ? ' AND pu.concern_id = ?' : '';
-        $params = [$id];
-        if ($concernId !== null) {
-            $params[] = $concernId;
+        if ($concernId === null) {
+            return null;
+        }
+        $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($unitId === 0) {
+            return null;
+        }
+        $params = [$id, $concernId];
+        $unitClause = '';
+        if ($unitId !== null) {
+            $unitClause = ' AND pp.production_unit_id = ?';
+            $params[] = $unitId;
         }
         return Database::fetchOne(
             "SELECT pp.*, 
@@ -40,7 +48,7 @@ class ProductionProgram {
              LEFT JOIN users u_assign ON pp.assigned_to = u_assign.id
              LEFT JOIN users u_appr ON pp.approved_by = u_appr.id
              LEFT JOIN users u_creat ON pp.created_by = u_creat.id
-             WHERE pp.id = ?{$concernClause}",
+             WHERE pp.id = ? AND pu.concern_id = ?{$unitClause}",
             $params
         );
     }
@@ -50,10 +58,18 @@ class ProductionProgram {
      */
     public static function findByNumber(string $programNumber): ?array {
         $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        $concernClause = $concernId !== null ? ' AND pu.concern_id = ?' : '';
-        $params = [$programNumber];
-        if ($concernId !== null) {
-            $params[] = $concernId;
+        if ($concernId === null) {
+            return null;
+        }
+        $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($unitId === 0) {
+            return null;
+        }
+        $params = [$programNumber, $concernId];
+        $unitClause = '';
+        if ($unitId !== null) {
+            $unitClause = ' AND pp.production_unit_id = ?';
+            $params[] = $unitId;
         }
         return Database::fetchOne(
             "SELECT pp.*, pu.name as unit_name, p.name as product_name,
@@ -68,7 +84,7 @@ class ProductionProgram {
              LEFT JOIN categories c ON pp.category_id = c.id
              LEFT JOIN subcategories sc ON pp.subcategory_id = sc.id
              LEFT JOIN sub_subcategories ssc ON pp.sub_subcategory_id = ssc.id
-             WHERE pp.program_number = ?{$concernClause}",
+             WHERE pp.program_number = ? AND pu.concern_id = ?{$unitClause}",
             $params
         );
     }
@@ -77,6 +93,14 @@ class ProductionProgram {
      * Get all programs with optional filtering.
      */
     public static function getAll(array $filters = []): array {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return [];
+        }
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($scopedUnitId === 0) {
+            return [];
+        }
         $sql = "SELECT pp.*, 
                        pu.name as unit_name, pu.code as unit_code,
                        p.name as product_name, p.code as product_code,
@@ -95,12 +119,11 @@ class ProductionProgram {
                 LEFT JOIN subcategories sc ON pp.subcategory_id = sc.id
                 LEFT JOIN sub_subcategories ssc ON pp.sub_subcategory_id = ssc.id
                 LEFT JOIN users u ON pp.assigned_to = u.id
-                WHERE 1=1";
-        $params = [];
-        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        if ($concernId !== null) {
-            $sql .= " AND pu.concern_id = ?";
-            $params[] = $concernId;
+                WHERE pu.concern_id = ?";
+        $params = [$concernId];
+        if ($scopedUnitId !== null) {
+            $sql .= " AND pp.production_unit_id = ?";
+            $params[] = $scopedUnitId;
         }
 
         if (!empty($filters['status'])) {

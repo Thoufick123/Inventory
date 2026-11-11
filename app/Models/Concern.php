@@ -407,8 +407,147 @@ class Concern
         }
     }
 
+    public static function getDeletionBlockers(int $id): array
+    {
+        if ($id <= 0) {
+            return [];
+        }
+
+        $blockers = [];
+        $unitIds = array_map(
+            'intval',
+            array_column(
+                Database::fetchAll("SELECT id FROM production_units WHERE concern_id = ?", [$id]),
+                'id'
+            )
+        );
+
+        // Check every FK table pointing directly to concerns(id), excluding user/module mappings and unused production_units.
+        $fkColumns = Database::fetchAll(
+            "SELECT DISTINCT TABLE_NAME, COLUMN_NAME
+             FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND REFERENCED_TABLE_NAME = 'concerns'
+               AND TABLE_NAME NOT IN ('concern_modules', 'user_concerns', 'production_units')
+             ORDER BY TABLE_NAME, COLUMN_NAME"
+        );
+        $tableCounts = [];
+        foreach ($fkColumns as $fk) {
+            $table = $fk['TABLE_NAME'];
+            $column = $fk['COLUMN_NAME'];
+            if (!preg_match('/^[a-zA-Z0-9_]+$/', $table) || !preg_match('/^[a-zA-Z0-9_]+$/', $column)) {
+                continue;
+            }
+            $row = Database::fetchOne(
+                "SELECT COUNT(*) AS cnt FROM `{$table}` WHERE `{$column}` = ?",
+                [$id]
+            );
+            $cnt = (int)($row['cnt'] ?? 0);
+            if ($cnt > 0) {
+                $tableCounts[$table] = ($tableCounts[$table] ?? 0) + $cnt;
+            }
+        }
+        foreach ($tableCounts as $table => $cnt) {
+            $label = str_replace('_', ' ', $table);
+            $blockers[] = "{$cnt} {$label} record(s)";
+        }
+
+        if ($unitIds) {
+            $placeholders = implode(',', array_fill(0, count($unitIds), '?'));
+            $unitRefChecks = [
+                'users' => "SELECT COUNT(*) AS cnt FROM users WHERE production_unit_id IN ({$placeholders})",
+                'production programs' => "SELECT COUNT(*) AS cnt FROM production_programs WHERE production_unit_id IN ({$placeholders})",
+                'cutting batches' => "SELECT COUNT(*) AS cnt FROM cutting_batches WHERE production_unit_id IN ({$placeholders})",
+                'stitching batches' => "SELECT COUNT(*) AS cnt FROM stitching_batches WHERE production_unit_id IN ({$placeholders})",
+                'production expenses' => "SELECT COUNT(*) AS cnt FROM production_expenses WHERE production_unit_id IN ({$placeholders})",
+                'wastage sales' => "SELECT COUNT(*) AS cnt FROM wastage_sales WHERE production_unit_id IN ({$placeholders})",
+                'production bills' => "SELECT COUNT(*) AS cnt FROM production_bills WHERE production_unit_id IN ({$placeholders})",
+                'production cash registers' => "SELECT COUNT(*) AS cnt FROM production_cash_registers WHERE production_unit_id IN ({$placeholders})",
+                'production inventory damages' => "SELECT COUNT(*) AS cnt FROM production_inventory_damages WHERE production_unit_id IN ({$placeholders})",
+                'production warehouse reworks' => "SELECT COUNT(*) AS cnt FROM production_warehouse_reworks WHERE production_unit_id IN ({$placeholders})",
+            ];
+            foreach ($unitRefChecks as $label => $sql) {
+                try {
+                    $row = Database::fetchOne($sql, $unitIds);
+                    $cnt = (int)($row['cnt'] ?? 0);
+                    if ($cnt > 0) {
+                        $blockers[] = "{$cnt} {$label} record(s)";
+                    }
+                } catch (\Throwable $e) {
+                    // Skip optional/retired tables if a column does not exist in the current schema.
+                }
+            }
+        }
+
+        return $blockers;
+    }
+
+    public static function toggleActive(int $id): bool
+    {
+        if ($id === 1) {
+            throw new RuntimeException('The primary system concern cannot be deactivated.');
+        }
+
+        $concern = self::find($id);
+        if (!$concern) {
+            throw new RuntimeException('Concern was not found.');
+        }
+
+        $newState = empty($concern['is_active']) ? 1 : 0;
+        Database::execute(
+            "UPDATE concerns SET is_active = ?, updated_at = NOW() WHERE id = ?",
+            [$newState, $id]
+        );
+        return $newState === 1;
+    }
+
     public static function delete(int $id): void
     {
-        Database::execute("DELETE FROM concerns WHERE id = ?", [$id]);
+        if ($id <= 0) {
+            throw new InvalidArgumentException('Invalid concern ID.');
+        }
+        if ($id === 1) {
+            throw new RuntimeException('The primary system concern cannot be deleted.');
+        }
+
+        $concern = self::find($id);
+        if (!$concern) {
+            throw new RuntimeException('Concern was not found.');
+        }
+
+        $blockers = self::getDeletionBlockers($id);
+        if (!empty($blockers)) {
+            $preview = implode(', ', array_slice($blockers, 0, 4));
+            if (count($blockers) > 4) {
+                $preview .= ', and more';
+            }
+            throw new RuntimeException(
+                "Cannot delete '{$concern['name']}' because it has existing records ({$preview}). Deactivate it instead to disable access while preserving history."
+            );
+        }
+
+        Database::beginTransaction();
+        try {
+            Database::execute("DELETE FROM user_concerns WHERE concern_id = ?", [$id]);
+            Database::execute("DELETE FROM concern_modules WHERE concern_id = ?", [$id]);
+            Database::execute("DELETE FROM production_units WHERE concern_id = ?", [$id]);
+            Database::execute("DELETE FROM concerns WHERE id = ?", [$id]);
+            Database::commit();
+        } catch (\PDOException $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
+            if ((string)$e->getCode() === '23000') {
+                throw new RuntimeException(
+                    "Cannot delete '{$concern['name']}' because it is still referenced by existing transactions or inventory records. Deactivate the concern instead."
+                );
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollback();
+            }
+            throw $e;
+        }
     }
 }

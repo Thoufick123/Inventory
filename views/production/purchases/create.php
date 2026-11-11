@@ -12,6 +12,16 @@
         <div class="card-header bg-white py-3"><h5 class="mb-0 fw-bold"><i class="bi bi-receipt me-2 text-primary"></i>Purchase &amp; Supplier Details</h5></div>
         <div class="card-body">
             <div class="row g-3">
+                <?php if (!empty($productionUnits) && count($productionUnits) > 1): ?>
+                <div class="col-md-4">
+                    <label class="form-label required" for="purchaseUnitId">Production Unit *</label>
+                    <select class="form-select" name="production_unit_id" id="purchaseUnitId" required>
+                        <?php foreach ($productionUnits as $unit): ?>
+                            <option value="<?= (int)$unit['id'] ?>"><?= e($unit['name']) ?><?= !empty($unit['code']) ? ' (' . e($unit['code']) . ')' : '' ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <?php endif; ?>
                 <div class="col-md-5">
                     <label class="form-label required" for="purchaseSeller">Supplier *</label>
                     <select class="form-select" name="seller_id" id="purchaseSeller" required>

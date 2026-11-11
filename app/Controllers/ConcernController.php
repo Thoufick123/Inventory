@@ -39,6 +39,19 @@ class ConcernController
             return;
         }
 
+        $intended = Session::get('_intended_url');
+        Session::remove('_intended_url');
+        if (is_string($intended) && $intended !== '') {
+            $isSafeRelative = str_starts_with($intended, '/') && !str_starts_with($intended, '//');
+            $isLoop = str_contains($intended, 'concern/activate')
+                || str_contains($intended, 'admin/concern/select')
+                || str_contains($intended, '/logout');
+            if ($isSafeRelative && !$isLoop) {
+                Response::redirect($intended, 'success', 'Active concern updated.');
+                return;
+            }
+        }
+
         Response::redirect(url('admin/concern/select'), 'success', 'Active concern updated.');
     }
 }

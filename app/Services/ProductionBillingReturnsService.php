@@ -1,6 +1,8 @@
 <?php
 
 require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
+require_once BASE_PATH . '/app/Services/ProductionBillingService.php';
+require_once BASE_PATH . '/app/Services/StockService.php';
 
 class ProductionBillingReturnsService {
     public static function getSchemaIssues(): array {
@@ -137,7 +139,7 @@ class ProductionBillingReturnsService {
         if (!$bill) {
             return null;
         }
-        ConcernTransactionService::assertFacility('PRODUCTION', (int)$bill['production_unit_id']);
+        self::assertBillUnitScope($bill);
 
         $items = Database::fetchAll(
             "SELECT pbi.*,
@@ -184,7 +186,7 @@ class ProductionBillingReturnsService {
         if (!$return) {
             return null;
         }
-        ConcernTransactionService::assertFacility('PRODUCTION', (int)$return['production_unit_id']);
+        self::assertBillUnitScope($return);
         $items = Database::fetchAll(
             "SELECT pri.*, r.id AS returned_inventory_id, r.new_tag_code AS returned_inventory_tag,
                     r.status AS returned_inventory_status
@@ -212,16 +214,17 @@ class ProductionBillingReturnsService {
             throw new InvalidArgumentException('Enter a return reason up to 500 characters.');
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         Database::beginTransaction();
         try {
             $bill = Database::fetchOne(
                 'SELECT * FROM production_bills WHERE id = ? AND concern_id = ? FOR UPDATE',
-                [$billId, ConcernTransactionService::activeConcernId()]
+                [$billId, $concernId]
             );
             if (!$bill) {
                 throw new InvalidArgumentException('Production Bill was not found.');
             }
-            ConcernTransactionService::assertFacility('PRODUCTION', (int)$bill['production_unit_id']);
+            self::assertBillUnitScope($bill);
 
             $processed = [];
             $seenOriginal = [];
@@ -240,13 +243,11 @@ class ProductionBillingReturnsService {
                 $tag = Database::fetchOne(
                     "SELECT t.*, bi.product_name, bi.sku, bi.size_name, bi.color_name, bi.unit_price,
                             bi.total_amount, bi.quantity, pv.id AS variant_id,
-                            qi.qc_batch_id, pp.production_unit_id
+                            COALESCE(qi.qc_batch_id, 0) AS qc_batch_id
                      FROM production_bill_item_tags t
                      JOIN production_bill_items bi ON bi.id = t.bill_item_id
                      LEFT JOIN product_variants pv ON pv.id = bi.variant_id
-                     JOIN qc_items qi ON qi.id = t.qc_item_id
-                     JOIN qc_batches qb ON qb.id = qi.qc_batch_id
-                     JOIN production_programs pp ON pp.id = qb.program_id
+                     LEFT JOIN qc_items qi ON qi.id = t.qc_item_id
                      WHERE t.bill_id = ? AND t.tag_code = ? AND t.status = 'BILLED'
                      ORDER BY t.id DESC LIMIT 1 FOR UPDATE",
                     [$billId, $tagCode]
@@ -254,6 +255,7 @@ class ProductionBillingReturnsService {
                 if (!$tag) {
                     throw new InvalidArgumentException("QR {$tagCode} is not currently billed on this invoice, or it was already returned.");
                 }
+                $tag['production_unit_id'] = !empty($bill['production_unit_id']) ? (int)$bill['production_unit_id'] : null;
                 $condition = strtoupper(trim((string)($submitted['condition'] ?? 'GOOD')));
                 if (!in_array($condition, ['GOOD', 'DAMAGED'], true)) {
                     throw new InvalidArgumentException('Choose whether each returned item is good or damaged.');
@@ -340,6 +342,32 @@ class ProductionBillingReturnsService {
                     self::createReturnedInventoryItem($returnId, $returnItemId, $tag, $userId);
                 }
 
+                $originalVariantId = (int)($tag['variant_id'] ?? 0);
+                if ($originalVariantId > 0) {
+                    $originalLoc = ProductionBillingService::resolveTagStockLocation(
+                        $concernId,
+                        $billId,
+                        $originalVariantId,
+                        (string)$tag['tag_code']
+                    );
+                    if ($originalLoc !== null) {
+                        $stockState = $entry['condition'] === 'GOOD' ? 'AVAILABLE' : 'DAMAGED';
+                        $txnType = $entry['condition'] === 'GOOD' ? 'PRODUCTION_RETURN' : 'PRODUCTION_RETURN_DAMAGED';
+                        StockService::increase(
+                            $originalVariantId,
+                            $originalLoc['location_type'],
+                            (int)$originalLoc['location_id'],
+                            $stockState,
+                            1,
+                            $txnType,
+                            'production_bill_returns',
+                            $returnId,
+                            $userId ?: null,
+                            'Production return ' . $returnNumber . ' (' . $tag['tag_code'] . ')'
+                        );
+                    }
+                }
+
                 Database::execute(
                     "UPDATE production_bill_item_tags SET status = ? WHERE id = ? AND status = 'BILLED'",
                     [$entry['condition'] === 'GOOD' ? 'RETURNED' : 'DAMAGED', (int)$tag['id']]
@@ -350,12 +378,16 @@ class ProductionBillingReturnsService {
                     [$tag['tag_code']]
                 );
                 if ($replacement) {
+                    $returnedReplacement = Database::fetchOne(
+                        "SELECT id FROM production_return_inventory WHERE new_tag_code = ? AND status = 'AVAILABLE' FOR UPDATE",
+                        [$replacement['tag_code']]
+                    );
                     $replacementClaim = Database::fetchOne(
                         'SELECT id, status FROM production_bill_item_tags WHERE tag_code = ? FOR UPDATE',
                         [$replacement['tag_code']]
                     );
                     if ($replacementClaim) {
-                        if ($replacementClaim['status'] !== 'RETURNED') {
+                        if ($replacementClaim['status'] !== 'RETURNED' || !$returnedReplacement) {
                             throw new RuntimeException('The replacement QR was claimed by another transaction. Scan another item.');
                         }
                         Database::execute(
@@ -367,6 +399,30 @@ class ProductionBillingReturnsService {
                             "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, qc_item_id, tag_code, status)
                              VALUES (?, ?, ?, ?, 'BILLED')",
                             [$billId, (int)$tag['bill_item_id'], (int)$replacement['qc_item_id'], $replacement['tag_code']]
+                        );
+                    }
+                    if ($returnedReplacement) {
+                        Database::execute(
+                            "UPDATE production_return_inventory SET status = 'BILLED', updated_at = NOW()
+                             WHERE id = ? AND status = 'AVAILABLE'",
+                            [(int)$returnedReplacement['id']]
+                        );
+                    }
+                    if (($replacement['source_kind'] ?? '') === 'INWARD'
+                        && !empty($replacement['stock_location_type'])
+                        && !empty($replacement['stock_location_id'])
+                        && !empty($replacement['variant_id'])) {
+                        StockService::decrease(
+                            (int)$replacement['variant_id'],
+                            (string)$replacement['stock_location_type'],
+                            (int)$replacement['stock_location_id'],
+                            'AVAILABLE',
+                            1,
+                            'PRODUCTION_BILL_EXCHANGE',
+                            'production_bill_returns',
+                            $returnId,
+                            $userId ?: null,
+                            'Exchange replacement ' . $returnNumber . ' (' . $replacement['tag_code'] . ')'
                         );
                     }
                 }
@@ -433,57 +489,23 @@ class ProductionBillingReturnsService {
         return $newTag;
     }
 
-    private static function findAvailablePiece(string $tagCode): ?array {
-        $activeClaim = Database::fetchOne(
-            "SELECT id FROM production_bill_item_tags WHERE tag_code = ? AND status IN ('BILLED','DAMAGED','RETURNED') LIMIT 1",
-            [$tagCode]
-        );
-        if ($activeClaim) {
-            return null;
-        }
+    private static function findAvailablePiece(string $tagCode): ?array
+    {
+        return ProductionBillingService::findAvailablePieceByTag($tagCode);
+    }
 
-        $rows = Database::fetchAll(
-            "SELECT qi.id AS qc_item_id, qi.qc_batch_id, qi.variant_id, qi.size_name, qi.color_name,
-                    qi.base_price, qi.discount_price, pp.program_number,
-                    COALESCE(p.name, pp.name, 'Finished Product') AS product_name,
-                    p.code AS product_code, p.gst_percentage,
-                    pv.sku, pv.selling_price, pv.mrp,
-                    c.name AS color_from_variant, sz.name AS size_from_variant
-             FROM qc_items qi
-             JOIN qc_batches qb ON qb.id = qi.qc_batch_id
-             JOIN production_programs pp ON pp.id = qb.program_id
-             LEFT JOIN products p ON p.id = pp.product_id
-             LEFT JOIN product_variants pv ON pv.id = qi.variant_id
-             LEFT JOIN colors c ON c.id = pv.color_id
-             LEFT JOIN sizes sz ON sz.id = pv.size_id
-             WHERE qi.passed_qty > 0 ORDER BY qb.created_at DESC, qi.id DESC"
-        );
-        $batchIds = array_values(array_unique(array_map(static fn(array $row): int => (int)$row['qc_batch_id'], $rows)));
-        foreach ($batchIds as $batchId) {
-            $tagsByItem = ProductionService::getAvailableQCPieceTags($batchId);
-            foreach ($rows as $row) {
-                $qcItemId = (int)$row['qc_item_id'];
-                $itemTags = $tagsByItem[$qcItemId] ?? [];
-                if (!in_array(strtoupper($tagCode), array_map('strtoupper', $itemTags), true)) {
-                    continue;
-                }
-                $price = (float)($row['selling_price'] ?? 0);
-                if ($price <= 0) {
-                    $price = (float)($row['discount_price'] ?? $row['base_price'] ?? $row['mrp'] ?? 0);
-                }
-                return [
-                    'qc_item_id' => $qcItemId,
-                    'variant_id' => (int)($row['variant_id'] ?? 0),
-                    'tag_code' => $tagCode,
-                    'product_name' => $row['product_name'],
-                    'sku' => $row['sku'] ?: $row['product_code'],
-                    'size_name' => $row['size_name'] ?: $row['size_from_variant'],
-                    'color_name' => $row['color_name'] ?: $row['color_from_variant'],
-                    'unit_price' => $price,
-                    'gst_percentage' => max(0, (float)($row['gst_percentage'] ?? 0)),
-                ];
+    private static function assertBillUnitScope(array $bill): void
+    {
+        $assignedUnitId = ProductionBillingService::resolveAssignedUnitId();
+        if ($assignedUnitId === 0) {
+            throw new InvalidArgumentException('The active user does not have access to this production unit.');
+        }
+        $billUnitId = !empty($bill['production_unit_id']) ? (int)$bill['production_unit_id'] : null;
+        if ($billUnitId !== null) {
+            ConcernTransactionService::assertFacility('PRODUCTION', $billUnitId);
+            if ($assignedUnitId !== null && $billUnitId !== $assignedUnitId) {
+                throw new InvalidArgumentException('The selected bill belongs to another production unit.');
             }
         }
-        return null;
     }
 }

@@ -18,6 +18,28 @@ $concernModuleMap = [];
 foreach ($concerns ?? [] as $concern) {
     $concernModuleMap[(int)$concern['id']] = $concern['module_keys'] ?? [];
 }
+$unitCountByConcern = [];
+foreach ($productionUnits ?? [] as $pu) {
+    $puConcernId = (int)($pu['concern_id'] ?? 0);
+    if ($puConcernId > 0) {
+        $unitCountByConcern[$puConcernId] = ($unitCountByConcern[$puConcernId] ?? 0) + 1;
+    }
+}
+$hasExistingFacilityScope = $isEdit && (
+    !empty($staff['production_unit_id'])
+    || !empty($staff['warehouse_id'])
+    || !empty($staff['shop_id'])
+    || !empty($staff['channel_id'])
+    || in_array(strtoupper((string)($staff['department'] ?? '')), ['WAREHOUSE', 'WHATSAPP', 'WEBSITE', 'SHOP'], true)
+);
+$hasInitialMultiUnitConcern = false;
+foreach ($staffConcernIds as $cid) {
+    if (($unitCountByConcern[$cid] ?? 0) >= 2) {
+        $hasInitialMultiUnitConcern = true;
+        break;
+    }
+}
+$showFacilityScopeUI = $hasExistingFacilityScope || $hasInitialMultiUnitConcern;
 
 $totalPossiblePerms = 0;
 foreach ($hierarchicalModules as $m) {
@@ -34,7 +56,7 @@ foreach ($hierarchicalModules as $m) {
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h1 class="h3 mb-1 fw-bold"><?= $isEdit ? 'Edit Staff Member' : 'Create New Staff Member' ?></h1>
-            <p class="text-muted mb-0"><?= $isEdit ? 'Update account details, role assignment, and View, Create, Edit, or Delete access.' : 'Add a team member and assign View, Create, Edit, or Delete access.' ?></p>
+            <p class="text-muted mb-0"><?= $isEdit ? 'Update account details, role assignment, and module-specific access, including receive permissions.' : 'Add a team member and assign module-specific access, including receive permissions.' ?></p>
         </div>
         <div>
             <a href="<?= url('admin/staff') ?>" class="btn btn-outline-secondary d-inline-flex align-items-center gap-2">
@@ -182,11 +204,27 @@ foreach ($hierarchicalModules as $m) {
                                     <?php endif; ?>
                                 </div>
 
-                                <!-- Preserve existing department-based facility/data scope separately from concerns. -->
-                                <div class="col-12 pt-3">
+                                <!-- Preserve existing department-based facility/data scope separately from concerns (hidden unless a concern has multiple units or legacy scope is set). -->
+                                <div class="col-12 pt-3<?= $hasExistingFacilityScope ? '' : ' d-none' ?>" id="facilityScopeSelectContainer">
                                     <label for="department" class="form-label fw-semibold">Facility / Record Scope</label>
                                     <select id="department" name="department" class="form-select">
-                                        <?php foreach (['PRODUCTION' => 'Production Unit', 'WAREHOUSE' => 'Warehouse', 'WHATSAPP' => 'WhatsApp Channel', 'WEBSITE' => 'Website Channel', 'SHOP' => 'Retail Shop', 'GENERAL' => 'General', 'ALL' => 'All / Unassigned'] as $scopeValue => $scopeLabel): ?>
+                                        <?php
+                                        $scopeOptions = [
+                                            'PRODUCTION' => 'Production Unit',
+                                            'GENERAL'    => 'General',
+                                            'ALL'        => 'All / Unassigned',
+                                        ];
+                                        $retiredScopeOptions = [
+                                            'WAREHOUSE' => 'Warehouse',
+                                            'WHATSAPP'  => 'WhatsApp Channel',
+                                            'WEBSITE'   => 'Website Channel',
+                                            'SHOP'      => 'Retail Shop',
+                                        ];
+                                        if ($isEdit && isset($retiredScopeOptions[$dept])) {
+                                            $scopeOptions[$dept] = $retiredScopeOptions[$dept];
+                                        }
+                                        ?>
+                                        <?php foreach ($scopeOptions as $scopeValue => $scopeLabel): ?>
                                             <option value="<?= e($scopeValue) ?>" <?= $dept === $scopeValue ? 'selected' : '' ?>><?= e($scopeLabel) ?></option>
                                         <?php endforeach; ?>
                                     </select>
@@ -195,7 +233,7 @@ foreach ($hierarchicalModules as $m) {
                             </div>
 
                             <!-- Dynamic Facility Dropdown Block -->
-                            <div class="col-12 pt-2">
+                            <div class="col-12 pt-2<?= $showFacilityScopeUI ? '' : ' d-none' ?>" id="facilityUnitContainer">
                                 <!-- Production Unit Block -->
                                 <div class="dept-unit-block" id="block_production">
                                     <label for="production_unit_id" class="form-label fw-semibold">Assigned Production Unit</label>
@@ -204,8 +242,8 @@ foreach ($hierarchicalModules as $m) {
                                         <select id="production_unit_id" name="production_unit_id" class="form-select">
                                             <option value="">-- All Production Units --</option>
                                             <?php foreach ($productionUnits as $pu): ?>
-                                                <option value="<?= $pu['id'] ?>" <?= (string)($staff['production_unit_id'] ?? '') === (string)$pu['id'] ? 'selected' : '' ?>>
-                                                    <?= e($pu['name']) ?> (<?= e($pu['code']) ?>)
+                                                <option value="<?= $pu['id'] ?>" data-concern-id="<?= (int)($pu['concern_id'] ?? 0) ?>" <?= (string)($staff['production_unit_id'] ?? '') === (string)$pu['id'] ? 'selected' : '' ?>>
+                                                    <?= e($pu['name']) ?> (<?= e($pu['code']) ?>)<?= !empty($pu['concern_name']) ? ' — ' . e($pu['concern_name']) : '' ?>
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
@@ -393,7 +431,7 @@ foreach ($hierarchicalModules as $m) {
                                                 <tr class="text-uppercase small text-muted" style="font-size: 11px;">
                                                     <th class="ps-3 py-2" style="width: 36%;">Submodule</th>
                                                     <th class="text-center py-2" style="width: 14%;">View</th>
-                                                    <th class="text-center py-2" style="width: 14%;">Create</th>
+                                                    <th class="text-center py-2" style="width: 14%;">Create / Receive</th>
                                                     <th class="text-center py-2" style="width: 14%;">Edit</th>
                                                     <th class="text-center py-2" style="width: 14%;">Delete</th>
                                                     <th class="text-center pe-3 py-2" style="width: 8%;">Row All</th>
@@ -428,8 +466,9 @@ foreach ($hierarchicalModules as $m) {
                                                                 <?php if (!empty($columnPermissions)): ?>
                                                                     <div class="d-flex flex-column align-items-center gap-1">
                                                                         <?php foreach ($columnPermissions as $permissionAction => $permission): ?>
+                                                                            <?php $permissionColumnAction = $permissionAction === 'receive' ? 'receive' : $crudAction; ?>
                                                                             <label class="form-check-label d-inline-flex align-items-center justify-content-center gap-1 small" title="<?= e($permission['description'] ?? ucfirst($permissionAction)) ?>">
-                                                                                <input class="form-check-input perm-checkbox perm-<?= e($crudAction) ?>"
+                                                                                <input class="form-check-input perm-checkbox perm-<?= e($permissionColumnAction) ?>"
                                                                                        type="checkbox"
                                                                                        name="permissions[]"
                                                                                        value="<?= $permission['id'] ?>"
@@ -493,6 +532,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const rolePermissionsMap = <?= json_encode($rolePermissionsMap, JSON_UNESCAPED_UNICODE) ?>;
     const initialStaffPerms = <?= json_encode($staffPermissions, JSON_UNESCAPED_UNICODE) ?>;
     const concernModuleMap = <?= json_encode($concernModuleMap, JSON_UNESCAPED_UNICODE) ?>;
+    const unitCountByConcern = <?= json_encode($unitCountByConcern, JSON_UNESCAPED_UNICODE) ?>;
+    const hasExistingFacilityScope = <?= $hasExistingFacilityScope ? 'true' : 'false' ?>;
     const isEditMode = <?= $isEdit ? 'true' : 'false' ?>;
 
     const toggleBtn = document.getElementById('togglePassword');
@@ -654,6 +695,48 @@ document.addEventListener('DOMContentLoaded', function () {
     const btnResetToRole = document.getElementById('btnResetToRole');
     const concernInputs = document.querySelectorAll('.concern-input');
 
+    function syncProductionUnitsWithConcerns() {
+        const unitSelect = document.getElementById('production_unit_id');
+        const unitContainer = document.getElementById('facilityUnitContainer');
+        if (!unitSelect) return;
+
+        const checkedConcerns = new Set();
+        concernInputs.forEach(input => {
+            if (input.checked) {
+                checkedConcerns.add(String(input.value));
+            }
+        });
+
+        const hasMultiUnitConcern = Array.from(checkedConcerns).some(cid => Number(unitCountByConcern[cid] || 0) >= 2);
+        const shouldShowUnitSelector = hasExistingFacilityScope || hasMultiUnitConcern;
+        if (hasMultiUnitConcern && !hasExistingFacilityScope && departmentSelect) {
+            departmentSelect.value = 'PRODUCTION';
+            updateFacilityBlocks();
+        }
+        if (unitContainer) {
+            unitContainer.classList.toggle('d-none', !shouldShowUnitSelector);
+        }
+
+        let selectedStillVisible = unitSelect.value === '';
+        Array.from(unitSelect.options).forEach(opt => {
+            const concernId = opt.dataset.concernId;
+            if (!concernId) {
+                opt.hidden = false;
+                opt.disabled = false;
+                return;
+            }
+            const visible = checkedConcerns.size > 0 && checkedConcerns.has(String(concernId));
+            opt.hidden = !visible;
+            opt.disabled = !visible;
+            if (visible && opt.value === unitSelect.value) {
+                selectedStillVisible = true;
+            }
+        });
+        if (!shouldShowUnitSelector || !selectedStillVisible) {
+            unitSelect.value = '';
+        }
+    }
+
     function syncPermissionsScopeWithConcerns() {
         const allowedModules = new Set();
         concernInputs.forEach(input => {
@@ -670,6 +753,7 @@ document.addEventListener('DOMContentLoaded', function () {
             });
             block.classList.toggle('d-none', !hasAllowedRow);
         });
+        syncProductionUnitsWithConcerns();
         updateActiveCounterAndSwitches();
     }
 
@@ -806,7 +890,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Column Tools
     function toggleColumn(actionType, checkState) {
-        document.querySelectorAll(`.perm-submodule-row:not(.d-none) .perm-checkbox.perm-${actionType}:not(:disabled)`).forEach(cb => cb.checked = checkState);
+        const selector = actionType === 'create'
+            ? '.perm-submodule-row:not(.d-none) .perm-checkbox.perm-create:not(:disabled), .perm-submodule-row:not(.d-none) .perm-checkbox.perm-receive:not(:disabled)'
+            : `.perm-submodule-row:not(.d-none) .perm-checkbox.perm-${actionType}:not(:disabled)`;
+        document.querySelectorAll(selector).forEach(cb => cb.checked = checkState);
         updateActiveCounterAndSwitches();
         if (permSyncBadge) {
             permSyncBadge.className = 'badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2.5 py-1';

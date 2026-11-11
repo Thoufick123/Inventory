@@ -16,17 +16,59 @@ require_once BASE_PATH . '/app/Models/LabelBatch.php';
 require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ProductionController {
-    private function activeConcernProductionUnitId(): int {
+    private function scopedProductionUnitId(): ?int {
         $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        if (!$unitId) {
-            $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
-            $unitId = isset($units[0]['id']) ? (int)$units[0]['id'] : null;
+        if ($unitId === 0) {
+            return 0;
         }
-        if (!$unitId) {
-            throw new RuntimeException('No production unit is available in the active concern.');
+        if ($unitId !== null && $unitId > 0) {
+            ConcernTransactionService::assertFacility('PRODUCTION', (int)$unitId);
+            return (int)$unitId;
         }
-        ConcernTransactionService::assertFacility('PRODUCTION', (int)$unitId);
-        return (int)$unitId;
+        return null;
+    }
+
+    private function resolveWriteProductionUnitId(?int $submittedUnitId = null): ?int {
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            throw new RuntimeException('No valid production unit is assigned in the active concern.');
+        }
+        if ($scopedUnitId !== null) {
+            if ($submittedUnitId !== null && $submittedUnitId > 0 && $submittedUnitId !== $scopedUnitId) {
+                throw new InvalidArgumentException('The selected production unit is not assigned to the active user.');
+            }
+            return $scopedUnitId;
+        }
+
+        if ($submittedUnitId !== null && $submittedUnitId > 0) {
+            ConcernTransactionService::assertFacility('PRODUCTION', $submittedUnitId);
+            return $submittedUnitId;
+        }
+
+        $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+        return !empty($units[0]['id']) ? (int)$units[0]['id'] : null;
+    }
+
+    private function buildProductionUnitSqlClause(string $alias, ?int $scopedUnitId, array &$params): string {
+        if ($scopedUnitId === null) {
+            return '';
+        }
+        $params[] = $scopedUnitId;
+        return " AND {$alias}.production_unit_id = ?";
+    }
+
+    private function assertRecordProductionUnitAccess(?int $recordUnitId, ?int $scopedUnitId): void {
+        if ($scopedUnitId === 0) {
+            throw new InvalidArgumentException('No production unit is assigned in the active concern.');
+        }
+        if ($recordUnitId !== null && $recordUnitId > 0) {
+            ConcernTransactionService::assertFacility('PRODUCTION', $recordUnitId);
+            if ($scopedUnitId !== null && $recordUnitId !== $scopedUnitId) {
+                throw new InvalidArgumentException('This record belongs to another production unit.');
+            }
+        } elseif ($scopedUnitId !== null) {
+            throw new InvalidArgumentException('This record is not assigned to your production unit.');
+        }
     }
 
     /**
@@ -384,15 +426,34 @@ class ProductionController {
     }
 
     public function productionPurchaseList(): void {
-        $unitId = $this->activeConcernProductionUnitId();
         $concernId = ConcernTransactionService::activeConcernId();
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Response::view('production.purchases.index', [
+                'pageTitle' => 'Production Purchases',
+                'activeModule' => 'production',
+                'activeMenu' => 'prod-purchases',
+                'purchases' => [],
+                'totalPurchaseValue' => 0.0,
+                'supplyStock' => [],
+                'fabricRollInventory' => [],
+                'breadcrumb' => [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Purchases'],
+                ],
+            ]);
+            return;
+        }
+
+        $purchaseParams = [$concernId];
+        $ppUnitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $purchaseParams);
         $purchases = Database::fetchAll(
             "SELECT pp.*, s.name AS seller_name, s.company
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
-             WHERE pp.concern_id = ? AND pp.production_unit_id = ?
-             ORDER BY pp.purchase_date DESC, pp.id DESC"
-            , [$concernId, $unitId]
+             WHERE pp.concern_id = ?{$ppUnitClause}
+             ORDER BY pp.purchase_date DESC, pp.id DESC",
+            $purchaseParams
         );
         foreach ($purchases as &$purchase) {
             $purchase['items'] = Database::fetchAll(
@@ -406,19 +467,28 @@ class ProductionController {
         }
         unset($purchase);
 
+        $totalParams = [$concernId];
+        $totalUnitClause = $scopedUnitId !== null ? ' AND production_unit_id = ?' : '';
+        if ($scopedUnitId !== null) {
+            $totalParams[] = $scopedUnitId;
+        }
         $totalPurchaseValue = (float)(Database::fetchOne(
-            "SELECT COALESCE(SUM(total_amount), 0) AS total FROM production_purchases WHERE concern_id = ? AND production_unit_id = ?",
-            [$concernId, $unitId]
+            "SELECT COALESCE(SUM(total_amount), 0) AS total FROM production_purchases WHERE concern_id = ?{$totalUnitClause}",
+            $totalParams
         )['total'] ?? 0);
         $supplyStock = Database::fetchAll(
             "SELECT item_name, unit, SUM(quantity) AS total_quantity, COUNT(*) AS purchase_lines
              FROM production_purchase_items
              WHERE item_type = 'GENERAL_SUPPLY'
-               AND purchase_id IN (SELECT id FROM production_purchases WHERE concern_id = ? AND production_unit_id = ?)
+               AND purchase_id IN (SELECT id FROM production_purchases WHERE concern_id = ?{$totalUnitClause})
              GROUP BY item_name, unit
              ORDER BY item_name, unit",
-            [$concernId, $unitId]
+            $totalParams
         );
+        $rollInventoryParams = [$concernId];
+        $progRollClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $rollInventoryParams);
+        $rollInventoryParams[] = $concernId;
+        $purchaseRollClause = $this->buildProductionUnitSqlClause('purchase', $scopedUnitId, $rollInventoryParams);
         $fabricRollInventory = Database::fetchAll(
             "SELECT sr.*, s.name AS seller_name, s.company,
                     COALESCE(sr.material_type, s.material_type, 'FABRIC') AS fabric_description,
@@ -431,7 +501,8 @@ class ProductionController {
                  SELECT ppr.seller_roll_id, SUM(ppr.roll_qty) AS used_quantity
                  FROM production_program_rolls ppr
                  JOIN production_programs pp ON pp.id = ppr.production_program_id
-                 WHERE pp.production_unit_id = ? AND pp.is_active = 1 AND pp.status != 'CANCELLED'
+                 JOIN production_units pu ON pu.id = pp.production_unit_id
+                 WHERE pu.concern_id = ?{$progRollClause} AND pp.is_active = 1 AND pp.status != 'CANCELLED'
                  GROUP BY ppr.seller_roll_id
              ) u ON u.seller_roll_id = sr.id
              LEFT JOIN (
@@ -444,10 +515,10 @@ class ProductionController {
                AND sr.id IN (
                    SELECT ppi.seller_roll_id FROM production_purchase_items ppi
                    JOIN production_purchases purchase ON purchase.id = ppi.purchase_id
-                   WHERE purchase.concern_id = ? AND purchase.production_unit_id = ? AND ppi.seller_roll_id IS NOT NULL
+                   WHERE purchase.concern_id = ?{$purchaseRollClause} AND ppi.seller_roll_id IS NOT NULL
                )
              ORDER BY sr.id DESC",
-            [$unitId, $concernId, $unitId]
+            $rollInventoryParams
         );
 
         Response::view('production.purchases.index', [
@@ -480,17 +551,33 @@ class ProductionController {
     }
 
     public function printProductionPurchase(string $id): void {
-        $unitId = $this->activeConcernProductionUnitId();
+        $concernId = ConcernTransactionService::activeConcernId();
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Response::error(404, 'Purchase record not found.');
+            return;
+        }
+        $params = [(int)$id, $concernId];
+        $unitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $params);
         $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
                     s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
-             WHERE pp.id = ? AND pp.concern_id = ? AND pp.production_unit_id = ?",
-            [(int)$id, ConcernTransactionService::activeConcernId(), $unitId]
+             WHERE pp.id = ? AND pp.concern_id = ?{$unitClause}",
+            $params
         );
         if (!$purchase) {
+            Response::error(404, 'Purchase record not found.');
+            return;
+        }
+        try {
+            $this->assertRecordProductionUnitAccess(
+                !empty($purchase['production_unit_id']) ? (int)$purchase['production_unit_id'] : null,
+                $scopedUnitId
+            );
+        } catch (\Throwable $e) {
             Response::error(404, 'Purchase record not found.');
             return;
         }
@@ -529,16 +616,33 @@ class ProductionController {
     }
 
     private function getProductionPurchase(int $purchaseId): ?array {
-        $unitId = $this->activeConcernProductionUnitId();
-        return Database::fetchOne(
+        $concernId = ConcernTransactionService::activeConcernId();
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            return null;
+        }
+        $params = [$purchaseId, $concernId];
+        $unitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $params);
+        $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
                     s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
-             WHERE pp.id = ? AND pp.concern_id = ? AND pp.production_unit_id = ?",
-            [$purchaseId, ConcernTransactionService::activeConcernId(), $unitId]
+             WHERE pp.id = ? AND pp.concern_id = ?{$unitClause}",
+            $params
         );
+        if ($purchase) {
+            try {
+                $this->assertRecordProductionUnitAccess(
+                    !empty($purchase['production_unit_id']) ? (int)$purchase['production_unit_id'] : null,
+                    $scopedUnitId
+                );
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+        return $purchase;
     }
 
     public function viewProductionPurchase(string $id): void {
@@ -605,11 +709,32 @@ class ProductionController {
         }
 
         $purchaseId = (int)$id;
-        $unitId = $this->activeConcernProductionUnitId();
         $concernId = ConcernTransactionService::activeConcernId();
-        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$purchaseId, $concernId, $unitId]);
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Session::flash('error', 'Purchase record not found.');
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+        $findParams = [$purchaseId, $concernId];
+        $findUnitClause = '';
+        if ($scopedUnitId !== null) {
+            $findUnitClause = ' AND production_unit_id = ?';
+            $findParams[] = $scopedUnitId;
+        }
+        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ? AND concern_id = ?{$findUnitClause}", $findParams);
         if (!$purchase) {
             Session::flash('error', 'Purchase record not found.');
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+        try {
+            $this->assertRecordProductionUnitAccess(
+                !empty($purchase['production_unit_id']) ? (int)$purchase['production_unit_id'] : null,
+                $scopedUnitId
+            );
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
             Response::redirect(url('production/purchases'));
             return;
         }
@@ -871,13 +996,21 @@ class ProductionController {
                 );
             }
             $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
+            $updateParams = [
+                $purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null, $documentUrl,
+                trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId, $concernId
+            ];
+            $updateUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $updateUnitClause = ' AND production_unit_id = ?';
+                $updateParams[] = $scopedUnitId;
+            }
             Database::execute(
                 "UPDATE production_purchases
                  SET purchase_date = ?, invoice_number = ?, document_url = COALESCE(?, document_url),
                      notes = ?, total_amount = ?, updated_at = NOW()
-                 WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
-                [$purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null, $documentUrl,
-                    trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId, $concernId, $unitId]
+                 WHERE id = ? AND concern_id = ?{$updateUnitClause}",
+                $updateParams
             );
             Database::commit();
             AuditService::log('production', 'UPDATE', 'production_purchases', $purchaseId, $purchase, [
@@ -902,11 +1035,32 @@ class ProductionController {
             return;
         }
         $purchaseId = (int)$id;
-        $unitId = $this->activeConcernProductionUnitId();
         $concernId = ConcernTransactionService::activeConcernId();
-        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$purchaseId, $concernId, $unitId]);
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Session::flash('error', 'Purchase record not found.');
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+        $findParams = [$purchaseId, $concernId];
+        $findUnitClause = '';
+        if ($scopedUnitId !== null) {
+            $findUnitClause = ' AND production_unit_id = ?';
+            $findParams[] = $scopedUnitId;
+        }
+        $purchase = Database::fetchOne("SELECT * FROM production_purchases WHERE id = ? AND concern_id = ?{$findUnitClause}", $findParams);
         if (!$purchase) {
             Session::flash('error', 'Purchase record not found.');
+            Response::redirect(url('production/purchases'));
+            return;
+        }
+        try {
+            $this->assertRecordProductionUnitAccess(
+                !empty($purchase['production_unit_id']) ? (int)$purchase['production_unit_id'] : null,
+                $scopedUnitId
+            );
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
             Response::redirect(url('production/purchases'));
             return;
         }
@@ -940,7 +1094,13 @@ class ProductionController {
                 [$purchaseId]
             );
             $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
-            Database::execute("DELETE FROM production_purchases WHERE id = ? AND concern_id = ? AND production_unit_id = ?", [$purchaseId, $concernId, $unitId]);
+            $deleteParams = [$purchaseId, $concernId];
+            $deleteUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $deleteUnitClause = ' AND production_unit_id = ?';
+                $deleteParams[] = $scopedUnitId;
+            }
+            Database::execute("DELETE FROM production_purchases WHERE id = ? AND concern_id = ?{$deleteUnitClause}", $deleteParams);
             Database::commit();
             AuditService::log('production', 'DELETE', 'production_purchases', $purchaseId, $purchase, null);
             Session::flash('success', "Purchase {$purchase['purchase_number']} deleted.");
@@ -961,11 +1121,13 @@ class ProductionController {
              WHERE seller_type = 'MATERIAL_SUPPLIER' AND is_active = 1
              ORDER BY company, name"
         );
+        $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         Response::view('production.purchases.create', [
             'pageTitle' => 'Record Production Purchase',
             'activeModule' => 'production',
             'activeMenu' => 'prod-purchases',
             'sellers' => $sellers,
+            'productionUnits' => $productionUnits,
             'breadcrumb' => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Purchases', 'url' => url('production/purchases')],
@@ -1176,8 +1338,15 @@ class ProductionController {
         $invoiceNumber = trim((string)($_POST['invoice_number'] ?? ''));
         $notes = trim((string)($_POST['notes'] ?? ''));
         $userId = (int)(Session::get('user_id') ?? 0);
-        $unitId = $this->activeConcernProductionUnitId();
         $concernId = ConcernTransactionService::activeConcernId();
+        $submittedUnitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
+        try {
+            $unitId = $this->resolveWriteProductionUnitId($submittedUnitId);
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
+        }
 
         try {
             Database::beginTransaction();
@@ -1185,15 +1354,15 @@ class ProductionController {
             Database::execute(
                 "INSERT INTO production_purchases
                     (purchase_number, concern_id, production_unit_id, seller_id, purchase_date, invoice_number, document_url, notes, total_amount, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [$temporaryNumber, $concernId, $unitId, $sellerId, $purchaseDate, $invoiceNumber !== '' ? $invoiceNumber : null,
                     $documentUrl, $notes !== '' ? $notes : null, $totalAmount, $userId ?: null]
             );
             $purchaseId = (int)Database::lastInsertId();
             $purchaseNumber = 'PP-' . date('Y', strtotime($purchaseDate)) . '-' . sprintf('%06d', $purchaseId);
             Database::execute(
-                "UPDATE production_purchases SET purchase_number = ? WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
-                [$purchaseNumber, $purchaseId, $concernId, $unitId]
+                "UPDATE production_purchases SET purchase_number = ? WHERE id = ? AND concern_id = ?",
+                [$purchaseNumber, $purchaseId, $concernId]
             );
 
             foreach ($items as $item) {
@@ -1258,13 +1427,18 @@ class ProductionController {
             return;
         }
 
+        if ($this->scopedProductionUnitId() === 0) {
+            Session::flash('error', 'Fabric roll not found.');
+            Response::back();
+            return;
+        }
         $purchaseItem = Database::fetchOne(
             "SELECT ppi.id, pp.purchase_number
              FROM production_purchase_items ppi
              JOIN production_purchases pp ON pp.id = ppi.purchase_id
-             WHERE ppi.seller_roll_id = ? AND pp.concern_id = ? AND pp.production_unit_id = ?
+             WHERE ppi.seller_roll_id = ? AND pp.concern_id = ?
              LIMIT 1",
-            [(int)$id, ConcernTransactionService::activeConcernId(), $this->activeConcernProductionUnitId()]
+            [(int)$id, ConcernTransactionService::activeConcernId()]
         );
         if ($purchaseItem) {
             Session::flash('error', 'This fabric roll is part of purchase ' . $purchaseItem['purchase_number'] . '. It cannot be deleted from stock; retain its purchase history.');
@@ -3970,6 +4144,9 @@ class ProductionController {
     public function createProgram(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+        $defaultUnitId = $scopedUnitId !== null
+            ? $scopedUnitId
+            : (int)($units[0]['id'] ?? 0);
         $categories = Database::fetchAll(
             "SELECT c.* FROM categories c
              WHERE c.is_active = 1
@@ -4037,6 +4214,7 @@ class ProductionController {
             'rolls'                  => $rolls,
             'users'                  => $users,
             'scopedUnitId'           => $scopedUnitId,
+            'defaultUnitId'          => $defaultUnitId,
             'suggestedProgramNumber' => $suggestedProgramNumber,
             'breadcrumb'             => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
@@ -4050,6 +4228,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
@@ -4065,12 +4244,21 @@ class ProductionController {
         $startDate = !empty($_POST['start_date']) ? $_POST['start_date'] : date('Y-m-d');
         $endDate = !empty($_POST['end_date']) ? $_POST['end_date'] : (!empty($_POST['target_date']) ? $_POST['target_date'] : date('Y-m-d', strtotime('+14 days')));
         $unitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : $scopedUnitId;
+        if (empty($unitId)) {
+            $availableUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+            $unitId = (int)($availableUnits[0]['id'] ?? 0) ?: null;
+        }
         $priority = $_POST['priority'] ?? 'MEDIUM';
         $assignedTo = !empty($_POST['assigned_to']) ? (int)$_POST['assigned_to'] : null;
         $notes = trim($_POST['notes'] ?? '');
 
         if (empty($name)) {
             Session::flash('error', 'Program Name is required.');
+            Response::back();
+            return;
+        }
+        if (!$unitId) {
+            Session::flash('error', 'This concern has no active production unit. An administrator must add one before creating a program.');
             Response::back();
             return;
         }
@@ -4347,6 +4535,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
@@ -5267,39 +5456,50 @@ class ProductionController {
     }
 
     public function createCutting(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $programId = $_GET['program_id'] ?? null;
-        
-        $progUnitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
-        $programs = Database::fetchAll(
-            "SELECT pp.*, 
-                    COALESCE(pp.name, p.name) as product_name, 
-                    pu.name as unit_name,
-                    sr.roll_number, sr.color as roll_color, sr.design_name as roll_design,
-                    c.name as category_name, sc.name as subcategory_name, ssc.name as sub_subcategory_name
-             FROM production_programs pp
-             LEFT JOIN products p ON pp.product_id = p.id
-             LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
-             LEFT JOIN seller_rolls sr ON pp.seller_roll_id = sr.id
-             LEFT JOIN categories c ON pp.category_id = c.id
-             LEFT JOIN subcategories sc ON pp.subcategory_id = sc.id
-             LEFT JOIN sub_subcategories ssc ON pp.sub_subcategory_id = ssc.id
-             WHERE (pp.is_active IS NULL OR pp.is_active = 1)$progUnitClause
-               AND pp.id NOT IN (SELECT program_id FROM cutting_batches WHERE program_id IS NOT NULL)
-             ORDER BY pp.created_at DESC"
-        );
+
+        $programs = [];
+        if ($concernId !== null && $scopedUnitId !== 0) {
+            $progParams = [$concernId];
+            $progUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $progUnitClause = ' AND pp.production_unit_id = ?';
+                $progParams[] = (int)$scopedUnitId;
+            }
+            $programs = Database::fetchAll(
+                "SELECT pp.*,
+                        COALESCE(pp.name, p.name) as product_name,
+                        pu.name as unit_name,
+                        sr.roll_number, sr.color as roll_color, sr.design_name as roll_design,
+                        c.name as category_name, sc.name as subcategory_name, ssc.name as sub_subcategory_name
+                 FROM production_programs pp
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 LEFT JOIN seller_rolls sr ON pp.seller_roll_id = sr.id
+                 LEFT JOIN categories c ON pp.category_id = c.id
+                 LEFT JOIN subcategories sc ON pp.subcategory_id = sc.id
+                 LEFT JOIN sub_subcategories ssc ON pp.sub_subcategory_id = ssc.id
+                 WHERE pu.concern_id = ?
+                   AND (pp.is_active IS NULL OR pp.is_active = 1){$progUnitClause}
+                   AND pp.id NOT IN (SELECT program_id FROM cutting_batches WHERE program_id IS NOT NULL)
+                 ORDER BY pp.created_at DESC",
+                $progParams
+            );
+        }
 
         $selectedProgram = null;
         $selectedProgramRolls = [];
         if ($programId) {
-            $alreadyCut = Database::fetchOne("SELECT id, batch_number FROM cutting_batches WHERE program_id = ?", [(int)$programId]);
-            if ($alreadyCut) {
-                Session::flash('error', "Production Program has already been cut in Cutting Batch {$alreadyCut['batch_number']}. Duplicate cutting is not allowed.");
-                Response::redirect(url('production/cutting'));
-                return;
-            }
             $selectedProgram = ProductionProgram::find((int)$programId);
             if ($selectedProgram) {
+                $alreadyCut = Database::fetchOne("SELECT id, batch_number FROM cutting_batches WHERE program_id = ?", [(int)$programId]);
+                if ($alreadyCut) {
+                    Session::flash('error', "Production Program has already been cut in Cutting Batch {$alreadyCut['batch_number']}. Duplicate cutting is not allowed.");
+                    Response::redirect(url('production/cutting'));
+                    return;
+                }
                 $selectedProgramRolls = ProductionProgram::getRolls((int)$programId);
             }
         }
@@ -5855,30 +6055,45 @@ class ProductionController {
     }
 
     public function createStitching(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $programId = $_GET['program_id'] ?? null;
         $cuttingBatchId = $_GET['cutting_batch_id'] ?? null;
 
-        $progUnitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
-        $programs = Database::fetchAll(
-            "SELECT pp.*, p.name as product_name, p.code as product_code, pu.name as unit_name
-             FROM production_programs pp
-             LEFT JOIN products p ON pp.product_id = p.id
-             LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
-             WHERE pp.is_active = 1$progUnitClause
-               AND pp.id NOT IN (SELECT program_id FROM stitching_batches WHERE program_id IS NOT NULL AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED')
-             ORDER BY pp.id DESC"
-        );
+        $programs = [];
+        $cuttingBatches = [];
+        if ($concernId !== null && $scopedUnitId !== 0) {
+            $scopeParams = [$concernId];
+            $progUnitClause = '';
+            $cutUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $progUnitClause = ' AND pp.production_unit_id = ?';
+                $cutUnitClause = ' AND COALESCE(cb.production_unit_id, pp.production_unit_id) = ?';
+                $scopeParams[] = (int)$scopedUnitId;
+            }
+            $programs = Database::fetchAll(
+                "SELECT pp.*, p.name as product_name, p.code as product_code, pu.name as unit_name
+                 FROM production_programs pp
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pu.concern_id = ? AND pp.is_active = 1{$progUnitClause}
+                   AND pp.id NOT IN (SELECT program_id FROM stitching_batches WHERE program_id IS NOT NULL AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED')
+                 ORDER BY pp.id DESC",
+                $scopeParams
+            );
 
-        $cuttingBatches = Database::fetchAll(
-            "SELECT cb.*, pp.program_number, pp.name as program_name, p.name as product_name
-             FROM cutting_batches cb
-             LEFT JOIN production_programs pp ON cb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             WHERE (cb.is_active = 1 OR cb.is_active IS NULL)$progUnitClause
-               AND cb.id NOT IN (SELECT cutting_batch_id FROM stitching_batches WHERE cutting_batch_id IS NOT NULL AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED')
-             ORDER BY cb.id DESC"
-        );
+            $cuttingBatches = Database::fetchAll(
+                "SELECT cb.*, pp.program_number, pp.name as program_name, p.name as product_name
+                 FROM cutting_batches cb
+                 LEFT JOIN production_programs pp ON cb.program_id = pp.id
+                 JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 WHERE pu.concern_id = ? AND (cb.is_active = 1 OR cb.is_active IS NULL){$cutUnitClause}
+                   AND cb.id NOT IN (SELECT cutting_batch_id FROM stitching_batches WHERE cutting_batch_id IS NOT NULL AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED')
+                 ORDER BY cb.id DESC",
+                $scopeParams
+            );
+        }
 
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
         $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
@@ -5888,33 +6103,35 @@ class ProductionController {
         $items = [];
 
         if ($cuttingBatchId) {
-            $alreadyStitched = Database::fetchOne(
-                "SELECT id, batch_number FROM stitching_batches WHERE cutting_batch_id = ? AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED'",
-                [(int)$cuttingBatchId]
-            );
-            if ($alreadyStitched) {
-                Session::flash('error', "Cutting Batch has already been assigned to Stitching Batch {$alreadyStitched['batch_number']}. Duplicate stitching is not allowed.");
-                Response::redirect(url('production/stitching'));
-                return;
-            }
             $selectedCutting = CuttingBatch::find((int)$cuttingBatchId);
             if ($selectedCutting) {
+                $alreadyStitched = Database::fetchOne(
+                    "SELECT id, batch_number FROM stitching_batches WHERE cutting_batch_id = ? AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED'",
+                    [(int)$cuttingBatchId]
+                );
+                if ($alreadyStitched) {
+                    Session::flash('error', "Cutting Batch has already been assigned to Stitching Batch {$alreadyStitched['batch_number']}. Duplicate stitching is not allowed.");
+                    Response::redirect(url('production/stitching'));
+                    return;
+                }
                 $programId = $selectedCutting['program_id'];
                 $items = CuttingBatch::getItems((int)$cuttingBatchId);
             }
         }
 
         if ($programId && !$cuttingBatchId) {
-            $alreadyStitchedProg = Database::fetchOne(
-                "SELECT id, batch_number FROM stitching_batches WHERE program_id = ? AND cutting_batch_id IS NULL AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED'",
-                [(int)$programId]
-            );
-            if ($alreadyStitchedProg) {
-                Session::flash('error', "Production Program has already been assigned to Stitching Batch {$alreadyStitchedProg['batch_number']}. Duplicate stitching is not allowed.");
-                Response::redirect(url('production/stitching'));
-                return;
-            }
             $selectedProgram = ProductionProgram::find((int)$programId);
+            if ($selectedProgram) {
+                $alreadyStitchedProg = Database::fetchOne(
+                    "SELECT id, batch_number FROM stitching_batches WHERE program_id = ? AND cutting_batch_id IS NULL AND (is_active = 1 OR is_active IS NULL) AND status != 'CANCELLED'",
+                    [(int)$programId]
+                );
+                if ($alreadyStitchedProg) {
+                    Session::flash('error', "Production Program has already been assigned to Stitching Batch {$alreadyStitchedProg['batch_number']}. Duplicate stitching is not allowed.");
+                    Response::redirect(url('production/stitching'));
+                    return;
+                }
+            }
         } elseif ($programId) {
             $selectedProgram = ProductionProgram::find((int)$programId);
         }
@@ -6477,7 +6694,27 @@ class ProductionController {
             return;
         }
 
-        $qcBatch = Database::fetchOne("SELECT id, program_id FROM qc_batches WHERE id = ?", [$qcBatchId]);
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $inventoryUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        $qcBatchSql = "SELECT qb.id, qb.program_id
+                       FROM qc_batches qb
+                       JOIN production_programs pp ON pp.id = qb.program_id
+                       LEFT JOIN production_units scoped_pu ON scoped_pu.id = pp.production_unit_id
+                       WHERE qb.id = ?";
+        $qcBatchParams = [$qcBatchId];
+        if ($concernId === null) {
+            $qcBatchSql .= ' AND 1 = 0';
+        } else {
+            $qcBatchSql .= ' AND scoped_pu.concern_id = ?';
+            $qcBatchParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId === 0) {
+            $qcBatchSql .= ' AND 1 = 0';
+        } elseif ($inventoryUnitId !== null) {
+            $qcBatchSql .= ' AND pp.production_unit_id = ?';
+            $qcBatchParams[] = (int)$inventoryUnitId;
+        }
+        $qcBatch = Database::fetchOne($qcBatchSql, $qcBatchParams);
         if (!$qcBatch) {
             Response::json(['success' => false, 'message' => 'QC batch not found.'], 404);
             return;
@@ -6494,13 +6731,23 @@ class ProductionController {
             static fn(array $item): int => (int)($item['passed_qty'] ?? 0),
             QCBatch::getItems($qcBatchId)
         ));
-        $outwardTotals = Database::fetchOne(
-            "SELECT COALESCE(SUM(COALESCE(po.total_quantity, po.quantity, pb.total_qty, 0)), 0) as total_outward_qty
+        $outwardTotalsSql = "SELECT COALESCE(SUM(COALESCE(po.total_quantity, po.quantity, pb.total_qty, 0)), 0) as total_outward_qty
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
-             WHERE pb.qc_batch_id = ? OR (pb.program_id = ? AND pb.program_id > 0)",
-            [$qcBatchId, (int)($qcBatch['program_id'] ?? 0)]
-        );
+             JOIN production_programs pp ON pp.id = pb.program_id
+             LEFT JOIN production_units scoped_pu ON scoped_pu.id = pp.production_unit_id
+             WHERE (pb.qc_batch_id = ? OR (pb.program_id = ? AND pb.program_id > 0))";
+        $outwardTotalsParams = [$qcBatchId, (int)($qcBatch['program_id'] ?? 0)];
+        if ($concernId !== null) {
+            $outwardTotalsSql .= ' AND pb.concern_id = ? AND scoped_pu.concern_id = ?';
+            $outwardTotalsParams[] = (int)$concernId;
+            $outwardTotalsParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId !== null) {
+            $outwardTotalsSql .= ' AND pp.production_unit_id = ?';
+            $outwardTotalsParams[] = (int)$inventoryUnitId;
+        }
+        $outwardTotals = Database::fetchOne($outwardTotalsSql, $outwardTotalsParams);
         $outwardQty = (int)($outwardTotals['total_outward_qty'] ?? 0);
         if ($pieceNo <= min($passedQty, $outwardQty)) {
             Response::json(['success' => false, 'message' => 'Dispatched inventory pieces cannot be deleted.'], 409);
@@ -6534,28 +6781,45 @@ class ProductionController {
     }
 
     public function createLabel(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $programId = $_GET['program_id'] ?? null;
         $stitchingBatchId = $_GET['stitching_batch_id'] ?? null;
 
-        $stitchingBatches = Database::fetchAll(
-            "SELECT sb.*, pp.program_number, pp.name as program_name, p.name as product_name
-             FROM stitching_batches sb
-             LEFT JOIN production_programs pp ON sb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             WHERE (sb.is_active = 1 OR sb.is_active IS NULL)
-               AND sb.id NOT IN (SELECT stitching_batch_id FROM label_batches WHERE stitching_batch_id IS NOT NULL)
-               AND (sb.program_id IS NULL OR sb.program_id NOT IN (SELECT program_id FROM label_batches WHERE program_id IS NOT NULL))
-             ORDER BY sb.id DESC"
-        );
+        $stitchingBatches = [];
+        $programs = [];
+        if ($concernId !== null && $scopedUnitId !== 0) {
+            $scopeParams = [$concernId];
+            $unitClause = '';
+            if ($scopedUnitId !== null) {
+                $unitClause = ' AND pp.production_unit_id = ?';
+                $scopeParams[] = (int)$scopedUnitId;
+            }
+            $stitchingBatches = Database::fetchAll(
+                "SELECT sb.*, pp.program_number, pp.name as program_name, p.name as product_name
+                 FROM stitching_batches sb
+                 LEFT JOIN cutting_batches cb ON sb.cutting_batch_id = cb.id
+                 LEFT JOIN production_programs pp ON sb.program_id = pp.id
+                 JOIN production_units pu ON COALESCE(pp.production_unit_id, cb.production_unit_id) = pu.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 WHERE pu.concern_id = ? AND (sb.is_active = 1 OR sb.is_active IS NULL){$unitClause}
+                   AND sb.id NOT IN (SELECT stitching_batch_id FROM label_batches WHERE stitching_batch_id IS NOT NULL)
+                   AND (sb.program_id IS NULL OR sb.program_id NOT IN (SELECT program_id FROM label_batches WHERE program_id IS NOT NULL))
+                 ORDER BY sb.id DESC",
+                $scopeParams
+            );
 
-        $programs = Database::fetchAll(
-            "SELECT pp.*, COALESCE(pp.name, p.name) as product_name 
-             FROM production_programs pp
-             LEFT JOIN products p ON pp.product_id = p.id
-             WHERE (pp.is_active = 1 OR pp.is_active IS NULL)
-               AND pp.id NOT IN (SELECT program_id FROM label_batches WHERE program_id IS NOT NULL)
-             ORDER BY pp.created_at DESC"
-        );
+            $programs = Database::fetchAll(
+                "SELECT pp.*, COALESCE(pp.name, p.name) as product_name
+                 FROM production_programs pp
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 WHERE pu.concern_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL){$unitClause}
+                   AND pp.id NOT IN (SELECT program_id FROM label_batches WHERE program_id IS NOT NULL)
+                 ORDER BY pp.created_at DESC",
+                $scopeParams
+            );
+        }
 
         $selectedStitching = null;
         $selectedProgram = null;
@@ -6565,17 +6829,17 @@ class ProductionController {
         $catalogHierarchy = 'General Apparel';
 
         if ($stitchingBatchId) {
-            $alreadyLabeled = Database::fetchOne(
-                "SELECT id, batch_number FROM label_batches WHERE stitching_batch_id = ?",
-                [(int)$stitchingBatchId]
-            );
-            if ($alreadyLabeled) {
-                Session::flash('error', "Stitching Batch has already been assigned to Label Batch {$alreadyLabeled['batch_number']}. Duplicate label generation is not allowed.");
-                Response::redirect(url('production/labels'));
-                return;
-            }
             $selectedStitching = StitchingBatch::find((int)$stitchingBatchId);
             if ($selectedStitching) {
+                $alreadyLabeled = Database::fetchOne(
+                    "SELECT id, batch_number FROM label_batches WHERE stitching_batch_id = ?",
+                    [(int)$stitchingBatchId]
+                );
+                if ($alreadyLabeled) {
+                    Session::flash('error', "Stitching Batch has already been assigned to Label Batch {$alreadyLabeled['batch_number']}. Duplicate label generation is not allowed.");
+                    Response::redirect(url('production/labels'));
+                    return;
+                }
                 $programId = $selectedStitching['program_id'];
                 $items = StitchingBatch::getItems((int)$stitchingBatchId);
                 $rolls = StitchingBatch::getRolls((int)$stitchingBatchId);
@@ -6597,31 +6861,33 @@ class ProductionController {
         }
 
         if ($programId && !$selectedProgram) {
-            $alreadyLabeledProg = Database::fetchOne(
-                "SELECT id, batch_number FROM label_batches WHERE program_id = ?",
-                [(int)$programId]
-            );
-            if ($alreadyLabeledProg) {
-                Session::flash('error', "Production Program has already been assigned to Label Batch {$alreadyLabeledProg['batch_number']}. Duplicate label generation is not allowed.");
-                Response::redirect(url('production/labels'));
-                return;
-            }
             $selectedProgram = ProductionProgram::find((int)$programId);
-            if (empty($items)) {
-                $items = ProductionProgram::getItems((int)$programId);
-                $rolls = ProductionProgram::getRolls((int)$programId);
-                $defaultHierarchyParts = array_filter([
-                    $selectedProgram['category_name'] ?? '',
-                    $selectedProgram['subcategory_name'] ?? '',
-                    $selectedProgram['sub_subcategory_name'] ?? ''
-                ]);
-                $catalogHierarchy = !empty($defaultHierarchyParts) ? implode(' › ', $defaultHierarchyParts) : ($selectedProgram['product_name'] ?? 'General Apparel');
-                $distinctCatalogs = $this->resolveItemsCatalogHierarchy($items, $rolls, [
-                    'name'               => $catalogHierarchy,
-                    'category_id'        => $selectedProgram['category_id'] ?? null,
-                    'subcategory_id'     => $selectedProgram['subcategory_id'] ?? null,
-                    'sub_subcategory_id' => $selectedProgram['sub_subcategory_id'] ?? null,
-                ], 'planned_qty');
+            if ($selectedProgram) {
+                $alreadyLabeledProg = Database::fetchOne(
+                    "SELECT id, batch_number FROM label_batches WHERE program_id = ?",
+                    [(int)$programId]
+                );
+                if ($alreadyLabeledProg) {
+                    Session::flash('error', "Production Program has already been assigned to Label Batch {$alreadyLabeledProg['batch_number']}. Duplicate label generation is not allowed.");
+                    Response::redirect(url('production/labels'));
+                    return;
+                }
+                if (empty($items)) {
+                    $items = ProductionProgram::getItems((int)$programId);
+                    $rolls = ProductionProgram::getRolls((int)$programId);
+                    $defaultHierarchyParts = array_filter([
+                        $selectedProgram['category_name'] ?? '',
+                        $selectedProgram['subcategory_name'] ?? '',
+                        $selectedProgram['sub_subcategory_name'] ?? ''
+                    ]);
+                    $catalogHierarchy = !empty($defaultHierarchyParts) ? implode(' › ', $defaultHierarchyParts) : ($selectedProgram['product_name'] ?? 'General Apparel');
+                    $distinctCatalogs = $this->resolveItemsCatalogHierarchy($items, $rolls, [
+                        'name'               => $catalogHierarchy,
+                        'category_id'        => $selectedProgram['category_id'] ?? null,
+                        'subcategory_id'     => $selectedProgram['subcategory_id'] ?? null,
+                        'sub_subcategory_id' => $selectedProgram['sub_subcategory_id'] ?? null,
+                    ], 'planned_qty');
+                }
             }
         }
 
@@ -6963,11 +7229,13 @@ class ProductionController {
 
     public function batchList(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $warehouseId = trim($_GET['warehouse_id'] ?? $_GET['destination_warehouse_id'] ?? '');
         $filters = [
             'status'                   => trim($_GET['status'] ?? ''),
             'program_id'               => trim($_GET['program_id'] ?? ''),
-            'production_unit_id'       => $scopedUnitId ? (string)$scopedUnitId : trim($_GET['production_unit_id'] ?? ''),
+            'production_unit_id'       => $scopedUnitId !== null ? (string)$scopedUnitId : trim($_GET['production_unit_id'] ?? ''),
+            'concern_id'               => $concernId,
             'destination_warehouse_id' => $warehouseId,
             'warehouse_id'             => $warehouseId,
             'search'                   => trim($_GET['search'] ?? ''),
@@ -6993,8 +7261,12 @@ class ProductionController {
 
     public function createBatch(): void {
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        $sourceConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $qcBatchId = $_GET['qc_batch_id'] ?? null;
-        $unitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
+        $unitClause = $scopedUnitId === 0
+            ? ' AND 1 = 0'
+            : ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : '');
+        $concernClause = ' AND pu.concern_id = ' . (int)$sourceConcernId;
         
         $rawQcBatches = Database::fetchAll(
             "SELECT qb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name,
@@ -7003,12 +7275,13 @@ class ProductionController {
                         SELECT SUM(pbi.quantity)
                         FROM production_batch_items pbi
                         JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                        WHERE pb.qc_batch_id = qb.id AND pb.status != 'CANCELLED'
+                        WHERE pb.qc_batch_id = qb.id AND pb.concern_id = " . (int)$sourceConcernId . " AND pb.status != 'CANCELLED'
                     ), 0) as already_packed_qty
              FROM qc_batches qb
              JOIN production_programs pp ON qb.program_id = pp.id
+             JOIN production_units pu ON pu.id = pp.production_unit_id
              LEFT JOIN products p ON pp.product_id = p.id
-             WHERE (qb.passed_qty > 0 OR qb.status IN ('PASSED', 'PARTIAL', 'COMPLETED', 'REWORK'))$unitClause
+             WHERE (qb.passed_qty > 0 OR qb.status IN ('PASSED', 'PARTIAL', 'COMPLETED', 'REWORK'))$concernClause$unitClause
              ORDER BY qb.created_at DESC"
         );
 
@@ -7030,7 +7303,16 @@ class ProductionController {
         $selectedQC = null;
         $items = [];
         if ($qcBatchId) {
-            $selectedQC = QCBatch::find((int)$qcBatchId);
+            $ownedQC = Database::fetchOne(
+                "SELECT qb.id
+                 FROM qc_batches qb
+                 JOIN production_programs pp ON pp.id = qb.program_id
+                 JOIN production_units pu ON pu.id = pp.production_unit_id
+                 WHERE qb.id = ? AND pu.concern_id = ?"
+                 . ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : ''),
+                [(int)$qcBatchId, (int)$sourceConcernId]
+            );
+            $selectedQC = $ownedQC ? QCBatch::find((int)$qcBatchId) : null;
             if ($selectedQC) {
                 $totalQCPassed = (int)(Database::fetchOne(
                     "SELECT COALESCE(SUM(passed_qty), 0) as total FROM qc_items WHERE qc_batch_id = ?",
@@ -7044,8 +7326,8 @@ class ProductionController {
                     "SELECT COALESCE(SUM(pbi.quantity), 0) as total
                      FROM production_batch_items pbi
                      JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                     WHERE pb.qc_batch_id = ? AND pb.status != 'CANCELLED'",
-                    [(int)$qcBatchId]
+                     WHERE pb.qc_batch_id = ? AND pb.concern_id = ? AND pb.status != 'CANCELLED'",
+                    [(int)$qcBatchId, (int)$sourceConcernId]
                 )['total'] ?? 0);
 
                 $selectedQC['total_qc_passed'] = $totalQCPassed;
@@ -7058,9 +7340,10 @@ class ProductionController {
                     "SELECT pbi.variant_id, COALESCE(SUM(pbi.quantity), 0) as packed_qty
                      FROM production_batch_items pbi
                      JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                     WHERE pb.qc_batch_id = ? AND pb.status != 'CANCELLED'
+                     WHERE pb.qc_batch_id = ? AND pb.concern_id = ?
+                       AND pb.status != 'CANCELLED'
                      GROUP BY pbi.variant_id",
-                    [(int)$qcBatchId]
+                    [(int)$qcBatchId, (int)$sourceConcernId]
                 );
                 foreach ($packedRows as $pr) {
                     $variantPackedMap[(int)$pr['variant_id']] = (int)$pr['packed_qty'];
@@ -7112,12 +7395,14 @@ class ProductionController {
                 unset($it);
 
                 $existingBatches = Database::fetchAll(
-                    "SELECT pb.*, w.name as warehouse_name, w.code as warehouse_code
+                    "SELECT pb.*, w.name as warehouse_name, w.code as warehouse_code, dc.name as destination_concern_name
                      FROM production_batches pb 
                      LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id 
-                     WHERE pb.qc_batch_id = ? AND pb.status != 'CANCELLED' 
+                     LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+                     WHERE pb.qc_batch_id = ? AND pb.concern_id = ?
+                       AND pb.status != 'CANCELLED'
                      ORDER BY pb.id DESC",
-                    [(int)$qcBatchId]
+                    [(int)$qcBatchId, (int)$sourceConcernId]
                 );
 
                 // Ensure selectedQC is in $qcBatches list if not already present
@@ -7138,7 +7423,19 @@ class ProductionController {
             }
         }
 
-        $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
+        $destinationConcerns = $sourceConcernId
+            ? Database::fetchAll(
+                "SELECT c.id, c.name
+                 FROM concerns c
+                 WHERE c.is_active = 1 AND c.id <> ?
+                   AND EXISTS (
+                       SELECT 1 FROM concern_modules cm
+                       WHERE cm.concern_id = c.id AND cm.module_key = 'production_inward'
+                   )
+                 ORDER BY c.name",
+                [$sourceConcernId]
+            )
+            : [];
 
         Response::view('production.batches.create', [
             'pageTitle'       => 'Pack Production Batch',
@@ -7148,7 +7445,7 @@ class ProductionController {
             'selectedQC'      => $selectedQC,
             'existingBatches' => $existingBatches ?? [],
             'items'           => $items,
-            'warehouses'      => $warehouses,
+            'destinationConcerns' => $destinationConcerns,
             'breadcrumb'      => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Batches', 'url' => url('production/batches')],
@@ -7161,9 +7458,10 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
         $validator = Validator::make($_POST, [
-            'destination_warehouse_id' => 'required|numeric',
+            'destination_concern_id'  => 'required|numeric',
             'qc_batch_id'              => 'required|numeric',
             'box_count'                => 'required|numeric',
         ]);
@@ -7175,9 +7473,41 @@ class ProductionController {
         }
 
         $qcBatchId = (int)$_POST['qc_batch_id'];
-        $qcBatch = QCBatch::find($qcBatchId);
+        $sourceConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        $ownedQC = $sourceConcernId
+            ? Database::fetchOne(
+                "SELECT qb.id
+                 FROM qc_batches qb
+                 JOIN production_programs pp ON pp.id = qb.program_id
+                 JOIN production_units pu ON pu.id = pp.production_unit_id
+                 WHERE qb.id = ? AND pu.concern_id = ?"
+                 . ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : ''),
+                [$qcBatchId, $sourceConcernId]
+            )
+            : null;
+        $qcBatch = $ownedQC ? QCBatch::find($qcBatchId) : null;
         if (!$qcBatch) {
-            Session::flash('error', 'Selected QC Inspection Batch does not exist.');
+            Session::flash('error', 'Selected QC Inspection Batch does not belong to the active concern.');
+            Response::back();
+            return;
+        }
+
+        $destinationConcernId = (int)($_POST['destination_concern_id'] ?? 0);
+        $destinationConcern = $sourceConcernId && $destinationConcernId !== $sourceConcernId
+            ? Database::fetchOne(
+                "SELECT c.id
+                 FROM concerns c
+                 WHERE c.id = ? AND c.is_active = 1
+                   AND EXISTS (
+                       SELECT 1 FROM concern_modules cm
+                       WHERE cm.concern_id = c.id AND cm.module_key = 'production_inward'
+                   )",
+                [$destinationConcernId]
+            )
+            : null;
+        if (!$destinationConcern) {
+            Session::flash('error', 'Choose an active receiving concern with Production Inward enabled.');
             Response::back();
             return;
         }
@@ -7252,7 +7582,8 @@ class ProductionController {
             $batchId = ProductionService::createProductionBatch([
                 'program_id'               => $programId,
                 'qc_batch_id'              => !empty($_POST['qc_batch_id']) ? (int)$_POST['qc_batch_id'] : null,
-                'destination_warehouse_id' => (int)$_POST['destination_warehouse_id'],
+                'destination_warehouse_id' => null,
+                'destination_concern_id'   => $destinationConcernId,
                 'box_count'                => (int)($_POST['box_count'] ?? 1),
                 'status'                   => 'PREPARING',
             ], $items, $userId);
@@ -7269,6 +7600,11 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+        if (!$this->currentConcernOwnsBatch((int)$id)) {
+            Response::error(404, 'Production batch not found.');
+            return;
         }
         try {
             $user = Session::get('user');
@@ -7283,13 +7619,17 @@ class ProductionController {
 
     public function printBatchQRLabel(string $id): void {
         $batchId = (int)$id;
+        if (!$this->currentConcernOwnsBatch($batchId)) {
+            Response::error(404, 'Production batch not found.');
+            return;
+        }
         $batch = ProductionBatch::find($batchId);
         if (!$batch) {
             Response::error(404, 'Production batch not found.');
             return;
         }
         $items = ProductionBatch::getItems($batchId);
-        Response::viewOnly('warehouse.inward.label', [
+        Response::viewOnly('production.batches.label', [
             'batch' => $batch,
             'items' => $items,
         ]);
@@ -7305,33 +7645,42 @@ class ProductionController {
         $status = trim((string)($_GET['status'] ?? ''));
         $status = in_array($status, ['DISPATCHED', 'RECEIVED', 'DISCREPANCY'], true) ? $status : '';
         $warehouseId = (int)($_GET['warehouse_id'] ?? 0);
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $outwards = ProductionOutward::getAll([
             'search'             => $search,
             'production_unit_id' => $scopedUnitId,
             'warehouse_id'       => $warehouseId,
+            'concern_id'         => $concernId,
             'status'             => $status,
         ]);
 
-        $unitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
+        $unitClause = $scopedUnitId === 0
+            ? ' AND 1 = 0'
+            : ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : '');
         $warehouseClause = $warehouseId > 0 ? ' AND pb.destination_warehouse_id = ' . $warehouseId : '';
         $searchClause = '';
         $batchParams = [];
         if ($search !== '') {
-            $searchClause = " AND (pb.batch_number LIKE ? OR pp.program_number LIKE ? OR p.name LIKE ? OR w.name LIKE ?)";
+            $searchClause = " AND (pb.batch_number LIKE ? OR pp.program_number LIKE ? OR p.name LIKE ? OR w.name LIKE ? OR dc.name LIKE ?)";
             $searchTerm = '%' . $search . '%';
-            $batchParams = array_fill(0, 4, $searchTerm);
+            $batchParams = array_fill(0, 5, $searchTerm);
         }
-        $approvedBatches = Database::fetchAll(
-            "SELECT pb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name, w.name as warehouse_name
-             FROM production_batches pb
-             JOIN production_programs pp ON pb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             JOIN warehouses w ON pb.destination_warehouse_id = w.id
-             WHERE pb.status = 'APPROVED'
-               AND pb.id NOT IN (SELECT production_batch_id FROM production_outwards WHERE production_batch_id IS NOT NULL)$unitClause$warehouseClause$searchClause
-             ORDER BY pb.created_at DESC",
-            $batchParams
-        );
+        $approvedBatches = $concernId !== null && $scopedUnitId !== 0
+            ? Database::fetchAll(
+                "SELECT pb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name,
+                        w.name as warehouse_name, dc.name as destination_concern_name
+                 FROM production_batches pb
+                 JOIN production_programs pp ON pb.program_id = pp.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
+                 LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+                 WHERE pb.status = 'APPROVED'
+                   AND pb.concern_id = ?
+                   AND pb.id NOT IN (SELECT production_batch_id FROM production_outwards WHERE production_batch_id IS NOT NULL)$unitClause$warehouseClause$searchClause
+                 ORDER BY pb.created_at DESC",
+                array_merge([(int)$concernId], $batchParams)
+            )
+            : [];
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : Warehouse::getAll(['is_active' => 1]);
 
         Response::view('production.outward.index', [
@@ -7384,8 +7733,11 @@ class ProductionController {
         }
         $dispatchDate = date('Y-m-d H:i:s', $dispatchTimestamp);
         $existingOutward = Database::fetchOne(
-            "SELECT id, outward_number FROM production_outwards WHERE production_batch_id = ?",
-            [$batchId]
+            "SELECT po.id, po.outward_number
+             FROM production_outwards po
+             JOIN production_batches pb ON pb.id = po.production_batch_id
+             WHERE po.production_batch_id = ? AND pb.concern_id = ?",
+            [$batchId, (int)currentConcernId()]
         );
         if ($existingOutward) {
             $pbInfo = ProductionBatch::find($batchId);
@@ -7396,6 +7748,13 @@ class ProductionController {
         }
 
         try {
+            $batch = Database::fetchOne(
+                "SELECT id FROM production_batches WHERE id = ? AND concern_id = ? AND status = 'APPROVED'",
+                [$batchId, (int)currentConcernId()]
+            );
+            if (!$batch) {
+                throw new RuntimeException('This batch is not approved or does not belong to the active concern.');
+            }
             $userId = Session::userId();
             $outwardId = ProductionService::createOutward([
                 'production_batch_id' => $batchId,
@@ -7409,7 +7768,7 @@ class ProductionController {
                 'notes'               => trim($_POST['notes'] ?? ''),
             ], $userId);
 
-            Session::flash('success', 'Production batch dispatched to warehouse successfully.');
+            Session::flash('success', 'Production batch dispatched to its selected destination.');
             Response::redirect(url('production/outward'));
         } catch (Exception $e) {
             Session::flash('error', $e->getMessage());
@@ -7421,6 +7780,12 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+        $outward = ProductionOutward::find((int)$id);
+        if (!$outward || !$this->currentConcernOwnsBatch((int)$outward['production_batch_id'])) {
+            Response::error(404, 'Outward dispatch not found.');
+            return;
         }
         try {
             $userId = Session::userId();
@@ -7434,11 +7799,16 @@ class ProductionController {
 
     public function batchDetailsAjax(string $id): void {
         $batchId = (int)$id;
+        if (!$this->currentConcernOwnsBatch($batchId)) {
+            Response::json(['success' => false, 'message' => 'Production batch not found.'], 404);
+            return;
+        }
         $batch = ProductionBatch::find($batchId);
         if (!$batch) {
             Response::json(['success' => false, 'message' => 'Production batch not found.'], 404);
             return;
         }
+
         $items = ProductionBatch::getItems($batchId);
         $outward = ProductionOutward::findByBatchId($batchId);
 
@@ -7453,19 +7823,42 @@ class ProductionController {
     public function outwardDetailsAjax(string $id): void {
         $outwardId = (int)$id;
         $outward = ProductionOutward::find($outwardId);
-        if (!$outward) {
+        if (!$outward || !$this->currentConcernOwnsBatch((int)$outward['production_batch_id'])) {
             Response::json(['success' => false, 'message' => 'Outward record not found.'], 404);
             return;
         }
         $batch = !empty($outward['production_batch_id']) ? ProductionBatch::find((int)$outward['production_batch_id']) : null;
         $items = !empty($outward['production_batch_id']) ? ProductionBatch::getItems((int)$outward['production_batch_id']) : [];
+        $discrepancies = !empty($outward['production_batch_id'])
+            ? ProductionInwardService::getConcernBatchDiscrepancies((int)$outward['production_batch_id'])
+            : [];
 
         Response::json([
             'success' => true,
             'outward' => $outward,
             'batch'   => $batch,
             'items'   => $items,
+            'discrepancies' => $discrepancies,
         ]);
+    }
+
+    private function currentConcernOwnsBatch(int $batchId): bool {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($batchId <= 0 || $concernId === null || $unitId === 0) {
+            return false;
+        }
+        $sql = "SELECT pb.id
+                FROM production_batches pb
+                JOIN production_programs pp ON pp.id = pb.program_id
+                JOIN production_units pu ON pu.id = pp.production_unit_id
+                WHERE pb.id = ? AND pb.concern_id = ? AND pu.concern_id = ?";
+        $params = [$batchId, $concernId, $concernId];
+        if ($unitId !== null) {
+            $sql .= ' AND pp.production_unit_id = ?';
+            $params[] = $unitId;
+        }
+        return (bool)Database::fetchOne($sql, $params);
     }
 
     // =========================================================================
@@ -7473,6 +7866,7 @@ class ProductionController {
     // =========================================================================
 
     public function warehouseReworkList(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $search = trim($_GET['search'] ?? '');
         $status = trim($_GET['status'] ?? '');
@@ -7485,26 +7879,37 @@ class ProductionController {
             'warehouse_id'       => $warehouseId,
             'defect_type'        => $defectType,
             'production_unit_id' => $scopedUnitId,
-        ]);
+        ], static fn($v): bool => $v !== null && $v !== '');
 
         $reworks = ProductionWarehouseRework::getAll($filters);
         $stats = ProductionWarehouseRework::getStats(['production_unit_id' => $scopedUnitId]);
 
         $warehouses = function_exists('getScopedWarehouses') ? getScopedWarehouses() : [];
-        
-        $unitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
-        $dispatchedBatches = Database::fetchAll(
-            "SELECT pb.id, pb.batch_number, pb.total_qty, pb.destination_warehouse_id as warehouse_id,
-                    w.name as warehouse_name, COALESCE(p.name, pp.name, 'General Garment') as product_name,
-                    p.id as product_id, po.id as outward_id, po.outward_number, po.dispatch_date
-             FROM production_batches pb
-             JOIN production_programs pp ON pb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             JOIN warehouses w ON pb.destination_warehouse_id = w.id
-             LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
-             WHERE pb.status IN ('DISPATCHED', 'RECEIVED', 'APPROVED') $unitClause
-             ORDER BY pb.id DESC"
-        );
+
+        $dispatchedBatches = [];
+        if ($concernId !== null && $scopedUnitId !== 0) {
+            $dbParams = [$concernId];
+            $unitClause = '';
+            if ($scopedUnitId !== null) {
+                $unitClause = ' AND pp.production_unit_id = ?';
+                $dbParams[] = (int)$scopedUnitId;
+            }
+            $dispatchedBatches = Database::fetchAll(
+                "SELECT pb.id, pb.batch_number, pb.total_qty, pb.destination_warehouse_id as warehouse_id,
+                        w.name as warehouse_name, COALESCE(p.name, pp.name, 'General Garment') as product_name,
+                        p.id as product_id, po.id as outward_id, po.outward_number, po.dispatch_date
+                 FROM production_batches pb
+                 JOIN production_programs pp ON pb.program_id = pp.id
+                 LEFT JOIN production_units pu ON pu.id = pp.production_unit_id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 JOIN warehouses w ON pb.destination_warehouse_id = w.id
+                 LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
+                 WHERE COALESCE(pb.concern_id, pu.concern_id) = ?
+                   AND pb.status IN ('DISPATCHED', 'RECEIVED', 'APPROVED'){$unitClause}
+                 ORDER BY pb.id DESC",
+                $dbParams
+            );
+        }
 
         $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
@@ -7798,32 +8203,46 @@ class ProductionController {
     }
 
     public function createQC(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $stitchingBatchId = isset($_GET['stitching_batch_id']) ? (int)$_GET['stitching_batch_id'] : null;
         $labelBatchId = isset($_GET['label_batch_id']) ? (int)$_GET['label_batch_id'] : null;
 
-        $unitClause = $scopedUnitId ? " AND pp.production_unit_id = $scopedUnitId" : "";
-        $stitchingBatches = Database::fetchAll(
-            "SELECT sb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name 
-             FROM stitching_batches sb
-             JOIN production_programs pp ON sb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             WHERE 1=1$unitClause
-               AND sb.id NOT IN (SELECT stitching_batch_id FROM qc_batches WHERE stitching_batch_id IS NOT NULL)
-               AND (sb.program_id IS NULL OR sb.program_id NOT IN (SELECT program_id FROM qc_batches WHERE program_id IS NOT NULL))
-             ORDER BY sb.created_at DESC"
-        );
+        $stitchingBatches = [];
+        $labelBatches = [];
+        if ($concernId !== null && $scopedUnitId !== 0) {
+            $qcScopeParams = [$concernId];
+            $unitClause = '';
+            if ($scopedUnitId !== null) {
+                $unitClause = ' AND pp.production_unit_id = ?';
+                $qcScopeParams[] = (int)$scopedUnitId;
+            }
+            $stitchingBatches = Database::fetchAll(
+                "SELECT sb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name
+                 FROM stitching_batches sb
+                 JOIN production_programs pp ON sb.program_id = pp.id
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 WHERE pu.concern_id = ?{$unitClause}
+                   AND sb.id NOT IN (SELECT stitching_batch_id FROM qc_batches WHERE stitching_batch_id IS NOT NULL)
+                   AND (sb.program_id IS NULL OR sb.program_id NOT IN (SELECT program_id FROM qc_batches WHERE program_id IS NOT NULL))
+                 ORDER BY sb.created_at DESC",
+                $qcScopeParams
+            );
 
-        $labelBatches = Database::fetchAll(
-            "SELECT lb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name
-             FROM label_batches lb
-             JOIN production_programs pp ON lb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             WHERE 1=1$unitClause
-               AND lb.id NOT IN (SELECT label_batch_id FROM qc_batches WHERE label_batch_id IS NOT NULL)
-               AND (lb.program_id IS NULL OR lb.program_id NOT IN (SELECT program_id FROM qc_batches WHERE program_id IS NOT NULL))
-             ORDER BY lb.created_at DESC"
-        );
+            $labelBatches = Database::fetchAll(
+                "SELECT lb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name
+                 FROM label_batches lb
+                 JOIN production_programs pp ON lb.program_id = pp.id
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 WHERE pu.concern_id = ?{$unitClause}
+                   AND lb.id NOT IN (SELECT label_batch_id FROM qc_batches WHERE label_batch_id IS NOT NULL)
+                   AND (lb.program_id IS NULL OR lb.program_id NOT IN (SELECT program_id FROM qc_batches WHERE program_id IS NOT NULL))
+                 ORDER BY lb.created_at DESC",
+                $qcScopeParams
+            );
+        }
 
         $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
 
@@ -7835,17 +8254,17 @@ class ProductionController {
         $rolls = [];
 
         if ($stitchingBatchId) {
-            $alreadyQC = Database::fetchOne(
-                "SELECT id FROM qc_batches WHERE stitching_batch_id = ?",
-                [$stitchingBatchId]
-            );
-            if ($alreadyQC) {
-                Session::flash('error', "Stitching Batch has already undergone QC Inspection (QC #{$alreadyQC['id']}). Duplicate QC inspection is not allowed.");
-                Response::redirect(url('production/qc'));
-                return;
-            }
             $selectedStitching = StitchingBatch::find($stitchingBatchId);
             if ($selectedStitching) {
+                $alreadyQC = Database::fetchOne(
+                    "SELECT id FROM qc_batches WHERE stitching_batch_id = ?",
+                    [$stitchingBatchId]
+                );
+                if ($alreadyQC) {
+                    Session::flash('error', "Stitching Batch has already undergone QC Inspection (QC #{$alreadyQC['id']}). Duplicate QC inspection is not allowed.");
+                    Response::redirect(url('production/qc'));
+                    return;
+                }
                 $stitchingItems = StitchingBatch::getItems($stitchingBatchId);
                 $rolls = StitchingBatch::getRolls($stitchingBatchId);
 
@@ -7902,17 +8321,17 @@ class ProductionController {
                 ], 'stitched_qty');
             }
         } elseif ($labelBatchId) {
-            $alreadyQC = Database::fetchOne(
-                "SELECT id FROM qc_batches WHERE label_batch_id = ?",
-                [$labelBatchId]
-            );
-            if ($alreadyQC) {
-                Session::flash('error', "Label Batch has already undergone QC Inspection (QC #{$alreadyQC['id']}). Duplicate QC inspection is not allowed.");
-                Response::redirect(url('production/qc'));
-                return;
-            }
             $selectedLabel = LabelBatch::find($labelBatchId);
             if ($selectedLabel) {
+                $alreadyQC = Database::fetchOne(
+                    "SELECT id FROM qc_batches WHERE label_batch_id = ?",
+                    [$labelBatchId]
+                );
+                if ($alreadyQC) {
+                    Session::flash('error', "Label Batch has already undergone QC Inspection (QC #{$alreadyQC['id']}). Duplicate QC inspection is not allowed.");
+                    Response::redirect(url('production/qc'));
+                    return;
+                }
                 $labelItems = LabelBatch::getItems($labelBatchId);
                 $rolls = !empty($selectedLabel['stitching_batch_id']) ? StitchingBatch::getRolls((int)$selectedLabel['stitching_batch_id']) : (!empty($selectedLabel['program_id']) ? ProductionProgram::getRolls((int)$selectedLabel['program_id']) : []);
                 foreach ($labelItems as $li) {
@@ -8503,29 +8922,47 @@ class ProductionController {
     }
 
     public function productionInwardIndex(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        if ($scopedUnitId === null && function_exists('isSuperAdmin') && !isSuperAdmin()) {
-            Response::redirect(url('production/dashboard'), 'error', 'Assign this account to a production unit before opening Production Inward.');
-            return;
-        }
-        $unitId = $scopedUnitId ?? (!empty($_GET['unit_id']) ? (int)$_GET['unit_id'] : null);
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
-        $unit = null;
-        if ($unitId !== null) {
-            foreach ($units as $candidate) {
-                if ((int)$candidate['id'] === $unitId) {
-                    $unit = $candidate;
-                    break;
-                }
-            }
-            if (!$unit) {
+        $destinationType = 'CONCERN';
+        $unitId = null;
+        if ($concernId === null || $scopedUnitId === 0) {
+            $receipts = [];
+            $unitStock = [];
+            $pendingConcernBatches = [];
+        } else {
+            $requestedDest = (string)($_GET['destination'] ?? '');
+            if ($requestedDest !== '' && preg_match('/^UNIT:(\d+)$/', $requestedDest, $match)) {
+                $destinationType = 'PRODUCTION_UNIT';
+                $unitId = (int)$match[1];
+            } elseif ($scopedUnitId !== null && $scopedUnitId > 0 && $requestedDest === '') {
+                $destinationType = 'CONCERN';
                 $unitId = null;
             }
-        }
 
+            $unit = null;
+            if ($destinationType === 'PRODUCTION_UNIT' && $unitId !== null) {
+                foreach ($units as $candidate) {
+                    if ((int)$candidate['id'] === $unitId) {
+                        $unit = $candidate;
+                        break;
+                    }
+                }
+                if (!$unit) {
+                    $destinationType = 'CONCERN';
+                    $unitId = null;
+                }
+            }
+
+            $search = trim((string)($_GET['search'] ?? ''));
+            $receipts = ProductionInwardService::getReceipts($unitId, $search, $destinationType);
+            $unitStock = $destinationType === 'PRODUCTION_UNIT'
+                ? ProductionInwardService::getUnitStock((int)$unitId)
+                : ProductionInwardService::getConcernStock();
+            $pendingConcernBatches = ProductionInwardService::getPendingConcernBatches();
+        }
         $search = trim((string)($_GET['search'] ?? ''));
-        $receipts = $unitId ? ProductionInwardService::getReceipts($unitId, $search) : [];
-        $unitStock = $unitId ? ProductionInwardService::getUnitStock($unitId) : [];
         $stats = [
             'receipt_count' => count($receipts),
             'received_quantity' => array_sum(array_map(static fn(array $receipt): int => (int)$receipt['total_quantity'], $receipts)),
@@ -8538,9 +8975,11 @@ class ProductionController {
             'activeMenu' => 'prod-inward',
             'units' => $units,
             'unitId' => $unitId,
+            'destinationType' => $destinationType,
             'scopedUnitId' => $scopedUnitId,
             'locations' => ProductionInwardService::getLocations(),
             'receipts' => $receipts,
+            'pendingConcernBatches' => $pendingConcernBatches,
             'unitStock' => $unitStock,
             'stats' => $stats,
             'search' => $search,
@@ -8573,11 +9012,6 @@ class ProductionController {
         }
 
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        if ($scopedUnitId === null && function_exists('isSuperAdmin') && !isSuperAdmin()) {
-            Session::flash('error', 'Assign this account to a production unit before receiving stock.');
-            Response::redirect(url('production/inward'));
-            return;
-        }
         $destinationUnitId = $scopedUnitId ?? (int)($_POST['destination_unit_id'] ?? 0);
         $items = json_decode((string)($_POST['items_json'] ?? '[]'), true);
         if (!is_array($items)) {
@@ -8601,6 +9035,73 @@ class ProductionController {
         Response::redirect(url('production/inward') . ($scopedUnitId ? '' : '?unit_id=' . $destinationUnitId));
     }
 
+    public function receiveConcernProductionBatch(): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::redirect(url('production/inward'));
+            return;
+        }
+
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        $destinationType = strtoupper(trim((string)($_POST['destination_type'] ?? '')));
+        $destinationId = $destinationType === 'CONCERN'
+            ? (int)(function_exists('currentConcernId') ? currentConcernId() : 0)
+            : ($scopedUnitId ?? (int)($_POST['destination_unit_id'] ?? 0));
+        $batchId = (int)($_POST['production_batch_id'] ?? 0);
+        $scans = json_decode((string)($_POST['scan_data'] ?? '[]'), true);
+        try {
+            if ($scopedUnitId === 0 || ($scopedUnitId !== null
+                && $destinationType === 'PRODUCTION_UNIT' && $destinationId !== $scopedUnitId)) {
+                throw new InvalidArgumentException('The destination is outside your assigned production unit.');
+            }
+            if (!is_array($scans)) {
+                throw new InvalidArgumentException('Scanned product data is invalid. Scan the batch again.');
+            }
+            $grnNumber = ProductionInwardService::receiveConcernBatch(
+                $batchId,
+                $destinationType,
+                $destinationId,
+                $scans,
+                trim((string)($_POST['notes'] ?? '')),
+                (int)(Session::get('user_id') ?? 0)
+            );
+            Session::flash('success', "Receipt {$grnNumber} was posted to the selected inventory.");
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+        }
+        $destination = $destinationType === 'CONCERN' ? 'CONCERN' : 'UNIT:' . $destinationId;
+        Response::redirect(url('production/inward') . '?destination=' . rawurlencode($destination));
+    }
+
+    public function updateConcernBatchReceiptStatuses(): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::redirect(url('production/inward'));
+            return;
+        }
+
+        $inwardId = (int)($_POST['inward_id'] ?? 0);
+        $statuses = json_decode((string)($_POST['piece_statuses'] ?? '{}'), true);
+        $destinationType = strtoupper(trim((string)($_POST['destination_type'] ?? 'CONCERN')));
+        $destination = $destinationType === 'PRODUCTION_UNIT'
+            ? 'UNIT:' . (int)($_POST['destination_unit_id'] ?? 0)
+            : 'CONCERN';
+        try {
+            if (!is_array($statuses)) {
+                throw new InvalidArgumentException('Piece status data is invalid.');
+            }
+            ProductionInwardService::updateConcernBatchPieceStatuses(
+                $inwardId,
+                $statuses,
+                (int)(Session::get('user_id') ?? 0)
+            );
+            Session::flash('success', 'Batch receipt piece statuses and stock balances were updated.');
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+        }
+        Response::redirect(url('production/inward') . '?destination=' . rawurlencode($destination));
+    }
+
     // =========================================================================
     // PRODUCTION INVENTORY (POST-QC PASSED PRODUCTS)
     // =========================================================================
@@ -8615,8 +9116,32 @@ class ProductionController {
     public function productionInventory(): void {
         $search = trim($_GET['search'] ?? '');
         $categoryFilter = !empty($_GET['category_id']) ? (int)$_GET['category_id'] : null;
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $inventoryUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        $transferredStock = ProductionInwardService::getStockAcrossUnits($inventoryUnitId);
+        $transferredStock = ProductionInwardService::getStockAcrossUnits(null);
+        if ($categoryFilter !== null || $search !== '') {
+            $normalizedSearch = strtolower($search);
+            $transferredStock = array_values(array_filter(
+                $transferredStock,
+                static function (array $stock) use ($categoryFilter, $normalizedSearch): bool {
+                    if ($categoryFilter !== null && (int)($stock['category_id'] ?? 0) !== $categoryFilter) {
+                        return false;
+                    }
+                    if ($normalizedSearch === '') {
+                        return true;
+                    }
+                    $searchable = strtolower(implode(' ', [
+                        $stock['product_name'] ?? '',
+                        $stock['category_name'] ?? '',
+                        $stock['sku'] ?? '',
+                        $stock['size_name'] ?? '',
+                        $stock['color_name'] ?? '',
+                        $stock['production_unit_name'] ?? '',
+                    ]));
+                    return str_contains($searchable, $normalizedSearch);
+                }
+            ));
+        }
 
         $sql = "SELECT qi.*, 
                        qb.program_id, 
@@ -8634,6 +9159,7 @@ class ProductionController {
                 FROM qc_items qi
                 JOIN qc_batches qb ON qi.qc_batch_id = qb.id
                 JOIN production_programs pp ON qb.program_id = pp.id
+                LEFT JOIN production_units scoped_pu ON scoped_pu.id = pp.production_unit_id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN categories c_p ON p.category_id = c_p.id
                 LEFT JOIN categories c_pp ON pp.category_id = c_pp.id
@@ -8641,6 +9167,18 @@ class ProductionController {
                 WHERE (qi.passed_qty > 0 OR qi.rework_qty > 0 OR qi.rejected_qty > 0)";
         
         $params = [];
+        if ($concernId === null) {
+            $sql .= ' AND 1 = 0';
+        } else {
+            $sql .= ' AND scoped_pu.concern_id = ?';
+            $params[] = (int)$concernId;
+        }
+        if ($inventoryUnitId === 0) {
+            $sql .= ' AND 1 = 0';
+        } elseif ($inventoryUnitId !== null) {
+            $sql .= ' AND pp.production_unit_id = ?';
+            $params[] = (int)$inventoryUnitId;
+        }
 
         if (!empty($search)) {
             $sql .= " AND (
@@ -8669,24 +9207,50 @@ class ProductionController {
 
         $items = Database::fetchAll($sql, $params);
 
-        $damageUnitClause = $inventoryUnitId ? ' AND pp.production_unit_id = ' . (int)$inventoryUnitId : '';
+        $damageUnitClause = '';
+        $damageParams = [];
+        if ($concernId !== null) {
+            $damageUnitClause .= ' AND pu_scope.concern_id = ?';
+            $damageParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId !== null) {
+            $damageUnitClause .= ' AND pp.production_unit_id = ?';
+            $damageParams[] = (int)$inventoryUnitId;
+        }
         $damagedCountsByQCItem = [];
         foreach (Database::fetchAll(
             "SELECT d.qc_item_id, COUNT(*) AS damaged_count
              FROM production_inventory_damages d
              JOIN production_programs pp ON pp.id = d.program_id
+             LEFT JOIN production_units pu_scope ON pu_scope.id = pp.production_unit_id
              WHERE d.status NOT IN ('REPAIRED', 'RESTOCKED'){$damageUnitClause}
-             GROUP BY d.qc_item_id"
+             GROUP BY d.qc_item_id",
+            $damageParams
         ) as $damageRow) {
             $damagedCountsByQCItem[(int)$damageRow['qc_item_id']] = (int)$damageRow['damaged_count'];
         }
-        $returnedUnitClause = $inventoryUnitId ? ' AND production_unit_id = ' . (int)$inventoryUnitId : '';
+        $returnedUnitClause = '';
+        $returnedParams = [];
+        if ($concernId !== null) {
+            $returnedUnitClause .= ' AND pu_scope.concern_id = ? AND pbr.concern_id = ?';
+            $returnedParams[] = (int)$concernId;
+            $returnedParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId !== null) {
+            $returnedUnitClause .= ' AND pp.production_unit_id = ?';
+            $returnedParams[] = (int)$inventoryUnitId;
+        }
         $returnedCountsByQCItem = [];
         foreach (Database::fetchAll(
-            "SELECT qc_item_id, COUNT(*) AS returned_count
-             FROM production_return_inventory
-             WHERE status = 'AVAILABLE'{$returnedUnitClause}
-             GROUP BY qc_item_id"
+            "SELECT ri.qc_item_id, COUNT(*) AS returned_count
+             FROM production_return_inventory ri
+             JOIN production_bill_returns pbr ON pbr.id = ri.return_id
+             JOIN qc_batches qb ON qb.id = ri.qc_batch_id
+             JOIN production_programs pp ON pp.id = qb.program_id
+             LEFT JOIN production_units pu_scope ON pu_scope.id = pp.production_unit_id
+             WHERE ri.status = 'AVAILABLE'{$returnedUnitClause}
+             GROUP BY ri.qc_item_id",
+            $returnedParams
         ) as $returnedRow) {
             $returnedCountsByQCItem[(int)$returnedRow['qc_item_id']] = (int)$returnedRow['returned_count'];
         }
@@ -8698,9 +9262,8 @@ class ProductionController {
             $deletedCountsByBatch[$qcBatchId] = ProductionService::getUnavailableQCPieceCounts($qcBatchId, $deletedCodes);
         }
 
-        // Fetch all outward dispatches to link with batches/programs
-        $allOutwards = Database::fetchAll(
-            "SELECT po.id as outward_id,
+        // Fetch only outward dispatches owned by this concern and production unit.
+        $outwardSql = "SELECT po.id as outward_id,
                     po.outward_number,
                     po.dispatch_date,
                     po.status as outward_status,
@@ -8719,9 +9282,26 @@ class ProductionController {
                     po.lr_number
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
+             JOIN production_programs scoped_pp ON scoped_pp.id = pb.program_id
+             LEFT JOIN production_units scoped_pu ON scoped_pu.id = scoped_pp.production_unit_id
              LEFT JOIN warehouses w ON (po.warehouse_id = w.id OR pb.destination_warehouse_id = w.id)
-             ORDER BY po.created_at DESC"
-        );
+             WHERE 1 = 1";
+        $outwardParams = [];
+        if ($concernId === null) {
+            $outwardSql .= ' AND 1 = 0';
+        } else {
+            $outwardSql .= ' AND pb.concern_id = ? AND scoped_pu.concern_id = ?';
+            $outwardParams[] = (int)$concernId;
+            $outwardParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId === 0) {
+            $outwardSql .= ' AND 1 = 0';
+        } elseif ($inventoryUnitId !== null) {
+            $outwardSql .= ' AND scoped_pp.production_unit_id = ?';
+            $outwardParams[] = (int)$inventoryUnitId;
+        }
+        $outwardSql .= ' ORDER BY po.created_at DESC';
+        $allOutwards = Database::fetchAll($outwardSql, $outwardParams);
 
         // Map outwards by qc_batch_id and program_id
         $outwardsByQC = [];
@@ -8873,10 +9453,27 @@ class ProductionController {
         }
         unset($batch);
 
-        // Overall stats reflecting remaining inventory & outward history
+        // Overall stats reflecting remaining QC inventory, inwarded stock & outward history
+        $qcRemainingPieces = (int)array_sum(array_column($batches, 'remaining_pieces'));
+        $qcRemainingValuation = (float)array_sum(array_column($batches, 'remaining_value'));
+        $inwardPieces = 0;
+        $inwardValuation = 0.0;
+        foreach ($transferredStock as $stock) {
+            $qty = (int)($stock['quantity'] ?? 0);
+            $inwardPieces += $qty;
+            $inwardValuation += $qty * (float)($stock['selling_price'] ?? $stock['mrp'] ?? 0);
+        }
+        $uniqueProducts = array_unique(array_merge(
+            array_filter(array_column($items, 'product_id')),
+            array_filter(array_column($transferredStock, 'product_id'))
+        ));
         $stats = [
-            'total_remaining_pieces'    => array_sum(array_column($batches, 'remaining_pieces')),
-            'total_remaining_valuation' => array_sum(array_column($batches, 'remaining_value')),
+            'qc_remaining_pieces'       => $qcRemainingPieces,
+            'qc_remaining_valuation'    => $qcRemainingValuation,
+            'inward_pieces'             => $inwardPieces,
+            'inward_valuation'          => $inwardValuation,
+            'total_remaining_pieces'    => $qcRemainingPieces + $inwardPieces,
+            'total_remaining_valuation' => $qcRemainingValuation + $inwardValuation,
             'total_outwarded_pieces'    => array_sum(array_column($batches, 'total_outward_pieces')),
             'total_passed_pieces'       => array_sum(array_column($batches, 'total_passed_pieces')),
             'total_rework_pieces'       => array_sum(array_column($batches, 'total_rework_pieces')),
@@ -8884,7 +9481,7 @@ class ProductionController {
             'total_passed_valuation'    => array_sum(array_column($batches, 'total_passed_value')),
             'unique_batches_count'      => count($batches),
             'in_stock_batches_count'    => count(array_filter($batches, fn($b) => ($b['remaining_pieces'] ?? 0) > 0)),
-            'unique_products_count'     => count(array_unique(array_filter(array_column($items, 'product_id')))),
+            'unique_products_count'     => count($uniqueProducts),
         ];
 
         // Fetch categories for filter dropdown
@@ -8916,6 +9513,8 @@ class ProductionController {
      * with real-time remaining stock calculation and full outward dispatch history.
      */
     public function productionInventoryBatch(int $id): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $inventoryUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $sql = "SELECT qi.*, 
                        qb.program_id, 
                        qb.inspector_id,
@@ -8940,6 +9539,7 @@ class ProductionController {
                 FROM qc_items qi
                 JOIN qc_batches qb ON qi.qc_batch_id = qb.id
                 JOIN production_programs pp ON qb.program_id = pp.id
+                LEFT JOIN production_units scoped_pu ON scoped_pu.id = pp.production_unit_id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN categories c ON p.category_id = c.id
                 LEFT JOIN categories c_pp ON pp.category_id = c_pp.id
@@ -8964,10 +9564,23 @@ class ProductionController {
                     ))
                 )
                 WHERE qi.qc_batch_id = ?
-                  AND (qi.passed_qty > 0 OR qi.rework_qty > 0 OR qi.rejected_qty > 0)
-                ORDER BY qi.id ASC";
+                  AND (qi.passed_qty > 0 OR qi.rework_qty > 0 OR qi.rejected_qty > 0)";
+        $qcItemParams = [$id];
+        if ($concernId === null) {
+            $sql .= ' AND 1 = 0';
+        } else {
+            $sql .= ' AND scoped_pu.concern_id = ?';
+            $qcItemParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId === 0) {
+            $sql .= ' AND 1 = 0';
+        } elseif ($inventoryUnitId !== null) {
+            $sql .= ' AND pp.production_unit_id = ?';
+            $qcItemParams[] = (int)$inventoryUnitId;
+        }
+        $sql .= ' ORDER BY qi.id ASC';
 
-        $qcItems = Database::fetchAll($sql, [$id]);
+        $qcItems = Database::fetchAll($sql, $qcItemParams);
 
         if (empty($qcItems)) {
             Response::redirect(url('production/inventory'), 'error', 'Batch not found or has no recorded QC outcome.');
@@ -8992,8 +9605,7 @@ class ProductionController {
         $programId = (int)($first['program_id'] ?? 0);
 
         // Fetch outward dispatch history for this QC batch / program
-        $outwards = empty($items) ? [] : Database::fetchAll(
-            "SELECT po.*,
+        $outwardHistorySql = "SELECT po.*,
                     pb.batch_number,
                     pb.box_count as batch_box_count,
                     pb.status as batch_status,
@@ -9005,13 +9617,24 @@ class ProductionController {
                     pu.name as unit_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
+             JOIN production_programs scoped_pp ON scoped_pp.id = pb.program_id
+             LEFT JOIN production_units scoped_pu ON scoped_pu.id = scoped_pp.production_unit_id
              LEFT JOIN warehouses w ON (po.warehouse_id = w.id OR pb.destination_warehouse_id = w.id)
              LEFT JOIN production_units pu ON po.production_unit_id = pu.id
              LEFT JOIN users u ON po.created_by = u.id
-             WHERE pb.qc_batch_id = ? OR (pb.program_id = ? AND pb.program_id > 0)
-             ORDER BY po.created_at DESC",
-            [$id, $programId]
-        );
+             WHERE (pb.qc_batch_id = ? OR (pb.program_id = ? AND pb.program_id > 0))";
+        $outwardHistoryParams = [$id, $programId];
+        if ($concernId !== null) {
+            $outwardHistorySql .= ' AND pb.concern_id = ? AND scoped_pu.concern_id = ?';
+            $outwardHistoryParams[] = (int)$concernId;
+            $outwardHistoryParams[] = (int)$concernId;
+        }
+        if ($inventoryUnitId !== null) {
+            $outwardHistorySql .= ' AND scoped_pp.production_unit_id = ?';
+            $outwardHistoryParams[] = (int)$inventoryUnitId;
+        }
+        $outwardHistorySql .= ' ORDER BY po.created_at DESC';
+        $outwards = empty($items) ? [] : Database::fetchAll($outwardHistorySql, $outwardHistoryParams);
 
         $totalOutwardPieces = 0;
         foreach ($outwards as $ow) {
@@ -9186,11 +9809,17 @@ class ProductionController {
             }
         }
 
-        $returnedInventoryRows = Database::fetchAll(
-            "SELECT * FROM production_return_inventory
-             WHERE qc_batch_id = ? AND status = 'AVAILABLE' ORDER BY id ASC",
-            [$id]
-        );
+        $returnedSql = "SELECT ri.*
+                        FROM production_return_inventory ri
+                        JOIN production_bill_returns pbr ON pbr.id = ri.return_id
+                        WHERE ri.qc_batch_id = ? AND ri.status = 'AVAILABLE'";
+        $returnedParams = [$id];
+        if ($concernId !== null) {
+            $returnedSql .= ' AND pbr.concern_id = ?';
+            $returnedParams[] = (int)$concernId;
+        }
+        $returnedSql .= ' ORDER BY ri.id ASC';
+        $returnedInventoryRows = Database::fetchAll($returnedSql, $returnedParams);
         foreach ($returnedInventoryRows as $returnedItem) {
             $itemId = (int)$returnedItem['qc_item_id'];
             $tagCode = trim((string)$returnedItem['new_tag_code']);
@@ -9269,39 +9898,306 @@ class ProductionController {
         ]);
     }
 
+    public function productionInwardInventoryVariant(int $variantId): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null || $variantId <= 0) {
+            Response::redirect(url('production/inventory'), 'error', 'Choose an active concern and a valid inward inventory item.');
+            return;
+        }
+
+        $locationType = strtoupper(trim((string)($_GET['location_type'] ?? '')));
+        $locationId = (int)($_GET['location_id'] ?? 0);
+        $assignedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($locationType === 'CONCERN') {
+            if ($locationId !== (int)$concernId || $assignedUnitId === 0) {
+                Response::redirect(url('production/inventory'), 'error', 'This inward inventory item is outside your assigned concern.');
+                return;
+            }
+            $destinationType = 'CONCERN';
+            $destinationId = (int)$concernId;
+            $unitId = null;
+        } elseif ($locationType === 'PRODUCTION_UNIT') {
+            if ($locationId <= 0 || $assignedUnitId === 0 || ($assignedUnitId !== null && $assignedUnitId !== $locationId)) {
+                Response::redirect(url('production/inventory'), 'error', 'This inward inventory item is outside your assigned production unit.');
+                return;
+            }
+            if (!Database::fetchOne(
+                'SELECT id FROM production_units WHERE id = ? AND concern_id = ?',
+                [$locationId, $concernId]
+            )) {
+                Response::redirect(url('production/inventory'), 'error', 'This production unit is outside your active concern.');
+                return;
+            }
+            StockService::assertLocationBelongsToActiveConcern('PRODUCTION_UNIT', $locationId);
+            $destinationType = 'PRODUCTION_UNIT';
+            $destinationId = $locationId;
+            $unitId = $locationId;
+        } else {
+            Response::redirect(url('production/inventory'), 'error', 'A valid inward inventory location is required.');
+            return;
+        }
+
+        $stockRows = ProductionInwardService::getStockAcrossUnits($unitId);
+        $stock = null;
+        foreach ($stockRows as $stockRow) {
+            $rowLocationId = $stockRow['location_type'] === 'CONCERN'
+                ? (int)$concernId
+                : (int)($stockRow['production_unit_id'] ?? 0);
+            if ((int)$stockRow['variant_id'] === $variantId
+                && $stockRow['location_type'] === $locationType
+                && $rowLocationId === $locationId) {
+                $stock = $stockRow;
+                break;
+            }
+        }
+        if ($stock === null) {
+            Response::redirect(url('production/inventory'), 'error', 'This product has no available stock at the selected concern inventory location.');
+            return;
+        }
+
+        $receipts = Database::fetchAll(
+            "SELECT pi.id AS inward_id, pi.grn_number, pi.source_type, pi.source_batch_number,
+                    pi.received_at, pi.status AS receipt_status, pii.quantity, pii.dispatched_qty,
+                    pii.damaged_qty, pii.missing_qty, pii.excess_qty, pii.excess_codes,
+                    pii.scanned_codes, pii.damaged_codes, pii.missing_codes,
+                    pb.batch_number AS production_batch_number,
+                    COALESCE(source_concern.name, source_warehouse.name, source_shop.name,
+                             source_unit.name, REPLACE(pi.source_type, '_', ' ')) AS source_name
+             FROM production_inward_items pii
+             JOIN production_inwards pi ON pi.id = pii.inward_id
+             LEFT JOIN production_batches pb ON pi.source_type = 'PRODUCTION_BATCH' AND pb.id = pi.source_id
+             LEFT JOIN concerns source_concern ON source_concern.id = pb.concern_id
+             LEFT JOIN warehouses source_warehouse ON pi.source_type = 'WAREHOUSE'
+                 AND source_warehouse.id = pi.source_id AND source_warehouse.concern_id = pi.concern_id
+             LEFT JOIN shops source_shop ON pi.source_type = 'SHOP'
+                 AND source_shop.id = pi.source_id AND source_shop.concern_id = pi.concern_id
+             LEFT JOIN production_units source_unit ON pi.source_type = 'PRODUCTION_UNIT'
+                 AND source_unit.id = pi.source_id AND source_unit.concern_id = pi.concern_id
+             WHERE pii.variant_id = ? AND pi.concern_id = ? AND pi.status = 'RECEIVED'
+               AND pi.destination_type = ?
+               AND (pi.destination_concern_id = ? OR pi.destination_unit_id = ?)
+             ORDER BY pi.received_at DESC, pi.id DESC",
+            [$variantId, $concernId, $destinationType,
+                $destinationType === 'CONCERN' ? $destinationId : null,
+                $destinationType === 'PRODUCTION_UNIT' ? $destinationId : null]
+        );
+
+        $damagedBalanceRow = Database::fetchOne(
+            "SELECT COALESCE(SUM(quantity), 0) AS qty
+             FROM stock_balances
+             WHERE variant_id = ? AND concern_id = ? AND location_type = ? AND location_id = ? AND stock_state = 'DAMAGED'",
+            [$variantId, $concernId, $destinationType, $destinationId]
+        );
+        $damagedStockQuantity = (int)($damagedBalanceRow['qty'] ?? 0);
+
+        $billedTagRows = Database::fetchAll(
+            "SELECT t.tag_code, t.status
+             FROM production_bill_item_tags t
+             JOIN production_bills pb ON pb.id = t.bill_id
+             WHERE pb.concern_id = ? AND t.status IN ('BILLED', 'RETURNED', 'DAMAGED')",
+            [(int)$concernId]
+        );
+        $billedTagStatus = [];
+        foreach ($billedTagRows as $bt) {
+            $btCode = strtoupper(trim((string)($bt['tag_code'] ?? '')));
+            if ($btCode !== '') {
+                $billedTagStatus[$btCode] = strtoupper((string)$bt['status']);
+            }
+        }
+
+        $pieces = [];
+        $seenPieceTags = [];
+        $verifiedCount = 0;
+        $billedCount = 0;
+        $damagedCount = 0;
+        $missingCount = 0;
+        $excessCount = 0;
+        foreach ($receipts as $receipt) {
+            $scannedCodes = ProductionInwardService::decodePieceCodeList($receipt['scanned_codes'] ?? null);
+            $damagedCodes = array_fill_keys(ProductionInwardService::decodePieceCodeList($receipt['damaged_codes'] ?? null), true);
+            $missingCodes = ProductionInwardService::decodePieceCodeList($receipt['missing_codes'] ?? null);
+            $missingCodeSet = array_fill_keys($missingCodes, true);
+            $excessCodeSet = array_fill_keys(ProductionInwardService::decodePieceCodeList($receipt['excess_codes'] ?? null), true);
+            $seenCodes = [];
+            foreach ($scannedCodes as $code) {
+                if (isset($seenPieceTags[$code])) {
+                    continue;
+                }
+                if (isset($missingCodeSet[$code])) {
+                    $status = 'MISSING';
+                } elseif (isset($damagedCodes[$code])) {
+                    $status = 'DAMAGED';
+                } elseif (isset($billedTagStatus[$code])) {
+                    $status = $billedTagStatus[$code];
+                } else {
+                    $status = 'VERIFIED';
+                }
+                $isExcess = $status !== 'MISSING' && isset($excessCodeSet[$code]);
+                $pieces[] = [
+                    'tag_code' => $code,
+                    'status' => $status,
+                    'is_excess' => $isExcess,
+                    'grn_number' => $receipt['grn_number'],
+                    'batch_number' => $receipt['production_batch_number'] ?: $receipt['source_batch_number'],
+                    'received_at' => $receipt['received_at'],
+                    'source_name' => $receipt['source_name'],
+                ];
+                $seenPieceTags[$code] = true;
+                $seenCodes[$code] = true;
+                if ($status === 'VERIFIED') $verifiedCount++;
+                elseif ($status === 'BILLED') $billedCount++;
+                elseif ($status === 'DAMAGED') $damagedCount++;
+                elseif ($status === 'MISSING') $missingCount++;
+                if ($isExcess) $excessCount++;
+            }
+            foreach ($missingCodes as $code) {
+                if (isset($seenCodes[$code]) || isset($seenPieceTags[$code])) {
+                    continue;
+                }
+                $pieces[] = [
+                    'tag_code' => $code,
+                    'status' => 'MISSING',
+                    'is_excess' => false,
+                    'grn_number' => $receipt['grn_number'],
+                    'batch_number' => $receipt['production_batch_number'] ?: $receipt['source_batch_number'],
+                    'received_at' => $receipt['received_at'],
+                    'source_name' => $receipt['source_name'],
+                ];
+                $seenPieceTags[$code] = true;
+                $missingCount++;
+            }
+        }
+
+        Response::view('production.inventory.inward_items', [
+            'pageTitle' => 'Inward Inventory Items — ' . $stock['product_name'],
+            'activeModule' => 'production',
+            'activeMenu' => 'prod-inventory',
+            'stock' => $stock,
+            'locationType' => $locationType,
+            'locationId' => $locationId,
+            'pieces' => $pieces,
+            'verifiedCount' => $verifiedCount,
+            'billedCount' => $billedCount,
+            'damagedCount' => $damagedCount,
+            'missingCount' => $missingCount,
+            'excessCount' => $excessCount,
+            'damagedStockQuantity' => $damagedStockQuantity,
+            'availableQuantity' => (int)$stock['quantity'],
+            'breadcrumb' => [
+                ['label' => 'Production', 'url' => url('production/dashboard')],
+                ['label' => 'Inventory', 'url' => url('production/inventory')],
+                ['label' => 'Inward Items'],
+            ],
+        ]);
+    }
+
     // =========================================================================
     // PRODUCTION REPORTS & ANALYTICS
     // =========================================================================
 
     public function reports(): void {
-        // Summary KPIs
-        $totalPrograms = Database::fetchOne("SELECT COUNT(*) as cnt, COALESCE(SUM(planned_quantity),0) as planned, COALESCE(SUM(completed_quantity),0) as completed FROM production_programs");
-        $totalCutting = Database::fetchOne("SELECT COALESCE(SUM(cut_qty),0) as cut, COALESCE(SUM(rejected_qty),0) as rejected, COALESCE(SUM(wastage_qty),0) as wastage FROM cutting_batches");
-        $totalQC = Database::fetchOne("SELECT COALESCE(SUM(inspected_qty),0) as inspected, COALESCE(SUM(passed_qty),0) as passed, COALESCE(SUM(rejected_qty),0) as rejected, COALESCE(SUM(rework_qty),0) as rework FROM qc_items");
-        
-        // Efficiency by production unit
-        $unitStats = Database::fetchAll(
-            "SELECT pu.name as unit_name,
-                    COUNT(pp.id) as program_count,
-                    COALESCE(SUM(pp.planned_quantity), 0) as total_planned,
-                    COALESCE(SUM(pp.completed_quantity), 0) as total_completed
-             FROM production_units pu
-             LEFT JOIN production_programs pp ON pu.id = pp.production_unit_id
-             WHERE pu.is_active = 1
-             GROUP BY pu.id, pu.name"
-        );
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
 
-        // Stage breakdown
-        $stageCounts = Database::fetchOne(
-            "SELECT 
-                (SELECT COUNT(*) FROM production_programs WHERE status = 'DRAFT') as draft_programs,
-                (SELECT COUNT(*) FROM production_programs WHERE status IN ('APPROVED', 'SCHEDULED')) as scheduled_programs,
-                (SELECT COUNT(*) FROM cutting_batches WHERE status IN ('PENDING', 'IN_PROGRESS')) as active_cutting,
-                (SELECT COUNT(*) FROM stitching_batches WHERE status IN ('PENDING', 'IN_PROGRESS')) as active_stitching,
-                (SELECT COUNT(*) FROM label_batches WHERE status IN ('PENDING', 'IN_PROGRESS')) as active_labels,
-                (SELECT COUNT(*) FROM qc_batches WHERE status IN ('PENDING', 'PARTIAL', 'REWORK')) as active_qc,
-                (SELECT COUNT(*) FROM production_batches WHERE status = 'APPROVED') as ready_batches"
-        );
+        if ($concernId === null || $scopedUnitId === 0) {
+            $totalPrograms = ['cnt' => 0, 'planned' => 0, 'completed' => 0];
+            $totalCutting = ['cut' => 0, 'rejected' => 0, 'wastage' => 0];
+            $totalQC = ['inspected' => 0, 'passed' => 0, 'rejected' => 0, 'rework' => 0];
+            $unitStats = [];
+            $stageCounts = [
+                'draft_programs' => 0,
+                'scheduled_programs' => 0,
+                'active_cutting' => 0,
+                'active_stitching' => 0,
+                'active_labels' => 0,
+                'active_qc' => 0,
+                'ready_batches' => 0,
+            ];
+        } else {
+            $params = [(int)$concernId];
+            $ppUnitClause = '';
+            $cbUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $ppUnitClause = ' AND pp.production_unit_id = ?';
+                $cbUnitClause = ' AND COALESCE(cb.production_unit_id, pp.production_unit_id) = ?';
+                $params[] = (int)$scopedUnitId;
+            }
+
+            $totalPrograms = Database::fetchOne(
+                "SELECT COUNT(*) as cnt, COALESCE(SUM(pp.planned_quantity),0) as planned, COALESCE(SUM(pp.completed_quantity),0) as completed
+                 FROM production_programs pp
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pu.concern_id = ?{$ppUnitClause}",
+                $params
+            );
+            $totalCutting = Database::fetchOne(
+                "SELECT COALESCE(SUM(cb.cut_qty),0) as cut, COALESCE(SUM(cb.rejected_qty),0) as rejected, COALESCE(SUM(cb.wastage_qty),0) as wastage
+                 FROM cutting_batches cb
+                 LEFT JOIN production_programs pp ON cb.program_id = pp.id
+                 JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id
+                 WHERE pu.concern_id = ?{$cbUnitClause}",
+                $params
+            );
+            $totalQC = Database::fetchOne(
+                "SELECT COALESCE(SUM(qi.inspected_qty),0) as inspected, COALESCE(SUM(qi.passed_qty),0) as passed,
+                        COALESCE(SUM(qi.rejected_qty),0) as rejected, COALESCE(SUM(qi.rework_qty),0) as rework
+                 FROM qc_items qi
+                 JOIN qc_batches qb ON qi.qc_batch_id = qb.id
+                 JOIN production_programs pp ON qb.program_id = pp.id
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pu.concern_id = ?{$ppUnitClause}",
+                $params
+            );
+
+            $unitStatsParams = [(int)$concernId];
+            $puFilterClause = '';
+            if ($scopedUnitId !== null) {
+                $puFilterClause = ' AND pu.id = ?';
+                $unitStatsParams[] = (int)$scopedUnitId;
+            }
+            $unitStats = Database::fetchAll(
+                "SELECT pu.name as unit_name,
+                        COUNT(pp.id) as program_count,
+                        COALESCE(SUM(pp.planned_quantity), 0) as total_planned,
+                        COALESCE(SUM(pp.completed_quantity), 0) as total_completed
+                 FROM production_units pu
+                 LEFT JOIN production_programs pp ON pu.id = pp.production_unit_id
+                 WHERE pu.is_active = 1 AND pu.concern_id = ?{$puFilterClause}
+                 GROUP BY pu.id, pu.name",
+                $unitStatsParams
+            );
+
+            $stageCounts = [
+                'draft_programs' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM production_programs pp JOIN production_units pu ON pp.production_unit_id = pu.id WHERE pu.concern_id = ?{$ppUnitClause} AND pp.status = 'DRAFT'",
+                    $params
+                )['c'] ?? 0),
+                'scheduled_programs' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM production_programs pp JOIN production_units pu ON pp.production_unit_id = pu.id WHERE pu.concern_id = ?{$ppUnitClause} AND pp.status IN ('APPROVED', 'SCHEDULED')",
+                    $params
+                )['c'] ?? 0),
+                'active_cutting' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM cutting_batches cb LEFT JOIN production_programs pp ON cb.program_id = pp.id JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id WHERE pu.concern_id = ?{$cbUnitClause} AND cb.status IN ('PENDING', 'IN_PROGRESS')",
+                    $params
+                )['c'] ?? 0),
+                'active_stitching' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM stitching_batches sb LEFT JOIN cutting_batches cb ON sb.cutting_batch_id = cb.id LEFT JOIN production_programs pp ON sb.program_id = pp.id JOIN production_units pu ON COALESCE(pp.production_unit_id, cb.production_unit_id) = pu.id WHERE pu.concern_id = ?{$ppUnitClause} AND sb.status IN ('PENDING', 'IN_PROGRESS')",
+                    $params
+                )['c'] ?? 0),
+                'active_labels' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM label_batches lb JOIN production_programs pp ON lb.program_id = pp.id JOIN production_units pu ON pp.production_unit_id = pu.id WHERE pu.concern_id = ?{$ppUnitClause} AND lb.status IN ('PENDING', 'IN_PROGRESS')",
+                    $params
+                )['c'] ?? 0),
+                'active_qc' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM qc_batches qb JOIN production_programs pp ON qb.program_id = pp.id JOIN production_units pu ON pp.production_unit_id = pu.id WHERE pu.concern_id = ?{$ppUnitClause} AND qb.status IN ('PENDING', 'PARTIAL', 'REWORK')",
+                    $params
+                )['c'] ?? 0),
+                'ready_batches' => (int)(Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM production_batches pb JOIN production_programs pp ON pb.program_id = pp.id JOIN production_units pu ON pp.production_unit_id = pu.id WHERE COALESCE(pb.concern_id, pu.concern_id) = ?{$ppUnitClause} AND pb.status = 'APPROVED'",
+                    $params
+                )['c'] ?? 0),
+            ];
+        }
 
         Response::view('production.reports.index', [
             'pageTitle'     => 'Production Analytics & Reports',
@@ -9325,13 +10221,47 @@ class ProductionController {
 
     public function wastageList(): void {
         $concernId = ConcernTransactionService::activeConcernId();
-        $unitId = $this->activeConcernProductionUnitId();
+        $scopedUnitId = $this->scopedProductionUnitId();
         $search = trim($_GET['search'] ?? '');
         $type = trim($_GET['type'] ?? '');
         $batchFilter = trim($_GET['cutting_batch_id'] ?? '');
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
+        if ($scopedUnitId === 0) {
+            Response::view('production.wastage.index', [
+                'pageTitle'      => 'Fabric & Cutting Wastage Selling',
+                'activeModule'   => 'production',
+                'activeMenu'     => 'wastage-selling',
+                'sales'          => [],
+                'stats'          => [
+                    'total_records'   => 0,
+                    'total_weight'    => 0.0,
+                    'total_amount'    => 0.0,
+                    'total_paid'      => 0.0,
+                    'total_pending'   => 0.0,
+                    'avg_rate_per_kg' => 0.0,
+                    'count_paid'      => 0,
+                    'count_partial'   => 0,
+                    'count_pending'   => 0,
+                ],
+                'cuttingBatches' => [],
+                'programs'       => [],
+                'search'         => $search,
+                'type'           => $type,
+                'cuttingBatchId' => $batchFilter,
+                'dateFrom'       => $dateFrom,
+                'dateTo'         => $dateTo,
+                'breadcrumb'     => [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Wastage Selling'],
+                ],
+            ]);
+            return;
+        }
+
+        $params = [$concernId];
+        $wsUnitClause = $this->buildProductionUnitSqlClause('ws', $scopedUnitId, $params);
         $sql = "SELECT ws.*, 
                        cb.batch_number as cutting_batch_number,
                        cb.name as cutting_batch_name,
@@ -9344,9 +10274,7 @@ class ProductionController {
                 LEFT JOIN cutting_batches cb ON ws.cutting_batch_id = cb.id
                 LEFT JOIN production_programs pp ON ws.program_id = pp.id
                 LEFT JOIN users u ON ws.created_by = u.id
-                WHERE ws.concern_id = ? AND ws.production_unit_id = ?";
-        
-        $params = [$concernId, $unitId];
+                WHERE ws.concern_id = ?{$wsUnitClause}";
 
         if ($search !== '') {
             $sql .= " AND (
@@ -9387,10 +10315,15 @@ class ProductionController {
         $sales = Database::fetchAll($sql, $params);
 
         // Overall summary stats
+        $statParams = [$concernId];
+        $statUnitClause = $scopedUnitId !== null ? ' AND production_unit_id = ?' : '';
+        if ($scopedUnitId !== null) {
+            $statParams[] = $scopedUnitId;
+        }
         $allSales = Database::fetchAll(
             "SELECT weight, total_amount, paid_amount, payment_status, wastage_type
-             FROM wastage_sales WHERE concern_id = ? AND production_unit_id = ?",
-            [$concernId, $unitId]
+             FROM wastage_sales WHERE concern_id = ?{$statUnitClause}",
+            $statParams
         );
         $totalWeight = (float)array_sum(array_column($allSales, 'weight'));
         $totalAmount = (float)array_sum(array_column($allSales, 'total_amount'));
@@ -9411,6 +10344,14 @@ class ProductionController {
         ];
 
         // Fetch cutting module batches with wastage details, program info, and remaining balance
+        $cbParams = [$concernId];
+        $cbSoldUnitClause = '';
+        if ($scopedUnitId !== null) {
+            $cbSoldUnitClause = ' AND production_unit_id = ?';
+            $cbParams[] = $scopedUnitId;
+        }
+        $cbParams[] = $concernId;
+        $cbUnitClause = $this->buildProductionUnitSqlClause('cb', $scopedUnitId, $cbParams);
         $cuttingBatches = Database::fetchAll("
             SELECT cb.id, cb.batch_number, cb.name, cb.program_id, cb.seller_roll_id,
                    cb.roll_weight, cb.roll_price, cb.wastage_weight, cb.wastage_cost, cb.used_weight,
@@ -9420,26 +10361,29 @@ class ProductionController {
                    COALESCE(sold.sold_weight, 0.0) as sold_weight,
                    GREATEST(0.0, cb.wastage_weight - COALESCE(sold.sold_weight, 0.0)) as available_wastage_weight
             FROM cutting_batches cb
+            JOIN production_units pu ON pu.id = cb.production_unit_id
             LEFT JOIN production_programs pp ON cb.program_id = pp.id
             LEFT JOIN seller_rolls sr ON cb.seller_roll_id = sr.id
             LEFT JOIN sellers s ON sr.seller_id = s.id
             LEFT JOIN (
                 SELECT cutting_batch_id, SUM(weight) as sold_weight
                 FROM wastage_sales
-                WHERE cutting_batch_id IS NOT NULL AND concern_id = ? AND production_unit_id = ?
+                WHERE cutting_batch_id IS NOT NULL AND concern_id = ?{$cbSoldUnitClause}
                 GROUP BY cutting_batch_id
             ) sold ON cb.id = sold.cutting_batch_id
-            WHERE cb.production_unit_id = ?
+            WHERE pu.concern_id = ?{$cbUnitClause}
             ORDER BY cb.id DESC
-        ", [$concernId, $unitId, $unitId]);
+        ", $cbParams);
 
+        $progParams = [$concernId];
+        $progUnitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $progParams);
         $programs = Database::fetchAll(
             "SELECT pp.id, pp.program_number, pp.name
              FROM production_programs pp
              JOIN production_units pu ON pu.id = pp.production_unit_id
-             WHERE pu.concern_id = ? AND pp.production_unit_id = ?
+             WHERE pu.concern_id = ?{$progUnitClause}
              ORDER BY pp.id DESC LIMIT 50",
-            [$concernId, $unitId]
+            $progParams
         );
 
         Response::view('production.wastage.index', [
@@ -10032,7 +10976,7 @@ class ProductionController {
 
     public function stitchingWastageList(): void {
         $concernId = ConcernTransactionService::activeConcernId();
-        $unitId = $this->activeConcernProductionUnitId();
+        $scopedUnitId = $this->scopedProductionUnitId();
         $search = trim($_GET['search'] ?? '');
         $type = trim($_GET['type'] ?? '');
         $status = trim($_GET['payment_status'] ?? '');
@@ -10040,6 +10984,41 @@ class ProductionController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
+        if ($scopedUnitId === 0) {
+            Response::view('production.stitching_wastage.index', [
+                'pageTitle'        => 'Stitching Scrap & Wastage Selling',
+                'activeModule'     => 'production',
+                'activeMenu'       => 'stitching-wastage',
+                'sales'            => [],
+                'stats'            => [
+                    'total_records'     => 0,
+                    'total_quantity'    => 0.0,
+                    'total_amount'      => 0.0,
+                    'total_paid'        => 0.0,
+                    'total_pending'     => 0.0,
+                    'avg_rate_per_unit' => 0.0,
+                    'count_paid'        => 0,
+                    'count_partial'     => 0,
+                    'count_pending'     => 0,
+                ],
+                'stitchingBatches' => [],
+                'programs'         => [],
+                'search'           => $search,
+                'type'             => $type,
+                'paymentStatus'    => $status,
+                'stitchingBatchId' => $batchFilter,
+                'dateFrom'         => $dateFrom,
+                'dateTo'           => $dateTo,
+                'breadcrumb'       => [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Stitching Wastage'],
+                ],
+            ]);
+            return;
+        }
+
+        $params = [$concernId];
+        $swsUnitClause = $this->buildProductionUnitSqlClause('sws', $scopedUnitId, $params);
         $sql = "SELECT sws.*, 
                        sb.batch_number as stitching_batch_number,
                        sb.name as stitching_batch_name,
@@ -10050,9 +11029,7 @@ class ProductionController {
                 LEFT JOIN stitching_batches sb ON sws.stitching_batch_id = sb.id
                 LEFT JOIN production_programs pp ON sws.program_id = pp.id
                 LEFT JOIN users u ON sws.created_by = u.id
-                WHERE sws.concern_id = ? AND sws.production_unit_id = ?";
-        
-        $params = [$concernId, $unitId];
+                WHERE sws.concern_id = ?{$swsUnitClause}";
 
         if ($search !== '') {
             $sql .= " AND (
@@ -10098,10 +11075,15 @@ class ProductionController {
         $sales = Database::fetchAll($sql, $params);
 
         // Overall summary stats
+        $statParams = [$concernId];
+        $statUnitClause = $scopedUnitId !== null ? ' AND production_unit_id = ?' : '';
+        if ($scopedUnitId !== null) {
+            $statParams[] = $scopedUnitId;
+        }
         $allSales = Database::fetchAll(
             "SELECT quantity, unit_type, total_amount, paid_amount, payment_status, waste_type
-             FROM stitching_wastage_sales WHERE concern_id = ? AND production_unit_id = ?",
-            [$concernId, $unitId]
+             FROM stitching_wastage_sales WHERE concern_id = ?{$statUnitClause}",
+            $statParams
         );
         $totalQty = (float)array_sum(array_column($allSales, 'quantity'));
         $totalAmount = (float)array_sum(array_column($allSales, 'total_amount'));
@@ -10122,6 +11104,14 @@ class ProductionController {
         ];
 
         // Fetch stitching module batches with program and production quantities
+        $sbParams = [$concernId];
+        $sbSoldUnitClause = '';
+        if ($scopedUnitId !== null) {
+            $sbSoldUnitClause = ' AND production_unit_id = ?';
+            $sbParams[] = $scopedUnitId;
+        }
+        $sbParams[] = $concernId;
+        $sbUnitClause = $this->buildProductionUnitSqlClause('sb', $scopedUnitId, $sbParams);
         $stitchingBatches = Database::fetchAll("
             SELECT sb.id, sb.batch_number, sb.name, sb.program_id, sb.cutting_batch_id,
                    sb.received_qty, sb.stitched_qty, sb.rejected_qty, sb.rework_qty, sb.total_weight, sb.status,
@@ -10132,6 +11122,7 @@ class ProductionController {
                    sold.latest_sale_number,
                    sold.latest_unit_type
             FROM stitching_batches sb
+            JOIN production_units pu ON pu.id = sb.production_unit_id
             LEFT JOIN production_programs pp ON sb.program_id = pp.id
             LEFT JOIN cutting_batches cb ON sb.cutting_batch_id = cb.id
             LEFT JOIN (
@@ -10141,20 +11132,22 @@ class ProductionController {
                        MAX(sale_number) as latest_sale_number,
                        MAX(unit_type) as latest_unit_type
                 FROM stitching_wastage_sales
-                WHERE stitching_batch_id IS NOT NULL AND concern_id = ? AND production_unit_id = ?
+                WHERE stitching_batch_id IS NOT NULL AND concern_id = ?{$sbSoldUnitClause}
                 GROUP BY stitching_batch_id
             ) sold ON sb.id = sold.stitching_batch_id
-            WHERE sb.production_unit_id = ?
+            WHERE pu.concern_id = ?{$sbUnitClause}
             ORDER BY sb.id DESC
-        ", [$concernId, $unitId, $unitId]);
+        ", $sbParams);
 
+        $progParams = [$concernId];
+        $progUnitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $progParams);
         $programs = Database::fetchAll(
             "SELECT pp.id, pp.program_number, pp.name
              FROM production_programs pp
              JOIN production_units pu ON pu.id = pp.production_unit_id
-             WHERE pu.concern_id = ? AND pp.production_unit_id = ?
+             WHERE pu.concern_id = ?{$progUnitClause}
              ORDER BY pp.id DESC LIMIT 50",
-            [$concernId, $unitId]
+            $progParams
         );
 
         Response::view('production.stitching_wastage.index', [
@@ -10665,7 +11658,7 @@ class ProductionController {
 
     public function expensesList(): void {
         $concernId = ConcernTransactionService::activeConcernId();
-        $productionUnitId = $this->activeConcernProductionUnitId();
+        $scopedUnitId = $this->scopedProductionUnitId();
         $search = trim($_GET['search'] ?? '');
         $unitFilter = trim($_GET['production_unit'] ?? '');
         $categoryFilter = trim($_GET['category'] ?? '');
@@ -10673,6 +11666,50 @@ class ProductionController {
         $dateFrom = trim($_GET['date_from'] ?? '');
         $dateTo = trim($_GET['date_to'] ?? '');
 
+        $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+        if ($scopedUnitId === 0) {
+            Response::view('production.expenses.index', [
+                'pageTitle'      => 'Production Expenses & Assets Management',
+                'activeModule'   => 'production',
+                'activeMenu'     => 'production-expenses',
+                'expenses'       => [],
+                'stats'          => [
+                    'total_records'         => 0,
+                    'total_cost'            => 0.0,
+                    'total_paid'            => 0.0,
+                    'total_pending'         => 0.0,
+                    'unit1_cost'            => 0.0,
+                    'unit2_cost'            => 0.0,
+                    'both_units_cost'       => 0.0,
+                    'machinery_cost'        => 0.0,
+                    'sewing_materials_cost' => 0.0,
+                    'maintenance_cost'      => 0.0,
+                    'operations_cost'       => 0.0,
+                    'count_paid'            => 0,
+                    'count_pending'         => 0,
+                    'count_partial'         => 0,
+                ],
+                'programs'       => [],
+                'expenseItems'   => [],
+                'productionUnits' => [],
+                'productionUnitOptions' => [],
+                'expenseCategoryOptions' => [],
+                'search'         => $search,
+                'productionUnit' => $unitFilter,
+                'category'       => $categoryFilter,
+                'paymentStatus'  => $statusFilter,
+                'dateFrom'       => $dateFrom,
+                'dateTo'         => $dateTo,
+                'breadcrumb'     => [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Expenses & Assets'],
+                ],
+            ]);
+            return;
+        }
+
+        $params = [$concernId];
+        $peUnitClause = $this->buildProductionUnitSqlClause('pe', $scopedUnitId, $params);
         $sql = "SELECT pe.*,
                        pp.program_number,
                        pp.name as program_name,
@@ -10680,8 +11717,7 @@ class ProductionController {
                 FROM production_expenses pe
                 LEFT JOIN production_programs pp ON pe.program_id = pp.id
                 LEFT JOIN users u ON pe.created_by = u.id
-                WHERE pe.concern_id = ? AND pe.production_unit_id = ?";
-        $params = [$concernId, $productionUnitId];
+                WHERE pe.concern_id = ?{$peUnitClause}";
 
         if ($search !== '') {
             $sql .= " AND (
@@ -10726,20 +11762,26 @@ class ProductionController {
         $expenses = Database::fetchAll($sql, $params);
 
         $productionUnitOptions = [];
-        foreach (getScopedProductionUnits() as $unit) {
+        foreach ($productionUnits as $unit) {
             $code = trim((string)($unit['code'] ?? ''));
             if ($code !== '') {
                 $productionUnitOptions[$code] = trim((string)$unit['name']);
             }
         }
 
+        $expScopeParams = [$concernId];
+        $expScopeClause = '';
+        if ($scopedUnitId !== null) {
+            $expScopeClause = ' AND production_unit_id = ?';
+            $expScopeParams[] = $scopedUnitId;
+        }
         $savedProductionUnits = Database::fetchAll(
             "SELECT DISTINCT production_unit
              FROM production_expenses
-             WHERE concern_id = ? AND production_unit_id = ?
+             WHERE concern_id = ?{$expScopeClause}
                AND production_unit IS NOT NULL AND TRIM(production_unit) != ''
              ORDER BY production_unit ASC",
-            [$concernId, $productionUnitId]
+            $expScopeParams
         );
         $legacyUnitLabels = [
             'PRODUCTION_1' => 'Production Unit 1',
@@ -10757,14 +11799,14 @@ class ProductionController {
         $savedExpenseCategories = Database::fetchAll(
             "SELECT category AS value
              FROM production_expenses
-             WHERE concern_id = ? AND production_unit_id = ?
+             WHERE concern_id = ?{$expScopeClause}
                AND category IS NOT NULL AND TRIM(category) != ''
              UNION
              SELECT category AS value
              FROM production_expense_items
              WHERE category IS NOT NULL AND TRIM(category) != ''
              ORDER BY value ASC",
-            [$concernId, $productionUnitId]
+            $expScopeParams
         );
         $expenseCategoryOptions = [];
         $knownCategoryLabels = [
@@ -10785,8 +11827,8 @@ class ProductionController {
         // Overall stats
         $allExpenses = Database::fetchAll(
             "SELECT production_unit, category, total_cost, paid_amount, payment_status
-             FROM production_expenses WHERE concern_id = ? AND production_unit_id = ?",
-            [$concernId, $productionUnitId]
+             FROM production_expenses WHERE concern_id = ?{$expScopeClause}",
+            $expScopeParams
         );
         $totalCost = (float)array_sum(array_column($allExpenses, 'total_cost'));
         $totalPaid = (float)array_sum(array_column($allExpenses, 'paid_amount'));
@@ -10818,7 +11860,16 @@ class ProductionController {
             'count_partial'          => count(array_filter($allExpenses, fn($e) => $e['payment_status'] === 'PARTIAL')),
         ];
 
-        $programs = Database::fetchAll("SELECT id, program_number, name FROM production_programs ORDER BY id DESC LIMIT 50");
+        $progParams = [$concernId];
+        $progUnitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $progParams);
+        $programs = Database::fetchAll(
+            "SELECT pp.id, pp.program_number, pp.name
+             FROM production_programs pp
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE pu.concern_id = ?{$progUnitClause}
+             ORDER BY pp.id DESC LIMIT 50",
+            $progParams
+        );
         $expenseItems = Database::fetchAll("SELECT id, name, category, unit_type, default_rate FROM production_expense_items ORDER BY name ASC");
 
         Response::view('production.expenses.index', [
@@ -10829,6 +11880,7 @@ class ProductionController {
             'stats'          => $stats,
             'programs'       => $programs,
             'expenseItems'   => $expenseItems,
+            'productionUnits' => $productionUnits,
             'productionUnitOptions' => $productionUnitOptions,
             'expenseCategoryOptions' => $expenseCategoryOptions,
             'search'         => $search,
@@ -10895,8 +11947,26 @@ class ProductionController {
         }
 
         $concernId = ConcernTransactionService::activeConcernId();
-        $productionUnitId = $this->activeConcernProductionUnitId();
-        $productionUnit = trim($_POST['production_unit'] ?? 'PRODUCTION_1');
+        $submittedUnitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
+        try {
+            $productionUnitId = $this->resolveWriteProductionUnitId($submittedUnitId);
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
+        }
+        $productionUnit = trim((string)($_POST['production_unit'] ?? ''));
+        if ($productionUnit === '') {
+            if ($productionUnitId !== null) {
+                $unitRow = Database::fetchOne(
+                    "SELECT code FROM production_units WHERE id = ? AND concern_id = ?",
+                    [$productionUnitId, $concernId]
+                );
+                $productionUnit = !empty($unitRow['code']) ? trim((string)$unitRow['code']) : 'PRODUCTION_1';
+            } else {
+                $productionUnit = 'GENERAL';
+            }
+        }
         $category = 'GENERAL';
         $unitType = 'PCS';
         $vendorName = 'Direct';
@@ -10944,7 +12014,7 @@ class ProductionController {
                         (expense_number, concern_id, production_unit_id, production_unit, category, item_name,
                          quantity, unit_type, unit_cost, total_cost, paid_amount, payment_status,
                          payment_method, vendor_name, expense_date, photo_url, created_by, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
                     [
                         $expenseNumber,
                         $concernId,
@@ -10995,14 +12065,35 @@ class ProductionController {
         }
 
         $concernId = ConcernTransactionService::activeConcernId();
-        $productionUnitId = $this->activeConcernProductionUnitId();
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Session::flash('error', 'Expense record not found.');
+            Response::back();
+            return;
+        }
         $expenseId = (int)$id;
+        $findParams = [$expenseId, $concernId];
+        $findUnitClause = '';
+        if ($scopedUnitId !== null) {
+            $findUnitClause = ' AND production_unit_id = ?';
+            $findParams[] = $scopedUnitId;
+        }
         $existing = Database::fetchOne(
-            "SELECT * FROM production_expenses WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
-            [$expenseId, $concernId, $productionUnitId]
+            "SELECT * FROM production_expenses WHERE id = ? AND concern_id = ?{$findUnitClause}",
+            $findParams
         );
         if (!$existing) {
             Session::flash('error', 'Expense record not found.');
+            Response::back();
+            return;
+        }
+        try {
+            $this->assertRecordProductionUnitAccess(
+                !empty($existing['production_unit_id']) ? (int)$existing['production_unit_id'] : null,
+                $scopedUnitId
+            );
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
             Response::back();
             return;
         }
@@ -11048,6 +12139,21 @@ class ProductionController {
         }
 
         try {
+            $updateParams = [
+                $itemName,
+                $quantity,
+                $unitCost,
+                $totalCost,
+                $totalCost,
+                $photoUrl,
+                $expenseId,
+                $concernId
+            ];
+            $updateUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $updateUnitClause = ' AND production_unit_id = ?';
+                $updateParams[] = $scopedUnitId;
+            }
             Database::execute(
                 "UPDATE production_expenses SET
                     item_name = ?,
@@ -11057,18 +12163,8 @@ class ProductionController {
                     paid_amount = ?,
                     photo_url = ?,
                     updated_at = NOW()
-                 WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
-                [
-                    $itemName,
-                    $quantity,
-                    $unitCost,
-                    $totalCost,
-                    $totalCost,
-                    $photoUrl,
-                    $expenseId,
-                    $concernId,
-                    $productionUnitId
-                ]
+                 WHERE id = ? AND concern_id = ?{$updateUnitClause}",
+                $updateParams
             );
 
             Session::flash('success', "Production expense #{$existing['expense_number']} updated successfully.");
@@ -11087,22 +12183,43 @@ class ProductionController {
         }
 
         $concernId = ConcernTransactionService::activeConcernId();
-        $productionUnitId = $this->activeConcernProductionUnitId();
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Session::flash('error', 'Expense record not found.');
+            Response::back();
+            return;
+        }
         $expenseId = (int)$id;
+        $findParams = [$expenseId, $concernId];
+        $findUnitClause = '';
+        if ($scopedUnitId !== null) {
+            $findUnitClause = ' AND production_unit_id = ?';
+            $findParams[] = $scopedUnitId;
+        }
         $existing = Database::fetchOne(
-            "SELECT * FROM production_expenses WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
-            [$expenseId, $concernId, $productionUnitId]
+            "SELECT * FROM production_expenses WHERE id = ? AND concern_id = ?{$findUnitClause}",
+            $findParams
         );
         if (!$existing) {
             Session::flash('error', 'Expense record not found.');
             Response::back();
             return;
         }
+        try {
+            $this->assertRecordProductionUnitAccess(
+                !empty($existing['production_unit_id']) ? (int)$existing['production_unit_id'] : null,
+                $scopedUnitId
+            );
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
+        }
 
         try {
             Database::execute(
-                "DELETE FROM production_expenses WHERE id = ? AND concern_id = ? AND production_unit_id = ?",
-                [$expenseId, $concernId, $productionUnitId]
+                "DELETE FROM production_expenses WHERE id = ? AND concern_id = ?{$findUnitClause}",
+                $findParams
             );
             AuditService::log('production', 'delete', 'production_expenses', $expenseId, $existing, null);
             Session::flash('success', "Production expense #{$existing['expense_number']} deleted successfully.");
@@ -11115,8 +12232,14 @@ class ProductionController {
 
     public function expenseReceipt(string $id): void {
         $concernId = ConcernTransactionService::activeConcernId();
-        $productionUnitId = $this->activeConcernProductionUnitId();
+        $scopedUnitId = $this->scopedProductionUnitId();
+        if ($scopedUnitId === 0) {
+            Response::error(404, 'Expense record not found.');
+            return;
+        }
         $expenseId = (int)$id;
+        $params = [$expenseId, $concernId];
+        $unitClause = $this->buildProductionUnitSqlClause('pe', $scopedUnitId, $params);
         $expense = Database::fetchOne(
             "SELECT pe.*,
                     pp.program_number,
@@ -11125,11 +12248,20 @@ class ProductionController {
              FROM production_expenses pe
              LEFT JOIN production_programs pp ON pe.program_id = pp.id
              LEFT JOIN users u ON pe.created_by = u.id
-             WHERE pe.id = ? AND pe.concern_id = ? AND pe.production_unit_id = ?",
-            [$expenseId, $concernId, $productionUnitId]
+             WHERE pe.id = ? AND pe.concern_id = ?{$unitClause}",
+            $params
         );
 
         if (!$expense) {
+            Response::error(404, 'Expense record not found.');
+            return;
+        }
+        try {
+            $this->assertRecordProductionUnitAccess(
+                !empty($expense['production_unit_id']) ? (int)$expense['production_unit_id'] : null,
+                $scopedUnitId
+            );
+        } catch (\Throwable $e) {
             Response::error(404, 'Expense record not found.');
             return;
         }

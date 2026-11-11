@@ -24,7 +24,7 @@
                 <div>
                     <span class="text-uppercase text-muted fw-semibold small d-block">In-Stock Remaining</span>
                     <h3 class="fw-bold text-success mb-0 mt-1"><?= number_format($stats['total_remaining_pieces'] ?? 0) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
-                    <small class="text-muted d-block mt-1">Available in production unit</small>
+                    <small class="text-muted d-block mt-1">QC: <?= number_format($stats['qc_remaining_pieces'] ?? 0) ?> · Inward: <?= number_format($stats['inward_pieces'] ?? 0) ?> pcs</small>
                 </div>
                 <div class="bg-success text-white rounded-3 p-3">
                     <i class="bi bi-box-seam-fill fs-4"></i>
@@ -39,7 +39,7 @@
                 <div>
                     <span class="text-uppercase text-muted fw-semibold small d-block">In-Stock Valuation</span>
                     <h3 class="fw-bold text-primary mb-0 mt-1">₹<?= number_format($stats['total_remaining_valuation'] ?? 0, 2) ?></h3>
-                    <small class="text-muted d-block mt-1">Current available value</small>
+                    <small class="text-muted d-block mt-1">QC + Inward stock value</small>
                 </div>
                 <div class="bg-primary text-white rounded-3 p-3">
                     <i class="bi bi-currency-rupee fs-4"></i>
@@ -52,9 +52,9 @@
         <div class="card border-0 shadow-sm bg-danger bg-opacity-10 h-100">
             <div class="card-body p-3 d-flex align-items-center justify-content-between">
                 <div>
-                    <span class="text-uppercase text-muted fw-semibold small d-block">Outward Dispatched</span>
+                    <span class="text-uppercase text-muted fw-semibold small d-block">QC Outward Dispatched</span>
                     <h3 class="fw-bold text-danger mb-0 mt-1"><?= number_format($stats['total_outwarded_pieces'] ?? 0) ?> <span class="fs-6 fw-normal text-muted">pcs</span></h3>
-                    <small class="text-muted d-block mt-1">Dispatched to warehouses</small>
+                    <small class="text-muted d-block mt-1">Dispatched from QC-output stock</small>
                 </div>
                 <div class="bg-danger text-white rounded-3 p-3">
                     <i class="bi bi-truck fs-4"></i>
@@ -136,9 +136,9 @@
 
 <?php
 $inventoryVariantCount = array_sum(array_map(
-    static fn(array $batch): int => count($batch['variants'] ?? []),
+    static fn(array $batch): int => max(1, count($batch['variants'] ?? [])),
     $batches
-));
+)) + count($transferredStock);
 ?>
 <!-- Inventory Products Header -->
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
@@ -148,7 +148,7 @@ $inventoryVariantCount = array_sum(array_map(
         <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill ms-2" id="totalBatchBadgeCount"><?= $inventoryVariantCount ?> Products</span>
     </h5>
     <div class="d-flex align-items-center gap-3 flex-wrap">
-        <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>Click "View Products" to see individual garments, remaining stock &amp; outward dispatch history</span>
+        <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>QC and inwarded stock for the active concern appear together in this inventory.</span>
         <div class="btn-group btn-group-sm" role="group" aria-label="Inventory batch layout">
             <button type="button" class="btn btn-outline-secondary" id="batchCardsViewButton" onclick="switchBatchView('cards')" aria-pressed="false">
                 <i class="bi bi-grid-3x3-gap me-1"></i>Cards
@@ -160,15 +160,15 @@ $inventoryVariantCount = array_sum(array_map(
     </div>
 </div>
 
-<?php if (empty($batches)): ?>
+<?php if (empty($batches) && empty($transferredStock)): ?>
 <div class="card border-0 shadow-sm">
     <div class="card-body text-center py-5">
         <i class="bi bi-box-seam fs-1 d-block mb-3 text-secondary"></i>
-        <h6 class="fw-semibold mb-1"><?= (!empty($search) || !empty($categoryFilter)) ? 'No Matching Inventory Batches Found' : 'No QC Outcomes Found' ?></h6>
+        <h6 class="fw-semibold mb-1"><?= (!empty($search) || !empty($categoryFilter)) ? 'No Matching Inventory Products Found' : 'No Inventory Products Found' ?></h6>
         <p class="small text-muted mb-3">
             <?= (!empty($search) || !empty($categoryFilter)) 
                 ? 'Try adjusting your search terms or clearing the category filter.' 
-                : 'Batches with passed, rework, or rejected QC quantities will appear here.' ?>
+                : 'Batches with passed, rework, rejected QC quantities, or available inward stock will appear here.' ?>
         </p>
         <?php if (!empty($search) || !empty($categoryFilter)): ?>
             <a href="<?= url('production/inventory') ?>" class="btn btn-sm btn-outline-primary">
@@ -183,7 +183,7 @@ $inventoryVariantCount = array_sum(array_map(
     <div class="card-body text-center py-5">
         <i class="bi bi-search fs-1 d-block mb-3 text-muted"></i>
         <h6 class="fw-semibold mb-1">No Batches Match Your Search</h6>
-        <p class="small text-muted mb-3">No inventory items matched the current filter keyword.</p>
+        <p class="small text-muted mb-3">No QC or inwarded products match the current search.</p>
         <button type="button" class="btn btn-sm btn-outline-primary" onclick="clearLiveFilter()">
             <i class="bi bi-x-circle me-1"></i> Clear Search
         </button>
@@ -194,10 +194,10 @@ $inventoryVariantCount = array_sum(array_map(
     <table class="table table-hover align-middle mb-0">
         <thead class="table-light">
             <tr>
-                <th>QC Batch</th>
-                <th>Program</th>
+                <th>Inventory Ref</th>
+                <th>Source / Program</th>
                 <th>Product</th>
-                <th class="text-center">QC Qty</th>
+                <th class="text-center">QC / Inward Qty</th>
                 <th class="text-center">In Stock</th>
                 <th class="text-center">Outward</th>
                 <th>Status</th>
@@ -212,7 +212,60 @@ $inventoryVariantCount = array_sum(array_map(
                     foreach ($batch['outward_history'] ?? [] as $outward) {
                         $batchOutwardSearchText .= ' ' . ($outward['outward_number'] ?? '') . ' ' . ($outward['warehouse_name'] ?? '') . ' ' . ($outward['vehicle_number'] ?? '');
                     }
-                    foreach ($batch['variants'] ?? [] as $variant):
+                    $batchVariants = $batch['variants'] ?? [];
+                ?>
+                <?php if (empty($batchVariants)): ?>
+                    <?php
+                        $emptyBatchSearchText = strtolower(
+                            ($batch['product_name'] ?? '') . ' ' .
+                            ($batch['category_name'] ?? '') . ' ' .
+                            ($batch['program_number'] ?? '') . ' ' .
+                            ($batch['inspector_name'] ?? '') . ' ' .
+                            'rework rejected qc passed outward qc batch #' . $batch['qc_batch_id'] . ' ' .
+                            $batch['qc_batch_id'] . ' ' . $batchOutwardSearchText
+                        );
+                    ?>
+                    <tr class="batch-list-row"
+                        data-batch-id="<?= (int)$batch['qc_batch_id'] ?>"
+                        data-category-id="<?= (int)($batch['category_id'] ?? 0) ?>"
+                        data-search-text="<?= e($emptyBatchSearchText) ?>"
+                        data-filter-match="true">
+                        <td class="text-nowrap">
+                            <div class="fw-semibold">QC Batch #<?= (int)$batch['qc_batch_id'] ?></div>
+                            <small class="text-muted"><?= (new DateTime($batch['batch_created_at'] ?? 'now'))->format('d M Y, g:i A') ?></small>
+                        </td>
+                        <td>
+                            <a href="<?= url('production/programs/view/' . $batch['program_id']) ?>" class="text-decoration-none fw-semibold">
+                                <?= e($batch['program_number']) ?>
+                            </a>
+                        </td>
+                        <td>
+                            <div class="fw-semibold text-dark"><?= e($batch['product_name']) ?></div>
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                <?php if (($batch['total_rework_pieces'] ?? 0) > 0): ?>
+                                    <span class="badge bg-warning-subtle text-warning-emphasis border">Rework: <?= number_format((int)$batch['total_rework_pieces']) ?></span>
+                                <?php endif; ?>
+                                <?php if (($batch['total_rejected_pieces'] ?? 0) > 0): ?>
+                                    <span class="badge bg-danger-subtle text-danger border">Rejected: <?= number_format((int)$batch['total_rejected_pieces']) ?></span>
+                                <?php endif; ?>
+                            </div>
+                            <?php if (!empty($batch['category_name'])): ?>
+                                <small class="text-muted d-block mt-1"><?= e($batch['category_name']) ?></small>
+                            <?php endif; ?>
+                        </td>
+                        <td class="text-center text-muted">0 pcs</td>
+                        <td class="text-center text-muted">0 pcs</td>
+                        <td class="text-center text-muted"><?= number_format((int)($batch['total_outward_pieces'] ?? 0)) ?> pcs</td>
+                        <td><span class="badge bg-warning-subtle text-warning-emphasis border">No Passed Stock</span></td>
+                        <td class="text-end">
+                            <a href="<?= url('production/inventory/batch/' . $batch['qc_batch_id']) ?>"
+                               class="btn btn-sm btn-outline-primary text-nowrap">
+                                <i class="bi bi-eye me-1"></i>View Items
+                            </a>
+                        </td>
+                    </tr>
+                <?php else: ?>
+                <?php foreach ($batchVariants as $variant):
                         $variantSearchText = strtolower(
                             ($batch['product_name'] ?? '') . ' ' .
                             ($batch['category_name'] ?? '') . ' ' .
@@ -276,6 +329,43 @@ $inventoryVariantCount = array_sum(array_map(
                     </td>
                 </tr>
                 <?php endforeach; ?>
+                <?php endif; ?>
+            <?php endforeach; ?>
+            <?php foreach ($transferredStock as $stock): ?>
+                <?php
+                    $stockSearchText = strtolower(implode(' ', [
+                        $stock['product_name'] ?? '',
+                        $stock['category_name'] ?? '',
+                        $stock['sku'] ?? '',
+                        $stock['size_name'] ?? '',
+                        $stock['color_name'] ?? '',
+                        $stock['production_unit_name'] ?? '',
+                        'inward concern stock',
+                    ]));
+                    $stockQuantity = (int)$stock['quantity'];
+                ?>
+                <tr class="batch-list-row inward-stock-row" data-batch-id="inward-<?= (int)$stock['variant_id'] ?>" data-category-id="<?= (int)($stock['category_id'] ?? 0) ?>" data-search-text="<?= e($stockSearchText) ?>" data-filter-match="true">
+                    <td class="text-nowrap">
+                        <div class="fw-semibold">Inward Stock</div>
+                        <small class="text-muted"><?= e($stock['production_unit_name']) ?></small>
+                    </td>
+                    <td><span class="badge bg-primary-subtle text-primary border">Concern Inward</span></td>
+                    <td>
+                        <div class="fw-semibold text-dark"><?= e($stock['product_name']) ?></div>
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                            <span class="badge bg-secondary-subtle text-secondary border">Size: <?= e($stock['size_name'] ?? '—') ?></span>
+                            <span class="badge bg-info-subtle text-info border">Color: <?= e($stock['color_name'] ?? '—') ?></span>
+                        </div>
+                        <small class="text-muted d-block mt-1"><?= e($stock['sku']) ?><?= !empty($stock['category_name']) ? ' · ' . e($stock['category_name']) : '' ?></small>
+                    </td>
+                    <td class="text-center fw-semibold"><?= number_format($stockQuantity) ?> pcs</td>
+                    <td class="text-center fw-semibold text-success"><?= number_format($stockQuantity) ?> pcs</td>
+                    <td class="text-center text-muted">—</td>
+                    <td><span class="badge bg-success-subtle text-success border">In Stock</span></td>
+                    <td class="text-end">
+                        <a href="<?= url('production/inventory/inward/' . (int)$stock['variant_id'] . '?location_type=' . rawurlencode($stock['location_type']) . '&location_id=' . (int)($stock['location_type'] === 'CONCERN' ? currentConcernId() : $stock['production_unit_id'])) ?>" class="btn btn-sm btn-outline-primary text-nowrap"><i class="bi bi-eye me-1"></i>View Items</a>
+                    </td>
+                </tr>
             <?php endforeach; ?>
         </tbody>
     </table>
@@ -461,6 +551,47 @@ $inventoryVariantCount = array_sum(array_map(
         </div>
     </div>
     <?php endforeach; ?>
+    <?php foreach ($transferredStock as $stock): ?>
+        <?php
+            $stockQuantity = (int)$stock['quantity'];
+            $stockSearchText = strtolower(implode(' ', [
+                $stock['product_name'] ?? '',
+                $stock['category_name'] ?? '',
+                $stock['sku'] ?? '',
+                $stock['size_name'] ?? '',
+                $stock['color_name'] ?? '',
+                $stock['production_unit_name'] ?? '',
+                'inward concern stock',
+            ]));
+        ?>
+        <div class="col-xl-4 col-md-6 batch-card-col inward-stock-card" data-batch-id="inward-<?= (int)$stock['variant_id'] ?>" data-category-id="<?= (int)($stock['category_id'] ?? 0) ?>" data-search-text="<?= e($stockSearchText) ?>">
+            <div class="card border-0 shadow-sm h-100 inventory-batch-card" style="border-left: 4px solid var(--bs-success) !important; transition: transform 0.18s, box-shadow 0.18s;">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-start justify-content-between mb-3">
+                        <div>
+                            <span class="badge bg-success-subtle text-success border px-3 py-2 fs-6 fw-bold"><i class="bi bi-box-arrow-in-down me-1"></i>Inward Stock</span>
+                            <div class="text-muted small mt-2"><?= e($stock['production_unit_name']) ?></div>
+                        </div>
+                        <div class="bg-success bg-opacity-10 rounded-3 p-2 text-success"><i class="bi bi-box-seam fs-4"></i></div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="fw-bold text-dark fs-6 mb-1"><?= e($stock['product_name']) ?></div>
+                        <div class="small text-muted"><?= e($stock['sku']) ?></div>
+                        <?php if (!empty($stock['category_name'])): ?><span class="badge bg-primary-subtle text-primary border mt-2"><?= e($stock['category_name']) ?></span><?php endif; ?>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1 mb-3">
+                        <span class="badge bg-light text-dark border">Size: <?= e($stock['size_name'] ?? '—') ?></span>
+                        <span class="badge bg-light text-dark border">Color: <?= e($stock['color_name'] ?? '—') ?></span>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6"><div class="bg-success bg-opacity-10 rounded-2 p-2 text-center"><div class="fw-bold text-success fs-5"><?= number_format($stockQuantity) ?></div><div class="text-muted small">In Stock</div></div></div>
+                        <div class="col-6"><div class="bg-light border rounded-2 p-2 text-center"><div class="fw-bold text-dark fs-5">₹<?= number_format((float)$stock['selling_price'], 2) ?></div><div class="text-muted small">Selling Price</div></div></div>
+                    </div>
+                    <a href="<?= url('production/inventory/inward/' . (int)$stock['variant_id'] . '?location_type=' . rawurlencode($stock['location_type']) . '&location_id=' . (int)($stock['location_type'] === 'CONCERN' ? currentConcernId() : $stock['production_unit_id'])) ?>" class="btn btn-outline-success btn-sm w-100 fw-semibold"><i class="bi bi-eye me-1"></i>View Items</a>
+                </div>
+            </div>
+        </div>
+    <?php endforeach; ?>
 </div>
 
 <!-- Pagination Card Footer for Batches -->
@@ -468,7 +599,7 @@ $inventoryVariantCount = array_sum(array_map(
     <div class="card-body py-3 d-flex align-items-center justify-content-between flex-wrap gap-3">
         <div class="d-flex align-items-center gap-3 flex-wrap">
             <span class="small text-muted fw-medium" id="batchPageInfo">
-                Showing <?= min(9, count($batches)) ?> of <?= count($batches) ?> batches
+                Showing <?= min(9, $inventoryVariantCount) ?> of <?= $inventoryVariantCount ?> products
             </span>
             <div class="d-flex align-items-center gap-2">
                 <label for="batchPageSizeSelect" class="small text-muted mb-0 fw-medium">Show:</label>
@@ -476,11 +607,11 @@ $inventoryVariantCount = array_sum(array_map(
                     <option value="6">6 per page</option>
                     <option value="9" selected>9 per page</option>
                     <option value="18">18 per page</option>
-                    <option value="all">All batches</option>
+                    <option value="all">All products</option>
                 </select>
             </div>
         </div>
-        <nav aria-label="Batch Pagination">
+        <nav aria-label="Inventory Pagination">
             <ul class="pagination pagination-modern mb-0" id="batchPaginationList">
                 <!-- Dynamically rendered -->
             </ul>
@@ -591,23 +722,25 @@ $inventoryVariantCount = array_sum(array_map(
 let currentBatchPage = 1;
 let batchPageSize = 9;
 let visibleBatchCards = [];
+let inventoryCardsInitialized = false;
 let currentBatchView = 'list';
 
-function switchBatchView(mode) {
-    const grid = document.getElementById('inventoryBatchesGrid');
-    const table = document.getElementById('inventoryBatchList');
+function syncBatchViewState() {
+    const allCards = Array.from(document.querySelectorAll('.batch-card-col'));
+    const batchRows = Array.from(document.querySelectorAll('.batch-list-row'));
     const cardsButton = document.getElementById('batchCardsViewButton');
     const listButton = document.getElementById('batchListViewButton');
     const title = document.getElementById('inventoryItemsTitle');
     const badge = document.getElementById('totalBatchBadgeCount');
-    const showList = mode === 'list';
-    currentBatchView = mode;
+    const alertEl = document.getElementById('noMatchingBatchesAlert');
+    const paginationContainer = document.getElementById('batchPaginationContainer');
+    const showList = currentBatchView !== 'cards';
 
-    if (grid) {
-        grid.classList.toggle('inventory-batch-list-mode', showList);
-        grid.style.display = showList ? 'none' : '';
-    }
-    if (table) table.style.display = showList ? '' : 'none';
+    const matchingRows = batchRows.filter(row => row.dataset.filterMatch !== 'false');
+    const matchingCards = visibleBatchCards;
+    const activeCount = showList ? matchingRows.length : matchingCards.length;
+    const hasAnyData = showList ? batchRows.length > 0 : allCards.length > 0;
+
     if (cardsButton) {
         cardsButton.classList.toggle('btn-primary', !showList);
         cardsButton.classList.toggle('active', !showList);
@@ -620,15 +753,43 @@ function switchBatchView(mode) {
         listButton.classList.toggle('btn-outline-secondary', !showList);
         listButton.setAttribute('aria-pressed', String(showList));
     }
-    if (title) title.textContent = showList ? 'Inventory Products' : 'Inventory Batches';
+    if (title) title.textContent = 'Inventory Products';
     if (badge) {
-        const count = showList
-            ? document.querySelectorAll('.batch-list-row[data-filter-match="true"]').length
-            : visibleBatchCards.length;
-        badge.textContent = `${count} ${showList ? 'Products' : 'Batches'}`;
+        badge.textContent = `${activeCount} ${showList ? 'Products' : 'Cards'}`;
     }
-    currentBatchPage = 1;
+
+    if (activeCount === 0 && hasAnyData) {
+        if (alertEl) alertEl.style.display = 'block';
+        if (paginationContainer) paginationContainer.style.display = 'none';
+        const list = document.getElementById('inventoryBatchList');
+        const grid = document.getElementById('inventoryBatchesGrid');
+        if (list) list.style.display = 'none';
+        if (grid) grid.style.display = 'none';
+        allCards.forEach(c => c.style.display = 'none');
+        batchRows.forEach(row => row.style.display = 'none');
+        return;
+    }
+
+    if (alertEl) alertEl.style.display = 'none';
+    if (paginationContainer) paginationContainer.style.display = '';
     renderBatchPagination();
+}
+
+function switchBatchView(mode) {
+    const allCards = Array.from(document.querySelectorAll('.batch-card-col'));
+    currentBatchView = mode === 'cards' ? 'cards' : 'list';
+    if (!inventoryCardsInitialized) {
+        const searchInput = document.getElementById('inventorySearchInput');
+        const term = (searchInput?.value || '').trim().toLowerCase();
+        visibleBatchCards = allCards.filter(card => {
+            const searchText = (card.getAttribute('data-search-text') || '').toLowerCase();
+            return !term || searchText.includes(term);
+        });
+        inventoryCardsInitialized = true;
+    }
+
+    currentBatchPage = 1;
+    syncBatchViewState();
 }
 
 function clearSearchInput() {
@@ -651,9 +812,6 @@ function filterBatchesLive(query) {
     const term = (query || '').trim().toLowerCase();
     const allCards = Array.from(document.querySelectorAll('.batch-card-col'));
     const batchRows = Array.from(document.querySelectorAll('.batch-list-row'));
-    const alertEl = document.getElementById('noMatchingBatchesAlert');
-    const paginationContainer = document.getElementById('batchPaginationContainer');
-    const badgeEl = document.getElementById('totalBatchBadgeCount');
 
     visibleBatchCards = allCards.filter(card => {
         if (!term) return true;
@@ -664,27 +822,10 @@ function filterBatchesLive(query) {
         const searchText = (row.getAttribute('data-search-text') || '').toLowerCase();
         row.dataset.filterMatch = String(!term || searchText.includes(term));
     });
-
-    if (badgeEl) {
-        const matchingProducts = batchRows.filter(row => row.dataset.filterMatch === 'true').length;
-        badgeEl.textContent = currentBatchView === 'list'
-            ? `${matchingProducts} Products`
-            : `${visibleBatchCards.length} Batches`;
-    }
-
-    if (visibleBatchCards.length === 0 && allCards.length > 0) {
-        if (alertEl) alertEl.style.display = 'block';
-        if (paginationContainer) paginationContainer.style.display = 'none';
-        allCards.forEach(c => c.style.display = 'none');
-        batchRows.forEach(row => row.style.display = 'none');
-        return;
-    }
-
-    if (alertEl) alertEl.style.display = 'none';
-    if (paginationContainer) paginationContainer.style.display = '';
+    inventoryCardsInitialized = true;
 
     currentBatchPage = 1;
-    renderBatchPagination();
+    syncBatchViewState();
 }
 
 function changeBatchPageSize(newSize) {
@@ -705,11 +846,7 @@ function goToBatchPage(page) {
 function renderBatchPagination() {
     const allCards = Array.from(document.querySelectorAll('.batch-card-col'));
     const batchRows = Array.from(document.querySelectorAll('.batch-list-row'));
-    if (allCards.length === 0) return;
-
-    const cardsToPaginate = (visibleBatchCards.length > 0 || (document.getElementById('inventorySearchInput') && document.getElementById('inventorySearchInput').value.trim() === ''))
-        ? (visibleBatchCards.length > 0 ? visibleBatchCards : allCards)
-        : [];
+    const cardsToPaginate = visibleBatchCards;
     const productsToPaginate = batchRows.filter(row => row.dataset.filterMatch !== 'false');
     const entriesToPaginate = currentBatchView === 'list' ? productsToPaginate : cardsToPaginate;
     const totalEntries = entriesToPaginate.length;
@@ -726,6 +863,13 @@ function renderBatchPagination() {
     // Hide all entries first, then show the current page in the active view.
     allCards.forEach(card => card.style.display = 'none');
     batchRows.forEach(row => row.style.display = 'none');
+    const list = document.getElementById('inventoryBatchList');
+    const grid = document.getElementById('inventoryBatchesGrid');
+    if (list) list.style.display = currentBatchView === 'list' ? '' : 'none';
+    if (grid) {
+        grid.style.display = currentBatchView === 'list' ? 'none' : 'flex';
+        grid.classList.toggle('inventory-batch-list-mode', currentBatchView === 'list');
+    }
 
     entriesToPaginate.forEach((entry, idx) => {
         const isOnPage = idx >= startIdx && idx < endIdx;
@@ -734,7 +878,7 @@ function renderBatchPagination() {
 
     const infoEl = document.getElementById('batchPageInfo');
     if (infoEl) {
-        const entryType = currentBatchView === 'list' ? 'products' : 'batches';
+        const entryType = currentBatchView === 'list' ? 'products' : 'inventory cards';
         if (totalEntries === 0) {
             infoEl.innerHTML = `Showing <strong>0</strong> ${entryType}`;
         } else {
@@ -779,13 +923,10 @@ function renderBatchPagination() {
     paginationList.innerHTML = html;
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-    const allCards = Array.from(document.querySelectorAll('.batch-card-col'));
-    visibleBatchCards = allCards;
-    switchBatchView('list');
-    renderBatchPagination();
-
+function initializeInventoryViews() {
     const searchInput = document.getElementById('inventorySearchInput');
+    filterBatchesLive(searchInput ? searchInput.value : '');
+
     if (searchInput) {
         let debounceTimer;
         searchInput.addEventListener('input', function(e) {
@@ -795,24 +936,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 150);
         });
     }
-});
-</script>
+}
 
-<div class="card border shadow-sm mt-4">
-    <div class="card-header bg-white d-flex align-items-center justify-content-between flex-wrap gap-2">
-        <div><h5 class="mb-0 fw-bold"><i class="bi bi-box-arrow-in-down me-2 text-primary"></i>Transferred Inward Stock</h5><small class="text-muted">Goods received from warehouses, shops, and other production units. Shown separately from QC output.</small></div>
-        <a href="<?= url('production/inward') ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-journal-check me-1"></i>Open Inward / GRN</a>
-    </div>
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light"><tr><th>Production Unit</th><th>Product</th><th>SKU</th><th>Size / Color</th><th class="text-end">Available</th><th class="text-end">Selling Price</th></tr></thead>
-            <tbody>
-            <?php if (empty($transferredStock)): ?>
-                <tr><td colspan="6" class="text-center text-muted py-4">No transferred inward stock is currently available.</td></tr>
-            <?php else: foreach ($transferredStock as $stock): ?>
-                <tr><td><?= e($stock['production_unit_name']) ?></td><td><?= e($stock['product_name']) ?></td><td class="font-monospace"><?= e($stock['sku']) ?></td><td><?= e(trim(($stock['size_name'] ?? '') . ' ' . ($stock['color_name'] ?? '')) ?: '—') ?></td><td class="text-end fw-semibold text-success"><?= number_format((float)$stock['quantity']) ?></td><td class="text-end">₹<?= number_format((float)$stock['selling_price'], 2) ?></td></tr>
-            <?php endforeach; endif; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeInventoryViews, { once: true });
+} else {
+    initializeInventoryViews();
+}
+</script>

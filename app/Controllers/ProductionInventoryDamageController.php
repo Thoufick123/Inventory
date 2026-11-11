@@ -231,13 +231,21 @@ class ProductionInventoryDamageController
 
     private function findAvailablePiece(string $tag): ?array
     {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if ($concernId === null) {
+            return null;
+        }
         $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($unitId === 0) {
+            return null;
+        }
         $sql = "SELECT DISTINCT qb.id
                 FROM qc_batches qb
                 JOIN production_programs pp ON pp.id = qb.program_id
+                JOIN production_units pu ON pu.id = pp.production_unit_id
                 JOIN qc_items qi ON qi.qc_batch_id = qb.id AND qi.passed_qty > 0
-                WHERE 1 = 1";
-        $params = [];
+                WHERE pu.concern_id = ?";
+        $params = [$concernId];
         if ($unitId !== null) {
             $sql .= ' AND pp.production_unit_id = ?';
             $params[] = $unitId;
@@ -261,9 +269,10 @@ class ProductionInventoryDamageController
                          FROM qc_items qi
                          JOIN qc_batches qb ON qb.id = qi.qc_batch_id
                          JOIN production_programs pp ON pp.id = qb.program_id
+                         JOIN production_units pu ON pu.id = pp.production_unit_id
                          LEFT JOIN products p ON p.id = pp.product_id
-                         WHERE qi.id = ? AND qb.id = ?",
-                        [(int)$qcItemId, $batchId]
+                         WHERE qi.id = ? AND qb.id = ? AND pu.concern_id = ?",
+                        [(int)$qcItemId, $batchId, $concernId]
                     );
                     if ($piece) {
                         $piece['tag_code'] = $tag;
@@ -278,6 +287,9 @@ class ProductionInventoryDamageController
     private function isInCurrentUnit(array $damage): bool
     {
         $unitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+        if ($unitId === 0) {
+            return false;
+        }
         return $unitId === null || (int)($damage['production_unit_id'] ?? 0) === (int)$unitId;
     }
 }

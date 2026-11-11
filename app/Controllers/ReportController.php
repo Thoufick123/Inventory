@@ -2341,6 +2341,7 @@ class ReportController {
                            WHEN sb.location_type = 'SHOP' THEN sh.name
                            WHEN sb.location_type = 'PRODUCTION_UNIT' THEN pu.name
                            WHEN sb.location_type = 'CHANNEL' THEN ch.name
+                           WHEN sb.location_type = 'CONCERN' THEN CONCAT(concern_stock.name, ' (Concern Inventory)')
                            ELSE 'Production'
                        END as location_name
                 FROM stock_balances sb
@@ -2353,11 +2354,13 @@ class ReportController {
                 LEFT JOIN shops sh ON sb.location_type = 'SHOP' AND sb.location_id = sh.id AND sh.concern_id = sb.concern_id
                 LEFT JOIN production_units pu ON sb.location_type = 'PRODUCTION_UNIT' AND sb.location_id = pu.id AND pu.concern_id = sb.concern_id
                 LEFT JOIN sales_channels ch ON sb.location_type = 'CHANNEL' AND sb.location_id = ch.id AND ch.concern_id = sb.concern_id
+                LEFT JOIN concerns concern_stock ON sb.location_type = 'CONCERN' AND sb.location_id = concern_stock.id
                 WHERE sb.concern_id = ?
                   AND ((sb.location_type = 'WAREHOUSE' AND sb.location_id IN ({$warehouseList}) AND w.id IS NOT NULL)
                     OR (sb.location_type = 'SHOP' AND sb.location_id IN ({$shopList}) AND sh.id IS NOT NULL)
                     OR (sb.location_type = 'PRODUCTION_UNIT' AND sb.location_id IN ({$productionUnitList}) AND pu.id IS NOT NULL)
                     OR (sb.location_type = 'CHANNEL' AND sb.location_id IN ({$channelList}) AND ch.id IS NOT NULL)
+                    OR (sb.location_type = 'CONCERN' AND sb.location_id = {$concernId} AND concern_stock.id IS NOT NULL)
                     OR (sb.location_type = 'OFFICE' AND " . (isSuperAdmin() ? '1=1' : '1=0') . "))";
         $params = [$concernId];
 

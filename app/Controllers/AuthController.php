@@ -104,32 +104,43 @@ class AuthController {
         $defaultLanding = url('admin/dashboard');
         if (!hasPermission('dashboard', 'view') && !hasPermission('admin', 'view')) {
             $routesMap = [
-                'production.view'         => url('production/dashboard'),
-                'sellers.view'            => url('production/sellers'),
-                'catalog.view'            => url('production/catalog'),
-                'programs.view'           => url('production/programs'),
-                'cutting.view'            => url('production/cutting'),
-                'stitching.view'          => url('production/stitching'),
-                'labels.view'             => url('production/labels'),
-                'qc.view'                 => url('production/qc'),
-                'inventory.view'          => url('production/inventory'),
-                'batches.view'            => url('production/batches'),
-                'outward.view'            => url('production/outward'),
-                'warehouse_rework.view'   => url('production/warehouse-rework'),
-                'warehouse.view'          => url('warehouse/dashboard'),
-                'shop.view'               => url('shop/dashboard'),
-                'website_dashboard.view'  => url('warehouse/website-orders'),
-                'website_orders.view'     => url('warehouse/website-orders'),
-                'whatsapp_dashboard.view' => url('warehouse/whatsapp-orders'),
-                'whatsapp_orders.view'    => url('warehouse/whatsapp-orders'),
-                'staff.view'              => url('admin/staff?department=all'),
+                'production.view'                 => url('production/dashboard'),
+                'inventory.view'                  => url('production/inventory'),
+                'production_inward.view'          => url('production/inward'),
+                'batches.view'                    => url('production/batches'),
+                'outward.view'                    => url('production/outward'),
+                'production_billing.view'         => url('production/billing'),
+                'production_billing_returns.view' => url('production/billing/returns'),
+                'production_cash.view'            => url('production/cash'),
+                'production_expenses.view'        => url('production/expenses'),
+                'sellers.view'                    => url('production/sellers'),
+                'catalog.view'                    => url('production/catalog'),
+                'programs.view'                   => url('production/programs'),
+                'cutting.view'                    => url('production/cutting'),
+                'stitching.view'                  => url('production/stitching'),
+                'labels.view'                     => url('production/labels'),
+                'qc.view'                         => url('production/qc'),
+                'warehouse_rework.view'           => url('production/warehouse-rework'),
+                'assets.view'                     => url('asset/dashboard'),
+                'reports_overview.view'           => url('reports/overview'),
+                'reports_production.view'         => url('reports/production'),
+                'reports_sales.view'              => url('reports/sales'),
+                'reports_profitability.view'      => url('reports/profitability'),
+                'reports.view'                    => url('reports'),
+                'staff.view'                      => url('admin/staff?department=all'),
+                'roles.view'                      => url('admin/roles'),
             ];
+            $matchedLanding = false;
             foreach ($routesMap as $permKey => $targetUrl) {
                 list($m, $a) = explode('.', $permKey);
                 if (hasPermission($m, $a)) {
                     $defaultLanding = $targetUrl;
+                    $matchedLanding = true;
                     break;
                 }
+            }
+            if (!$matchedLanding && !isSuperAdmin() && !currentConcern()) {
+                $defaultLanding = url('admin/concern/select');
             }
         }
 

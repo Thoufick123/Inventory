@@ -166,14 +166,14 @@
                                     <i class="bi bi-shield-check text-success me-1"></i>Auto-assigned to your designated manufacturing unit
                                 </small>
                             <?php else: ?>
-                                <label class="form-label fw-semibold">Production Unit</label>
-                                <select name="production_unit_id" class="form-select">
+                                <label class="form-label fw-semibold">Production Unit *</label>
+                                <select name="production_unit_id" class="form-select" required>
                                     <option value="">Select Unit</option>
                                     <?php foreach ($units as $u): ?>
-                                        <option value="<?= $u['id'] ?>"><?= e($u['name']) ?></option>
+                                        <option value="<?= (int)$u['id'] ?>" <?= (int)$defaultUnitId === (int)$u['id'] ? 'selected' : '' ?>><?= e($u['name']) ?></option>
                                     <?php endforeach; ?>
                                 </select>
-                                <small class="text-muted d-block mt-1">Optional manufacturing facility for this program</small>
+                                <small class="text-muted d-block mt-1">Required manufacturing facility for this program</small>
                             <?php endif; ?>
                         </div>
                         <div class="col-md-4">

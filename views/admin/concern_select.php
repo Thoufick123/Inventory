@@ -23,8 +23,21 @@
                             <button type="submit" class="btn btn-primary">Use Concern</button>
                         </form>
 
-                        <?php if ($activeConcern && Concern::hasModule((int)$activeConcern['id'], 'production')): ?>
-                            <a class="btn btn-outline-secondary mt-3" href="<?= url('production/dashboard') ?>">Open Production Dashboard</a>
+                        <?php if ($activeConcern): ?>
+                            <div class="d-flex flex-wrap gap-2 mt-3">
+                                <?php if (hasPermission('production', 'view')): ?>
+                                    <a class="btn btn-outline-secondary" href="<?= url('production/dashboard') ?>">Open Production Dashboard</a>
+                                <?php endif; ?>
+                                <?php if (hasPermission('inventory', 'view')): ?>
+                                    <a class="btn btn-outline-primary" href="<?= url('production/inventory') ?>">Open Production Inventory</a>
+                                <?php endif; ?>
+                                <?php if (hasPermission('production_inward', 'view')): ?>
+                                    <a class="btn btn-outline-success" href="<?= url('production/inward') ?>">Open Production Inward</a>
+                                <?php endif; ?>
+                                <?php if (hasPermission('production_billing', 'view')): ?>
+                                    <a class="btn btn-outline-dark" href="<?= url('production/billing') ?>">Open Production Billing</a>
+                                <?php endif; ?>
+                            </div>
                         <?php endif; ?>
                     <?php endif; ?>
                 </div>
