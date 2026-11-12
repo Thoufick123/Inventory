@@ -796,12 +796,15 @@ class ProductionService {
         $legacyPackedByVariant = [];
         $assignedTagsByVariant = [];
         $previousRows = Database::fetchAll(
-            "SELECT pbi.variant_id, pbi.quantity, pbi.piece_tags
+            "SELECT pbi.variant_id, pbi.quantity, pbi.piece_tags, pb.qc_batch_id
              FROM production_batch_items pbi
              JOIN production_batches pb ON pb.id = pbi.production_batch_id
-             WHERE pb.qc_batch_id = ? AND pb.status != 'CANCELLED'
+             WHERE pb.status != 'CANCELLED'
+               AND (pb.qc_batch_id = ?
+                    OR (pb.source_type = 'SCAN' AND pbi.source_kind = 'QC'
+                        AND pbi.qc_item_id IN (SELECT id FROM qc_items WHERE qc_batch_id = ?)))
              ORDER BY pb.id ASC, pbi.id ASC",
-            [$qcBatchId]
+            [$qcBatchId, $qcBatchId]
         );
         foreach ($previousRows as $row) {
             $variantId = (int)$row['variant_id'];
@@ -813,7 +816,7 @@ class ProductionService {
                         $assignedTagsByVariant[$variantId][strtoupper($tag)] = true;
                     }
                 }
-            } else {
+            } elseif ((int)($row['qc_batch_id'] ?? 0) === $qcBatchId) {
                 $legacyPackedByVariant[$variantId] = ($legacyPackedByVariant[$variantId] ?? 0) + (int)$row['quantity'];
             }
         }
@@ -1043,8 +1046,96 @@ class ProductionService {
             $sourceType = strtoupper(trim((string)($batchData['source_type'] ?? (!empty($batchData['qc_batch_id']) ? 'QC' : 'INWARD'))));
             $concernId = (int)($batchData['concern_id'] ?? (function_exists('currentConcernId') ? currentConcernId() : 0));
             $reservedFromLocation = null;
+            $reservedBuckets = [];
 
-            if ($sourceType === 'INWARD') {
+            if ($sourceType === 'SCAN') {
+                if (!class_exists('ProductionBillingService')) {
+                    require_once BASE_PATH . '/app/Services/ProductionBillingService.php';
+                }
+                if (!class_exists('StockService')) {
+                    require_once BASE_PATH . '/app/Services/StockService.php';
+                }
+                $inventoryList = ProductionBillingService::getAvailableInventory(0);
+                $inventoryByKey = [];
+                foreach ($inventoryList as $entry) {
+                    $inventoryByKey[(string)$entry['item_key']] = $entry;
+                }
+                $requestedTags = [];
+                $bucketCounts = [];
+                $normalizedScanItems = [];
+                foreach ($items as $submitted) {
+                    if (!is_array($submitted)) {
+                        continue;
+                    }
+                    $tags = array_values(array_unique(array_filter(array_map(
+                        static fn($tag) => strtoupper(trim((string)$tag)),
+                        is_array($submitted['piece_tags'] ?? null) ? $submitted['piece_tags'] : []
+                    ), static fn($tag) => $tag !== '')));
+                    if (!$tags) {
+                        continue;
+                    }
+                    $entry = ProductionBillingService::resolveBillItemEntry([
+                        'item_key' => $submitted['item_key'] ?? '',
+                        'qc_item_id' => (int)($submitted['qc_item_id'] ?? 0),
+                        'tags' => $tags,
+                    ], $inventoryByKey, $inventoryList);
+                    if (!$entry) {
+                        throw new Exception('One or more scanned inventory items are no longer available in this concern.');
+                    }
+                    $availMap = array_fill_keys(array_map('strtoupper', $entry['available_tags']), true);
+                    foreach ($tags as $tag) {
+                        if (!isset($availMap[$tag]) || isset($requestedTags[$tag])) {
+                            throw new Exception("QR code {$tag} is no longer available or was scanned twice.");
+                        }
+                        $requestedTags[$tag] = true;
+                    }
+                    $kind = strtoupper((string)($entry['source_kind'] ?? 'QC'));
+                    $locType = !empty($entry['stock_location_type']) ? strtoupper((string)$entry['stock_location_type']) : null;
+                    $locId = !empty($entry['stock_location_id']) ? (int)$entry['stock_location_id'] : null;
+                    $variantId = (int)($entry['variant_id'] ?? 0);
+                    if ($variantId <= 0) {
+                        throw new Exception('One or more scanned items are missing a product variant mapping.');
+                    }
+                    if ($kind === 'INWARD') {
+                        if (!in_array($locType, ['CONCERN', 'PRODUCTION_UNIT'], true) || !$locId) {
+                            throw new Exception('Inward inventory source location is missing for a scanned item.');
+                        }
+                        StockService::assertLocationBelongsToActiveConcern($locType, $locId);
+                        $bucketKey = $entry['item_key'];
+                        $bucketCounts[$bucketKey] = ($bucketCounts[$bucketKey] ?? 0) + count($tags);
+                        if ($bucketCounts[$bucketKey] > (int)($entry['stock_qty'] ?? 0)) {
+                            throw new Exception('Packed quantity exceeds available concern stock balance for a scanned variant.');
+                        }
+                        $rKey = $variantId . '|' . $locType . '|' . $locId;
+                        if (!isset($reservedBuckets[$rKey])) {
+                            $reservedBuckets[$rKey] = [
+                                'variant_id' => $variantId,
+                                'type' => $locType,
+                                'id' => $locId,
+                                'qty' => 0,
+                            ];
+                        }
+                        $reservedBuckets[$rKey]['qty'] += count($tags);
+                    }
+                    $normalizedScanItems[] = [
+                        'variant_id' => $variantId,
+                        'qc_item_id' => !empty($entry['qc_item_id']) ? (int)$entry['qc_item_id'] : null,
+                        'source_kind' => $kind,
+                        'source_location_type' => $locType,
+                        'source_location_id' => $locId,
+                        'quantity' => count($tags),
+                        'piece_tags' => $tags,
+                        'billing_entry' => $entry,
+                    ];
+                }
+                if (!$normalizedScanItems) {
+                    throw new Exception('Scan at least one available QR code before saving.');
+                }
+                $items = $normalizedScanItems;
+                $batchData['program_id'] = null;
+                $batchData['qc_batch_id'] = null;
+                $batchData['source_type'] = 'SCAN';
+            } elseif ($sourceType === 'INWARD') {
                 $locType = strtoupper(trim((string)($batchData['source_location_type'] ?? '')));
                 $locId = (int)($batchData['source_location_id'] ?? 0);
                 if (!in_array($locType, ['CONCERN', 'PRODUCTION_UNIT'], true) || $locId <= 0) {
@@ -1088,6 +1179,9 @@ class ProductionService {
                         is_array($item['piece_tags'] ?? null) ? $item['piece_tags'] : []
                     ), static fn($tag) => $tag !== '')));
                     $item['piece_tags'] = $tags;
+                    $item['source_kind'] = 'INWARD';
+                    $item['source_location_type'] = $locType;
+                    $item['source_location_id'] = $locId;
 
                     if ($variantId <= 0 || empty($availableByVariant[$variantId])) {
                         throw new Exception('A packed product variant is not available at the selected inward location.');
@@ -1173,8 +1267,11 @@ class ProductionService {
                     "SELECT COALESCE(SUM(pbi.quantity), 0) as total
                      FROM production_batch_items pbi
                      JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                     WHERE pb.qc_batch_id = ? AND pb.status != 'CANCELLED'",
-                    [$qcId]
+                     WHERE pb.status != 'CANCELLED'
+                       AND (pb.qc_batch_id = ?
+                            OR (pb.source_type = 'SCAN' AND pbi.source_kind = 'QC'
+                                AND pbi.qc_item_id IN (SELECT id FROM qc_items WHERE qc_batch_id = ?)))",
+                    [$qcId, $qcId]
                 )['total'] ?? 0);
 
                 $remainingQty = max(0, $totalQCPassed - $alreadyPacked);
@@ -1209,10 +1306,14 @@ class ProductionService {
             foreach ($items as $item) {
                 if ((int)($item['quantity'] ?? 0) > 0) {
                     ProductionBatchItem::create([
-                        'production_batch_id' => $batchId,
-                        'variant_id'          => (int)$item['variant_id'],
-                        'quantity'            => (int)$item['quantity'],
-                        'piece_tags'          => $item['piece_tags'] ?? [],
+                        'production_batch_id'  => $batchId,
+                        'variant_id'           => (int)$item['variant_id'],
+                        'qc_item_id'           => !empty($item['qc_item_id']) ? (int)$item['qc_item_id'] : null,
+                        'source_kind'          => strtoupper((string)($item['source_kind'] ?? ($sourceType === 'INWARD' ? 'INWARD' : 'QC'))),
+                        'source_location_type' => $item['source_location_type'] ?? ($reservedFromLocation['type'] ?? null),
+                        'source_location_id'   => $item['source_location_id'] ?? ($reservedFromLocation['id'] ?? null),
+                        'quantity'             => (int)$item['quantity'],
+                        'piece_tags'           => $item['piece_tags'] ?? [],
                     ]);
                 }
             }
@@ -1230,6 +1331,21 @@ class ProductionService {
                         "Reserved inward stock for batch {$batchData['batch_number']}"
                     );
                 }
+            }
+            foreach ($reservedBuckets as $bucket) {
+                if ((int)($bucket['qty'] ?? 0) <= 0) {
+                    continue;
+                }
+                StockService::reserve(
+                    (int)$bucket['variant_id'],
+                    (string)$bucket['type'],
+                    (int)$bucket['id'],
+                    (float)$bucket['qty'],
+                    'production_batches',
+                    $batchId,
+                    $userId ?: null,
+                    "Reserved scanned inward stock for batch {$batchData['batch_number']}"
+                );
             }
 
             AuditService::log('production', 'create', 'production_batch', $batchId, null, $batchData);
@@ -1323,17 +1439,13 @@ class ProductionService {
             // Update batch status to DISPATCHED
             ProductionBatch::updateStatus($batch['id'], 'DISPATCHED');
 
-            // Deduct sender balance for inward-packed batches
-            if ($isInwardBatch
-                && !empty($batch['source_location_type'])
-                && !empty($batch['source_location_id'])) {
-                if (!class_exists('StockService')) {
-                    require_once BASE_PATH . '/app/Services/StockService.php';
-                }
-                $srcType = strtoupper((string)$batch['source_location_type']);
-                $srcId = (int)$batch['source_location_id'];
+            // Deduct sender balance for inward-packed batches or inward items inside SCAN batches
+            $headerSourceType = strtoupper((string)($batch['source_type'] ?? 'QC'));
+            if ($isInwardBatch || $headerSourceType === 'SCAN') {
                 $batchItems = Database::fetchAll(
-                    "SELECT variant_id, quantity FROM production_batch_items WHERE production_batch_id = ? AND quantity > 0",
+                    "SELECT variant_id, source_kind, source_location_type, source_location_id, quantity
+                     FROM production_batch_items
+                     WHERE production_batch_id = ? AND quantity > 0",
                     [$batchId]
                 );
                 foreach ($batchItems as $bItem) {
@@ -1341,6 +1453,22 @@ class ProductionService {
                     $variantId = (int)$bItem['variant_id'];
                     if ($qty <= 0 || $variantId <= 0) {
                         continue;
+                    }
+                    $itemKind = strtoupper((string)($bItem['source_kind'] ?? ($headerSourceType === 'INWARD' ? 'INWARD' : 'QC')));
+                    if ($itemKind !== 'INWARD') {
+                        continue;
+                    }
+                    $srcType = !empty($bItem['source_location_type'])
+                        ? strtoupper((string)$bItem['source_location_type'])
+                        : (!empty($batch['source_location_type']) ? strtoupper((string)$batch['source_location_type']) : '');
+                    $srcId = !empty($bItem['source_location_id'])
+                        ? (int)$bItem['source_location_id']
+                        : (int)($batch['source_location_id'] ?? 0);
+                    if (!in_array($srcType, ['CONCERN', 'PRODUCTION_UNIT'], true) || $srcId <= 0) {
+                        continue;
+                    }
+                    if (!class_exists('StockService')) {
+                        require_once BASE_PATH . '/app/Services/StockService.php';
                     }
                     $reservedBal = StockService::getBalance($variantId, $srcType, $srcId, 'RESERVED');
                     $deductState = $reservedBal >= $qty ? 'RESERVED' : 'AVAILABLE';

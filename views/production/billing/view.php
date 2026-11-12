@@ -1,11 +1,21 @@
+<?php $isBatchBill = ($bill['bill_source'] ?? '') === 'BATCH_OUTWARD' && !empty($bill['source_batch_id']); ?>
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
     <div>
-        <h4 class="mb-1 fw-bold"><?= htmlspecialchars($bill['bill_number']) ?></h4>
+        <h4 class="mb-1 fw-bold">
+            <?= htmlspecialchars($bill['bill_number']) ?>
+            <?php if ($isBatchBill): ?>
+                <span class="badge bg-info-subtle text-info border border-info-subtle fs-6 ms-2">From Batch</span>
+            <?php endif; ?>
+        </h4>
         <div class="text-muted small">Production bill · <?= htmlspecialchars(date('d M Y', strtotime($bill['bill_date']))) ?></div>
     </div>
     <div class="d-flex gap-2">
         <a class="btn btn-outline-secondary" href="<?= url('production/billing') ?>"><i class="bi bi-arrow-left me-1"></i>Back</a>
-        <?php if (hasPermission('production_billing', 'edit')): ?><a class="btn btn-outline-primary" href="<?= url('production/billing/edit/' . (int)$bill['id']) ?>"><i class="bi bi-pencil me-1"></i>Edit</a><?php endif; ?>
+        <?php if ($isBatchBill): ?>
+            <a class="btn btn-outline-info" href="<?= url('production/batches/sale-bill/' . (int)$bill['source_batch_id']) ?>"><i class="bi bi-box-seam me-1"></i>Batch Details</a>
+        <?php elseif (hasPermission('production_billing', 'edit')): ?>
+            <a class="btn btn-outline-primary" href="<?= url('production/billing/edit/' . (int)$bill['id']) ?>"><i class="bi bi-pencil me-1"></i>Edit</a>
+        <?php endif; ?>
         <?php if (hasPermission('production_billing', 'print')): ?><a class="btn btn-dark" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id']) ?>"><i class="bi bi-printer me-1"></i>Print</a><?php endif; ?>
     </div>
 </div>

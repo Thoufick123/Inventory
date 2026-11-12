@@ -16,6 +16,23 @@
                     <div class="col-sm-6"><small class="text-muted d-block">Purchase Date</small><strong><?= e(formatDate($purchase['purchase_date'])) ?></strong></div>
                     <div class="col-sm-6"><small class="text-muted d-block">Invoice / Bill Number</small><strong><?= e($purchase['invoice_number'] ?: '—') ?></strong></div>
                     <div class="col-sm-6"><small class="text-muted d-block">Notes</small><strong><?= e($purchase['notes'] ?: '—') ?></strong></div>
+                    <?php if (!empty($purchase['source_batch_id'])): ?>
+                        <div class="col-12">
+                            <div class="p-2 bg-light border rounded d-flex justify-content-between align-items-center flex-wrap gap-2">
+                                <span class="small">
+                                    <strong>Inter-Concern Batch:</strong> <span class="font-monospace"><?= e($purchase['source_batch_number'] ?? ('#' . (int)$purchase['source_batch_id'])) ?></span>
+                                    <?php if (!empty($purchase['source_sale_bill_number'])): ?>
+                                        · Sender Sale Bill: <span class="font-monospace text-success"><?= e($purchase['source_sale_bill_number']) ?></span>
+                                    <?php endif; ?>
+                                </span>
+                                <?php if (!empty($purchase['source_sale_bill_id'])): ?>
+                                    <a href="<?= url('production/purchases/sale-bill/' . (int)$purchase['source_batch_id']) ?>" class="btn btn-sm btn-outline-success">
+                                        <i class="bi bi-receipt me-1"></i>View Sender Sale Bill
+                                    </a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
                     <?php if (!empty($purchase['document_url'])): ?><div class="col-12"><a href="<?= uploadUrl($purchase['document_url']) ?>" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"><i class="bi bi-file-earmark-text me-1"></i>View Invoice Attachment</a></div><?php endif; ?>
                 </div>
             </div>
@@ -46,22 +63,35 @@
                 $subtotal = 0.0;
                 $taxTotal = 0.0;
                 foreach ($items as $index => $item):
-                    $base = (float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1);
+                    $base = (float)$item['unit_price'] * ($item['item_type'] === 'FABRIC_ROLL' ? 1 : (float)$item['quantity']);
                     $tax = (float)($item['sgst_amount'] ?? 0) + (float)($item['cgst_amount'] ?? 0) + (float)($item['igst_amount'] ?? 0);
                     $subtotal += $base;
                     $taxTotal += $tax;
                     $taxType = $item['gst_type'] ?? 'LEGACY';
                     if ($taxType === 'BOTH') $taxType = 'SGST + CGST';
                     if ($taxType === 'LEGACY') $taxType = $tax > 0 ? 'Legacy SGST + CGST' : 'Exempted';
+                    $badgeCls = $item['item_type'] === 'FABRIC_ROLL'
+                        ? 'bg-primary-subtle text-primary'
+                        : ($item['item_type'] === 'FINISHED_GOODS' ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary');
+                    $badgeTxt = $item['item_type'] === 'FABRIC_ROLL'
+                        ? 'Fabric Roll'
+                        : ($item['item_type'] === 'FINISHED_GOODS' ? 'Finished Goods' : 'Supply');
             ?>
                 <tr>
                     <td><?= $index + 1 ?></td>
                     <td>
-                        <span class="badge <?= $item['item_type'] === 'FABRIC_ROLL' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary' ?>"><?= $item['item_type'] === 'FABRIC_ROLL' ? 'Fabric Roll' : 'Supply' ?></span>
+                        <span class="badge <?= $badgeCls ?>"><?= $badgeTxt ?></span>
                         <strong class="d-block"><?= e($item['item_name']) ?></strong>
                         <?php if ($item['item_type'] === 'FABRIC_ROLL'): ?>
                             <small class="text-muted"><?= e($item['roll_number'] ?: '—') ?> · <?= e($item['color'] ?: '—') ?> · <?= e($item['design_name'] ?: '—') ?></small>
                             <?php if (!empty($item['start_code'])): ?><small class="d-block font-monospace"><?= e($item['start_code']) ?><?= $item['end_code'] !== $item['start_code'] ? '–' . e($item['end_code']) : '' ?></small><?php endif; ?>
+                        <?php elseif ($item['item_type'] === 'FINISHED_GOODS'): ?>
+                            <small class="text-muted font-monospace">
+                                <?= e($item['sku'] ?: '') ?>
+                                <?php if (!empty($item['size_name']) || !empty($item['color_name'])): ?>
+                                    · <?= e(trim(($item['size_name'] ?? '') . ' / ' . ($item['color_name'] ?? ''), ' /')) ?>
+                                <?php endif; ?>
+                            </small>
                         <?php endif; ?>
                     </td>
                     <td><?= number_format((float)$item['quantity'], 3) ?> <?= e($item['unit']) ?><?= !empty($item['weight_kg']) ? '<br><small class="text-muted">' . number_format((float)$item['weight_kg'], 2) . ' kg</small>' : '' ?></td>

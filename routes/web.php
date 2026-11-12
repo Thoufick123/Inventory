@@ -716,6 +716,8 @@ class Router {
         $this->post('production/inward/receive', 'ProductionController', 'receiveProductionInward', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
         $this->post('production/inward/receive-batch', 'ProductionController', 'receiveConcernProductionBatch', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
         $this->post('production/inward/update-batch-statuses', 'ProductionController', 'updateConcernBatchReceiptStatuses', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'receive']]);
+        $this->get('production/inward/sale-bill/print/{id}', 'ProductionController', 'printBatchSaleBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
+        $this->get('production/inward/sale-bill/{id}', 'ProductionController', 'viewBatchSaleBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
         $this->get('api/production/inward/lookup', 'ProductionController', 'productionInwardLookup', ['AuthMiddleware', ['PermissionMiddleware', 'production_inward', 'view']]);
         
         // Production Sellers
@@ -746,6 +748,8 @@ class Router {
         $this->get('production/purchases/print/{id}', 'ProductionController', 'printProductionPurchase', ['AuthMiddleware', ['PermissionMiddleware', 'sellers', 'view']]);
         $this->get('production/purchases/create', 'ProductionController', 'createProductionPurchase', ['AuthMiddleware', ['PermissionMiddleware', 'sellers', 'create']]);
         $this->post('production/purchases/store', 'ProductionController', 'storeProductionPurchase', ['AuthMiddleware', ['PermissionMiddleware', 'sellers', 'create']]);
+        $this->get('production/purchases/sale-bill/print/{id}', 'ProductionController', 'printBatchSaleBill', ['AuthMiddleware', ['PermissionMiddleware', 'sellers', 'view']]);
+        $this->get('production/purchases/sale-bill/{id}', 'ProductionController', 'viewBatchSaleBill', ['AuthMiddleware', ['PermissionMiddleware', 'sellers', 'view']]);
 
         // Production Billing
         $this->get('production/billing', 'ProductionBillingController', 'billList', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'view']]);
@@ -886,7 +890,10 @@ class Router {
         $this->post('production/batches/store', 'ProductionController', 'storeBatch', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'create']]);
         $this->post('production/batches/approve/{id}', 'ProductionController', 'approveBatch', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'approve']]);
         $this->get('production/batches/label/{id}', 'ProductionController', 'printBatchQRLabel', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'print']]);
+        $this->get('production/batches/sale-bill/print/{id}', 'ProductionController', 'printBatchSaleBill', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'view']]);
+        $this->get('production/batches/sale-bill/{id}', 'ProductionController', 'viewBatchSaleBill', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'view']]);
         $this->get('production/batches/view-ajax/{id}', 'ProductionController', 'batchDetailsAjax', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'view']]);
+        $this->get('api/production/batches/search', 'ProductionController', 'searchBatchInventoryAjax', ['AuthMiddleware', ['PermissionMiddleware', 'batches', 'create']]);
         $this->get('production/outward', 'ProductionController', 'outwardList', ['AuthMiddleware', ['PermissionMiddleware', 'outward', 'view']]);
         $this->post('production/outward/store', 'ProductionController', 'storeOutward', ['AuthMiddleware', ['PermissionMiddleware', 'outward', 'create']]);
         $this->post('production/outward/dispatch/{id}', 'ProductionController', 'dispatchOutward', ['AuthMiddleware', ['PermissionMiddleware', 'outward', 'create']]);

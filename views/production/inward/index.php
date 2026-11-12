@@ -125,14 +125,50 @@ $destinationLabel = $destinationType === 'CONCERN' ? 'Concern Inventory' : 'Prod
                 <div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
                     <div>
                         <div class="fw-bold font-monospace text-primary"><?= e($batch['batch_number']) ?></div>
-                        <div><?= e($batch['product_name']) ?> <span class="text-muted">· Program <?= e($batch['program_number']) ?></span></div>
+                        <div><?= e($batch['product_name']) ?> <span class="text-muted">· <?= e($batch['program_number']) ?></span></div>
                         <small class="text-muted">
                             From <?= e($batch['source_concern_name']) ?> · Outward <?= e($batch['outward_number']) ?>
                             <?php if (!empty($batch['vehicle_number'])): ?> · <?= e($batch['vehicle_number']) ?><?php endif; ?>
                             · <?= e(formatDate($batch['dispatch_date'])) ?>
                         </small>
+                        <?php if (!empty($batch['sale_bill_id'])): ?>
+                            <div class="mt-1 d-flex flex-wrap gap-2 align-items-center">
+                                <span class="badge bg-success-subtle text-success border border-success-subtle font-monospace">
+                                    <i class="bi bi-receipt me-1"></i>Sale Bill: <?= e($batch['sale_bill_number']) ?> · ₹<?= number_format((float)($batch['sale_bill_total'] ?? 0), 2) ?>
+                                </span>
+                                <?php if (!empty($batch['sale_bill_payment_status'])): ?>
+                                    <span class="badge bg-light text-dark border"><?= e($batch['sale_bill_payment_status']) ?></span>
+                                <?php endif; ?>
+                                <?php if (!empty($batch['linked_purchase_id'])): ?>
+                                    <a href="<?= url('production/purchases/view/' . (int)$batch['linked_purchase_id']) ?>" class="badge bg-info-subtle text-info border border-info-subtle text-decoration-none">
+                                        <i class="bi bi-bag-check me-1"></i>Purchase: <?= e($batch['linked_purchase_number']) ?>
+                                    </a>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
-                    <span class="badge bg-warning-subtle text-dark border">Dispatched · <?= number_format((int)$batch['total_qty']) ?> pcs</span>
+                    <div class="d-flex flex-column align-items-end gap-2">
+                        <span class="badge bg-warning-subtle text-dark border">Dispatched · <?= number_format((int)$batch['total_qty']) ?> pcs</span>
+                        <?php if (!empty($batch['sale_bill_id'])): ?>
+                            <div class="btn-group btn-group-sm">
+                                <a href="<?= url('production/inward/sale-bill/' . (int)$batch['id']) ?>" class="btn btn-outline-success">
+                                    <i class="bi bi-receipt me-1"></i>View Sale Bill
+                                </a>
+                                <a href="<?= url('production/inward/sale-bill/print/' . (int)$batch['id']) ?>" target="_blank" class="btn btn-outline-dark" title="Print Sale Bill">
+                                    <i class="bi bi-printer"></i>
+                                </a>
+                                <?php if (!empty($batch['linked_purchase_id']) && hasPermission('sellers', 'view')): ?>
+                                    <a href="<?= url('production/purchases/view/' . (int)$batch['linked_purchase_id']) ?>" class="btn btn-outline-info">
+                                        <i class="bi bi-bag-check me-1"></i>View Purchase Bill
+                                    </a>
+                                <?php elseif (hasPermission('sellers', 'create')): ?>
+                                    <a href="<?= url('production/purchases/create?from_batch_id=' . (int)$batch['id']) ?>" class="btn btn-primary">
+                                        <i class="bi bi-cart-plus me-1"></i>Put Purchase Bill
+                                    </a>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 </div>
                 <?php if (empty($batch['items'])): ?>
                     <div class="alert alert-warning py-2 mb-0">This dispatched batch has no receivable product lines. Contact the sending concern.</div>
@@ -307,12 +343,50 @@ $destinationLabel = $destinationType === 'CONCERN' ? 'Concern Inventory' : 'Prod
                     <td><strong class="font-monospace"><?= e($receipt['grn_number']) ?></strong><small class="d-block text-muted"><?= e(formatDate($receipt['received_at'])) ?></small></td>
                     <td><span class="badge bg-light text-dark border"><?= e(ucwords(strtolower(str_replace('_', ' ', $receipt['source_type'])))) ?></span><div><?= e($receipt['source_name'] ?? 'Unknown source') ?></div></td>
                     <td><?= e($receipt['destination_name']) ?></td>
-                    <td class="font-monospace"><?= e($receipt['source_batch_number'] ?: '—') ?></td>
+                    <td>
+                        <div class="font-monospace"><?= e($receipt['source_batch_number'] ?: '—') ?></div>
+                        <?php if (!empty($receipt['sale_bill_id'])): ?>
+                            <div class="mt-1">
+                                <span class="badge bg-success-subtle text-success border border-success-subtle font-monospace">
+                                    <?= e($receipt['sale_bill_number']) ?> · ₹<?= number_format((float)($receipt['sale_bill_total'] ?? 0), 2) ?>
+                                </span>
+                            </div>
+                        <?php endif; ?>
+                        <?php if (!empty($receipt['linked_purchase_id'])): ?>
+                            <div class="mt-1">
+                                <a href="<?= url('production/purchases/view/' . (int)$receipt['linked_purchase_id']) ?>" class="badge bg-info-subtle text-info border border-info-subtle text-decoration-none font-monospace">
+                                    Purchase: <?= e($receipt['linked_purchase_number']) ?>
+                                </a>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td class="text-center"><?= number_format((int)$receipt['line_count']) ?></td>
                     <td class="text-end fw-semibold"><?= number_format((int)$receipt['total_quantity']) ?> pcs</td>
                     <td><?= e($receipt['received_by_name'] ?? 'System') ?></td>
                     <td><span class="badge <?= $receipt['status'] === 'RECEIVED' ? 'bg-success' : 'bg-secondary' ?>"><?= e($receipt['status']) ?></span></td>
-                    <td class="text-end"><button type="button" class="btn btn-sm btn-outline-primary fw-semibold" data-inward-details-toggle="inwardReceiptDetails<?= (int)$receipt['id'] ?>" aria-expanded="false"><i class="bi bi-eye me-1"></i>View</button></td>
+                    <td class="text-end">
+                        <div class="d-inline-flex gap-1 flex-wrap justify-content-end">
+                            <?php if (($receipt['source_type'] ?? '') === 'PRODUCTION_BATCH' && !empty($receipt['source_id']) && !empty($receipt['sale_bill_id'])): ?>
+                                <?php $srcBatchId = (int)$receipt['source_id']; ?>
+                                <a href="<?= url('production/inward/sale-bill/' . $srcBatchId) ?>" class="btn btn-sm btn-outline-success" title="View Sender Sale Bill">
+                                    <i class="bi bi-receipt me-1"></i>Sale Bill
+                                </a>
+                                <a href="<?= url('production/inward/sale-bill/print/' . $srcBatchId) ?>" target="_blank" class="btn btn-sm btn-outline-dark" title="Print Sender Sale Bill">
+                                    <i class="bi bi-printer"></i>
+                                </a>
+                                <?php if (!empty($receipt['linked_purchase_id']) && hasPermission('sellers', 'view')): ?>
+                                    <a href="<?= url('production/purchases/view/' . (int)$receipt['linked_purchase_id']) ?>" class="btn btn-sm btn-outline-info">
+                                        <i class="bi bi-bag-check me-1"></i>Purchase
+                                    </a>
+                                <?php elseif (hasPermission('sellers', 'create')): ?>
+                                    <a href="<?= url('production/purchases/create?from_batch_id=' . $srcBatchId . '&inward_id=' . (int)$receipt['id']) ?>" class="btn btn-sm btn-success">
+                                        <i class="bi bi-cart-plus me-1"></i>Put Purchase Bill
+                                    </a>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                            <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" data-inward-details-toggle="inwardReceiptDetails<?= (int)$receipt['id'] ?>" aria-expanded="false"><i class="bi bi-eye me-1"></i>View</button>
+                        </div>
+                    </td>
                 </tr>
                 <tr class="table-light"><td colspan="9" class="py-2">
                     <?php

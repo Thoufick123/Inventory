@@ -146,8 +146,12 @@ class ProductionBillingController
         }
 
         $sql = "SELECT pb.*,
+                       src_b.batch_number AS source_batch_number,
+                       dc.name AS destination_concern_name,
                        (SELECT COUNT(*) FROM production_bill_items pbi WHERE pbi.bill_id = pb.id) AS line_count
                 FROM production_bills pb
+                LEFT JOIN production_batches src_b ON src_b.id = pb.source_batch_id
+                LEFT JOIN concerns dc ON dc.id = pb.destination_concern_id
                 WHERE pb.concern_id = ?";
         $params = [$concernId];
         if ($assignedUnitId !== null) {
@@ -175,6 +179,10 @@ class ProductionBillingController
         $bill = $this->findBill((int)$id);
         if (!$bill) {
             Response::redirect('production/billing', 'error', 'Bill not found.');
+            return;
+        }
+        if (($bill['bill_source'] ?? 'DIRECT') === 'BATCH_OUTWARD' || !empty($bill['source_batch_id'])) {
+            Response::redirect(url('production/billing/view/' . (int)$id), 'error', 'Bills generated from Finished Production Batches cannot be edited here.');
             return;
         }
         if ($this->billHasReturns((int)$id)) {
@@ -266,8 +274,13 @@ class ProductionBillingController
     public function updateBill(string $id): void
     {
         $billId = (int)$id;
-        if (!$this->findBill($billId)) {
+        $bill = $this->findBill($billId);
+        if (!$bill) {
             Response::redirect('production/billing', 'error', 'Bill not found.');
+            return;
+        }
+        if (($bill['bill_source'] ?? 'DIRECT') === 'BATCH_OUTWARD' || !empty($bill['source_batch_id'])) {
+            Response::redirect(url('production/billing/view/' . $billId), 'error', 'Bills generated from Finished Production Batches cannot be edited here.');
             return;
         }
         if ($this->billHasReturns($billId)) {
@@ -283,6 +296,10 @@ class ProductionBillingController
         $existingBill = $this->findBill($billId);
         if (!$existingBill) {
             Response::redirect(url('production/billing'), 'error', 'Bill not found in the active production unit.');
+            return;
+        }
+        if (($existingBill['bill_source'] ?? 'DIRECT') === 'BATCH_OUTWARD' || !empty($existingBill['source_batch_id'])) {
+            Response::redirect(url('production/billing/view/' . $billId), 'error', 'Bills generated from Finished Production Batches cannot be deleted directly from Billing.');
             return;
         }
         if ($this->billHasReturns($billId)) {
@@ -765,8 +782,8 @@ class ProductionBillingController
                         [$tag]
                     );
                     $existingClaim = Database::fetchOne(
-                        'SELECT id, status FROM production_bill_item_tags WHERE tag_code = ? FOR UPDATE',
-                        [$tag]
+                        'SELECT id, status FROM production_bill_item_tags WHERE concern_id = ? AND tag_code = ? FOR UPDATE',
+                        [$concernId, $tag]
                     );
                     if ($existingClaim) {
                         if ($existingClaim['status'] !== 'RETURNED' || !$returnedInventory) {
@@ -780,8 +797,8 @@ class ProductionBillingController
                         );
                     } else {
                         Database::execute(
-                            "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, qc_item_id, tag_code, status) VALUES (?, ?, ?, ?, 'BILLED')",
-                            [$billId, $billItemId, $stock['qc_item_id'], $tag]
+                            "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, concern_id, qc_item_id, tag_code, status) VALUES (?, ?, ?, ?, ?, 'BILLED')",
+                            [$billId, $billItemId, $concernId, $stock['qc_item_id'], $tag]
                         );
                     }
                     if ($returnedInventory) {

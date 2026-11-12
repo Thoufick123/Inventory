@@ -39,20 +39,38 @@
                 <tr><td colspan="5" class="text-center text-muted py-5">No purchases recorded yet.</td></tr>
             <?php else: foreach ($purchases as $purchase): ?>
                 <tr>
-                    <td><strong class="font-monospace"><?= e($purchase['purchase_number']) ?></strong><small class="d-block text-muted"><?= e(formatDate($purchase['purchase_date'])) ?></small></td>
+                    <td>
+                        <strong class="font-monospace"><?= e($purchase['purchase_number']) ?></strong>
+                        <small class="d-block text-muted"><?= e(formatDate($purchase['purchase_date'])) ?></small>
+                        <?php if (!empty($purchase['source_batch_number'])): ?>
+                            <small class="d-block font-monospace text-info mt-1">
+                                <?= e($purchase['source_batch_number']) ?><?= !empty($purchase['source_sale_bill_number']) ? ' · ' . e($purchase['source_sale_bill_number']) : '' ?>
+                            </small>
+                        <?php endif; ?>
+                    </td>
                     <td><?= e($purchase['company'] ?: $purchase['seller_name']) ?><small class="d-block text-muted"><?= e($purchase['seller_name']) ?></small></td>
                     <td>
                         <?php foreach ($purchase['items'] as $item): ?>
                             <div class="small">
-                                <span class="badge <?= $item['item_type'] === 'FABRIC_ROLL' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary' ?>">
-                                    <?= $item['item_type'] === 'FABRIC_ROLL' ? 'Fabric roll' : 'Supply' ?>
-                                </span>
+                                <?php
+                                    $badgeClass = $item['item_type'] === 'FABRIC_ROLL'
+                                        ? 'bg-primary-subtle text-primary'
+                                        : ($item['item_type'] === 'FINISHED_GOODS' ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary');
+                                    $badgeLabel = $item['item_type'] === 'FABRIC_ROLL'
+                                        ? 'Fabric roll'
+                                        : ($item['item_type'] === 'FINISHED_GOODS' ? 'Finished goods' : 'Supply');
+                                ?>
+                                <span class="badge <?= $badgeClass ?>"><?= $badgeLabel ?></span>
                                 <?php if ($item['item_type'] === 'FABRIC_ROLL'): ?>
                                     <?= e($item['roll_number']) ?> · RQ <?= number_format((float)$item['quantity']) ?> · <?= number_format((float)$item['weight_kg'], 2) ?> kg
                                     <?php if (!empty($item['start_code'])): ?><span class="font-monospace text-muted"><?= e($item['start_code']) ?>–<?= e($item['end_code']) ?></span><?php endif; ?>
                                     <?php if (!empty($item['seller_roll_id'])): ?>
                                         <a href="<?= url('production/sellers/roll-labels/' . $item['seller_roll_id']) ?>" target="_blank" rel="noopener" class="text-nowrap"><i class="bi bi-qr-code me-1"></i>Labels</a>
                                     <?php endif; ?>
+                                <?php elseif ($item['item_type'] === 'FINISHED_GOODS'): ?>
+                                    <?= e($item['item_name']) ?>
+                                    <?php if (!empty($item['sku'])): ?><span class="font-monospace text-muted">(<?= e($item['sku']) ?>)</span><?php endif; ?>
+                                    · <?= number_format((float)$item['quantity']) ?> <?= e($item['unit']) ?>
                                 <?php else: ?>
                                     <?= e($item['item_name']) ?> · <?= number_format((float)$item['quantity'], 3) ?> <?= e($item['unit']) ?>
                                 <?php endif; ?>
@@ -63,7 +81,7 @@
                                         + (float)($item['igst_amount'] ?? 0);
                                 ?>
                                 <small class="d-block text-muted">
-                                    Base ₹<?= number_format((float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1), 2) ?>
+                                    Base ₹<?= number_format((float)$item['unit_price'] * ($item['item_type'] === 'FABRIC_ROLL' ? 1 : (float)$item['quantity']), 2) ?>
                                     · <?= e($purchaseItemTaxType === 'LEGACY' ? 'Legacy SGST/CGST' : ($purchaseItemTaxType === 'BOTH' ? 'SGST + CGST' : $purchaseItemTaxType)) ?> ₹<?= number_format($purchaseItemTaxAmount, 2) ?>
                                     · Line total ₹<?= number_format((float)$item['total_price'], 2) ?>
                                 </small>

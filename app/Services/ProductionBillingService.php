@@ -41,20 +41,27 @@ class ProductionBillingService
 
     public static function getSoldTagSet(int $excludeBillId = 0, ?int $concernId = null): array
     {
-        $concernId = $concernId ?? ConcernTransactionService::activeConcernId();
+        $concernId = (int)($concernId ?? ConcernTransactionService::activeConcernId());
+        if ($concernId <= 0) {
+            return [];
+        }
         $rows = $excludeBillId > 0
             ? Database::fetchAll(
                 "SELECT t.tag_code
                  FROM production_bill_item_tags t
                  JOIN production_bills pb ON pb.id = t.bill_id
                  WHERE t.status IN ('BILLED', 'DAMAGED', 'RETURNED')
+                   AND COALESCE(t.concern_id, pb.concern_id) = ?
                    AND NOT (t.bill_id = ? AND pb.concern_id = ?)",
-                [$excludeBillId, $concernId]
+                [$concernId, $excludeBillId, $concernId]
             )
             : Database::fetchAll(
                 "SELECT t.tag_code
                  FROM production_bill_item_tags t
-                 WHERE t.status IN ('BILLED', 'DAMAGED', 'RETURNED')"
+                 JOIN production_bills pb ON pb.id = t.bill_id
+                 WHERE t.status IN ('BILLED', 'DAMAGED', 'RETURNED')
+                   AND COALESCE(t.concern_id, pb.concern_id) = ?",
+                [$concernId]
             );
 
         $sold = [];
@@ -90,7 +97,7 @@ class ProductionBillingService
              FROM production_batch_items pbi
              JOIN production_batches pb ON pb.id = pbi.production_batch_id
              WHERE pb.concern_id = ?
-               AND pb.source_type = 'INWARD'
+               AND (pb.source_type = 'INWARD' OR (pb.source_type = 'SCAN' AND pbi.source_kind = 'INWARD'))
                AND pb.status != 'CANCELLED'
                AND pbi.piece_tags IS NOT NULL
                AND pbi.piece_tags != ''",

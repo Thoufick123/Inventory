@@ -39,6 +39,16 @@ class ProductionInwardService {
                            WHEN 'PRODUCTION_UNIT' THEN src_unit.name
                            WHEN 'PRODUCTION_BATCH' THEN src_concern.name
                        END AS source_name,
+                       src_batch.sale_bill_id,
+                       sb.bill_number AS sale_bill_number,
+                       sb.total_amount AS sale_bill_total,
+                       sb.payment_status AS sale_bill_payment_status,
+                       (SELECT p_pur.id FROM production_purchases p_pur
+                        WHERE p_pur.concern_id = pi.concern_id AND p_pur.source_batch_id = src_batch.id
+                        ORDER BY p_pur.id DESC LIMIT 1) AS linked_purchase_id,
+                       (SELECT p_pur.purchase_number FROM production_purchases p_pur
+                        WHERE p_pur.concern_id = pi.concern_id AND p_pur.source_batch_id = src_batch.id
+                        ORDER BY p_pur.id DESC LIMIT 1) AS linked_purchase_number,
                        u.full_name AS received_by_name,
                        COUNT(pii.id) AS line_count,
                        COALESCE(SUM(pii.quantity + pii.damaged_qty), 0) AS total_quantity,
@@ -54,6 +64,7 @@ class ProductionInwardService {
                 LEFT JOIN shops sh ON pi.source_type = 'SHOP' AND sh.id = pi.source_id AND sh.concern_id = ?
                 LEFT JOIN production_units src_unit ON pi.source_type = 'PRODUCTION_UNIT' AND src_unit.id = pi.source_id AND src_unit.concern_id = ?
                 LEFT JOIN production_batches src_batch ON pi.source_type = 'PRODUCTION_BATCH' AND src_batch.id = pi.source_id
+                LEFT JOIN production_bills sb ON sb.id = src_batch.sale_bill_id
                 LEFT JOIN concerns src_concern ON src_batch.concern_id = src_concern.id
                 LEFT JOIN users u ON u.id = pi.received_by
                 LEFT JOIN production_inward_items pii ON pii.inward_id = pi.id
@@ -137,13 +148,24 @@ class ProductionInwardService {
         }
         $batches = Database::fetchAll(
             "SELECT pb.id, pb.batch_number, pb.total_qty, pb.box_count, pb.created_at, pb.source_type,
-                    COALESCE(pp.program_number, 'Inward Stock') AS program_number,
+                    pb.sale_bill_id, sb.bill_number AS sale_bill_number, sb.bill_date AS sale_bill_date,
+                    sb.total_amount AS sale_bill_total, sb.payment_status AS sale_bill_payment_status,
+                    sb.buyer_type AS sale_bill_buyer_type,
+                    COALESCE(NULLIF(sb.company_name, ''), NULLIF(sb.customer_name, ''), '') AS sale_bill_buyer_name,
+                    COALESCE(pp.program_number, CASE WHEN pb.source_type = 'SCAN' THEN 'QR Scan Batch' ELSE 'Inward Stock' END) AS program_number,
                     COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') AS product_name,
                     src_concern.name AS source_concern_name, po.outward_number, po.dispatch_date,
-                    po.vehicle_number, po.transporter_name, po.lr_number
+                    po.vehicle_number, po.transporter_name, po.lr_number,
+                    (SELECT p_pur.id FROM production_purchases p_pur
+                     WHERE p_pur.concern_id = ? AND p_pur.source_batch_id = pb.id
+                     ORDER BY p_pur.id DESC LIMIT 1) AS linked_purchase_id,
+                    (SELECT p_pur.purchase_number FROM production_purchases p_pur
+                     WHERE p_pur.concern_id = ? AND p_pur.source_batch_id = pb.id
+                     ORDER BY p_pur.id DESC LIMIT 1) AS linked_purchase_number
              FROM production_batches pb
              LEFT JOIN production_programs pp ON pp.id = pb.program_id
              LEFT JOIN products p ON p.id = pp.product_id
+             LEFT JOIN production_bills sb ON sb.id = pb.sale_bill_id
              JOIN concerns src_concern ON src_concern.id = pb.concern_id
              JOIN production_outwards po ON po.production_batch_id = pb.id AND po.status = 'DISPATCHED'
              WHERE pb.destination_concern_id = ? AND pb.status = 'DISPATCHED'
@@ -153,7 +175,7 @@ class ProductionInwardService {
                      AND pi.status = 'RECEIVED'
                )
              ORDER BY po.dispatch_date ASC, pb.id ASC",
-            [$concernId]
+            [$concernId, $concernId, $concernId]
         );
         foreach ($batches as &$batch) {
             $batch['items'] = array_values(array_map(

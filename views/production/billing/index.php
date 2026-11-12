@@ -31,9 +31,18 @@
                 <?php if (empty($bills)): ?>
                     <tr><td colspan="8" class="text-center text-muted py-5">No Production Bills have been created.</td></tr>
                 <?php else: ?>
-                    <?php foreach ($bills as $bill): ?>
+                    <?php foreach ($bills as $bill):
+                        $isBatchBill = ($bill['bill_source'] ?? '') === 'BATCH_OUTWARD' && !empty($bill['source_batch_id']);
+                    ?>
                         <tr>
-                            <td class="fw-semibold"><?= htmlspecialchars($bill['bill_number']) ?></td>
+                            <td>
+                                <div class="fw-semibold"><?= htmlspecialchars($bill['bill_number']) ?></div>
+                                <?php if ($isBatchBill): ?>
+                                    <span class="badge bg-info-subtle text-info border border-info-subtle mt-1">
+                                        From Batch <?= htmlspecialchars($bill['source_batch_number'] ?? ('#' . (int)$bill['source_batch_id'])) ?>
+                                    </span>
+                                <?php endif; ?>
+                            </td>
                             <td><?= htmlspecialchars(date('d M Y', strtotime($bill['bill_date']))) ?></td>
                             <td>
                                 <span class="badge text-bg-light"><?= htmlspecialchars($bill['buyer_type'] ?? 'COMPANY') ?></span>
@@ -51,13 +60,16 @@
                                 <?php if (hasPermission('production_billing', 'view')): ?>
                                     <a class="btn btn-sm btn-outline-primary" title="View" href="<?= url('production/billing/view/' . (int)$bill['id']) ?>"><i class="bi bi-eye"></i></a>
                                 <?php endif; ?>
-                                <?php if (hasPermission('production_billing', 'edit')): ?>
+                                <?php if ($isBatchBill): ?>
+                                    <a class="btn btn-sm btn-outline-info" title="View Batch Sale Summary" href="<?= url('production/batches/sale-bill/' . (int)$bill['source_batch_id']) ?>"><i class="bi bi-box-seam"></i></a>
+                                <?php endif; ?>
+                                <?php if (!$isBatchBill && hasPermission('production_billing', 'edit')): ?>
                                     <a class="btn btn-sm btn-outline-secondary" title="Edit" href="<?= url('production/billing/edit/' . (int)$bill['id']) ?>"><i class="bi bi-pencil"></i></a>
                                 <?php endif; ?>
                                 <?php if (hasPermission('production_billing', 'print')): ?>
                                     <a class="btn btn-sm btn-outline-dark" title="Print" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id']) ?>"><i class="bi bi-printer"></i></a>
                                 <?php endif; ?>
-                                <?php if (hasPermission('production_billing', 'delete')): ?>
+                                <?php if (!$isBatchBill && hasPermission('production_billing', 'delete')): ?>
                                     <form class="d-inline" method="POST" action="<?= url('production/billing/delete/' . (int)$bill['id']) ?>" onsubmit="return confirm('Delete this bill? Its billed QR pieces will become available again.')">
                                         <?= CSRF::input() ?>
                                         <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></button>

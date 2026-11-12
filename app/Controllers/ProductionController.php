@@ -10,6 +10,7 @@ require_once BASE_PATH . '/app/Services/AuditService.php';
 require_once BASE_PATH . '/app/Services/CloudinaryService.php';
 require_once BASE_PATH . '/app/Services/SettingsService.php';
 require_once BASE_PATH . '/app/Services/ProductionInwardService.php';
+require_once BASE_PATH . '/app/Services/BatchBillingService.php';
 require_once BASE_PATH . '/app/Models/QCBatch.php';
 require_once BASE_PATH . '/app/Models/QCItem.php';
 require_once BASE_PATH . '/app/Models/LabelBatch.php';
@@ -680,9 +681,13 @@ class ProductionController {
         $purchaseParams = [$concernId];
         $ppUnitClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $purchaseParams);
         $purchases = Database::fetchAll(
-            "SELECT pp.*, s.name AS seller_name, s.company
+            "SELECT pp.*, s.name AS seller_name, s.company,
+                    src_b.batch_number AS source_batch_number,
+                    src_sb.bill_number AS source_sale_bill_number
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
+             LEFT JOIN production_batches src_b ON src_b.id = pp.source_batch_id
+             LEFT JOIN production_bills src_sb ON src_sb.id = pp.source_sale_bill_id
              WHERE pp.concern_id = ?{$ppUnitClause}
              ORDER BY pp.purchase_date DESC, pp.id DESC",
             $purchaseParams
@@ -758,11 +763,14 @@ class ProductionController {
             $rollInventoryParams
         );
 
+        $availableBatchPurchases = BatchBillingService::getAvailableBatchesForPurchase($concernId);
+
         Response::view('production.purchases.index', [
             'pageTitle' => 'Production Purchases',
             'activeModule' => 'production',
             'activeMenu' => 'prod-purchases',
             'purchases' => $purchases,
+            'availableBatchPurchases' => $availableBatchPurchases,
             'totalPurchaseValue' => $totalPurchaseValue,
             'supplyStock' => $supplyStock,
             'fabricRollInventory' => $fabricRollInventory,
@@ -823,9 +831,12 @@ class ProductionController {
         $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
-                    s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
+                    s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms,
+                    src_b.batch_number AS source_batch_number, src_sb.bill_number AS source_sale_bill_number
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
+             LEFT JOIN production_batches src_b ON src_b.id = pp.source_batch_id
+             LEFT JOIN production_bills src_sb ON src_sb.id = pp.source_sale_bill_id
              WHERE pp.id = ? AND pp.concern_id = ?{$unitClause}",
             $params
         );
@@ -844,7 +855,7 @@ class ProductionController {
         }
 
         $items = Database::fetchAll(
-            "SELECT item_type, item_name, quantity, unit, weight_kg, unit_price, total_price,
+            "SELECT item_type, item_name, sku, size_name, color_name, quantity, unit, weight_kg, unit_price, total_price,
                     tax_input_type, gst_type, sgst_value, cgst_value, igst_value,
                     sgst_amount, cgst_amount, igst_amount, roll_number, color, design_name
              FROM production_purchase_items
@@ -855,7 +866,7 @@ class ProductionController {
         $subtotal = 0.0;
         $taxes = ['SGST' => 0.0, 'CGST' => 0.0, 'IGST' => 0.0];
         foreach ($items as &$item) {
-            $base = (float)$item['unit_price'] * ($item['item_type'] === 'GENERAL_SUPPLY' ? (float)$item['quantity'] : 1);
+            $base = (float)$item['unit_price'] * ($item['item_type'] === 'FABRIC_ROLL' ? 1 : (float)$item['quantity']);
             $item['base_amount'] = round($base, 2);
             $subtotal += $item['base_amount'];
             foreach (['SGST' => 'sgst_amount', 'CGST' => 'cgst_amount', 'IGST' => 'igst_amount'] as $type => $field) {
@@ -887,9 +898,12 @@ class ProductionController {
         $purchase = Database::fetchOne(
             "SELECT pp.*, s.name AS seller_name, s.company AS seller_company, s.phone AS seller_phone,
                     s.email AS seller_email, s.gst_number AS seller_gst_number, s.city AS seller_city,
-                    s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms
+                    s.state AS seller_state, s.address AS seller_address, s.payment_terms AS seller_payment_terms,
+                    src_b.batch_number AS source_batch_number, src_sb.bill_number AS source_sale_bill_number
              FROM production_purchases pp
              JOIN sellers s ON s.id = pp.seller_id
+             LEFT JOIN production_batches src_b ON src_b.id = pp.source_batch_id
+             LEFT JOIN production_bills src_sb ON src_sb.id = pp.source_sale_bill_id
              WHERE pp.id = ? AND pp.concern_id = ?{$unitClause}",
             $params
         );
@@ -1054,14 +1068,14 @@ class ProductionController {
                 Response::back();
                 return;
             }
-            if (!$oldItem && $itemType !== 'GENERAL_SUPPLY') {
+            if (!$oldItem && !in_array($itemType, ['GENERAL_SUPPLY', 'FINISHED_GOODS'], true)) {
                 Session::flash('error', 'Fabric rolls cannot be added through purchase editing.');
                 Response::back();
                 return;
             }
             if (!empty($submitted['remove_item'])) {
-                if (!$oldItem || $oldItem['item_type'] !== 'GENERAL_SUPPLY') {
-                    Session::flash('error', 'Only general supply items can be removed from an existing purchase.');
+                if (!$oldItem || !in_array($oldItem['item_type'], ['GENERAL_SUPPLY', 'FINISHED_GOODS'], true)) {
+                    Session::flash('error', 'Only supply or finished goods items can be removed from an existing purchase.');
                     Response::back();
                     return;
                 }
@@ -1149,18 +1163,22 @@ class ProductionController {
                 ? $calculateTaxAmount($baseAmount, $taxMode, $taxValue)
                 : ($gstType === 'BOTH' ? $calculateTaxAmount($baseAmount, $taxMode, $cgstTaxValue) : 0.0);
             $igstAmount = $gstType === 'IGST' ? $calculateTaxAmount($baseAmount, $taxMode, $taxValue) : 0.0;
-            $updatedItems[] = [
-                'id' => $itemId, 'type' => $itemType, 'item_name' => mb_strtoupper($itemName),
-                'quantity' => $quantity, 'unit' => $unit, 'unit_price' => $unitPrice,
-                'base_amount' => $baseAmount, 'weight' => $weight, 'roll_number' => $rollNumber,
-                'color' => $color, 'design_name' => $design, 'design_count' => $designCount,
-                'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
-                'cgst_tax_value' => $cgstTaxValue, 'sgst_amount' => $sgstAmount,
-                'cgst_amount' => $cgstAmount, 'igst_amount' => $igstAmount,
-                'total' => $baseAmount + $sgstAmount + $cgstAmount + $igstAmount,
-                'seller_roll_id' => (int)($oldItem['seller_roll_id'] ?? 0),
-                'photo_url' => $photoUrl,
-            ];
+                $updatedItems[] = [
+                    'id' => $itemId, 'type' => $itemType, 'item_name' => mb_strtoupper($itemName),
+                    'variant_id' => !empty($submitted['variant_id']) ? (int)$submitted['variant_id'] : (!empty($oldItem['variant_id']) ? (int)$oldItem['variant_id'] : null),
+                    'sku' => trim((string)($submitted['sku'] ?? $oldItem['sku'] ?? '')) ?: null,
+                    'size_name' => trim((string)($submitted['size_name'] ?? $oldItem['size_name'] ?? '')) ?: null,
+                    'color_name' => trim((string)($submitted['color_name'] ?? $oldItem['color_name'] ?? '')) ?: null,
+                    'quantity' => $quantity, 'unit' => $unit, 'unit_price' => $unitPrice,
+                    'base_amount' => $baseAmount, 'weight' => $weight, 'roll_number' => $rollNumber,
+                    'color' => $color, 'design_name' => $design, 'design_count' => $designCount,
+                    'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
+                    'cgst_tax_value' => $cgstTaxValue, 'sgst_amount' => $sgstAmount,
+                    'cgst_amount' => $cgstAmount, 'igst_amount' => $igstAmount,
+                    'total' => $baseAmount + $sgstAmount + $cgstAmount + $igstAmount,
+                    'seller_roll_id' => (int)($oldItem['seller_roll_id'] ?? 0),
+                    'photo_url' => $photoUrl,
+                ];
             if ($itemId > 0) {
                 $seenIds[$itemId] = true;
             }
@@ -1173,7 +1191,7 @@ class ProductionController {
                 Response::back();
                 return;
             }
-            if ($existingItem['item_type'] === 'GENERAL_SUPPLY' && !isset($seenIds[$existingId])) {
+            if (in_array($existingItem['item_type'], ['GENERAL_SUPPLY', 'FINISHED_GOODS'], true) && !isset($seenIds[$existingId])) {
                 $updatedItems[] = ['delete_id' => $existingId];
             }
         }
@@ -1244,11 +1262,13 @@ class ProductionController {
                 }
                 Database::execute(
                     "INSERT INTO production_purchase_items
-                        (purchase_id, item_type, item_name, quantity, unit, unit_price, total_price,
+                        (purchase_id, variant_id, item_type, item_name, sku, size_name, color_name, quantity, unit, unit_price, total_price,
                          gst_type, tax_input_type, sgst_value, cgst_value, igst_value,
                          sgst_amount, cgst_amount, igst_amount)
-                     VALUES (?, 'GENERAL_SUPPLY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [$purchaseId, $item['item_name'], $item['quantity'], $item['unit'], $item['unit_price'], $item['total'],
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [$purchaseId, $item['variant_id'] ?? null, $item['type'], $item['item_name'],
+                        $item['sku'] ?? null, $item['size_name'] ?? null, $item['color_name'] ?? null,
+                        $item['quantity'], $item['unit'], $item['unit_price'], $item['total'],
                         $item['gst_type'], $item['tax_mode'],
                         in_array($item['gst_type'], ['SGST', 'BOTH'], true) ? $item['tax_value'] : 0,
                         $item['gst_type'] === 'CGST' ? $item['tax_value'] : $item['cgst_tax_value'],
@@ -1378,19 +1398,38 @@ class ProductionController {
     public function createProductionPurchase(): void {
         $concernId = ConcernTransactionService::activeConcernId();
         $sellers = Database::fetchAll(
-            "SELECT id, name, company, phone, email, gst_number, city, state, address, payment_terms
+            "SELECT id, name, company, phone, email, gst_number, city, state, address, payment_terms, linked_concern_id
              FROM sellers
              WHERE seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? AND is_active = 1
              ORDER BY company, name",
             [$concernId]
         );
         $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
+        $fromBatchId = (int)($_GET['from_batch_id'] ?? 0);
+        $fromInwardId = !empty($_GET['inward_id']) ? (int)$_GET['inward_id'] : null;
+        $batchPrefill = $fromBatchId > 0
+            ? BatchBillingService::getBatchPurchasePrefill($fromBatchId, $fromInwardId)
+            : null;
+        if ($fromBatchId > 0 && !$batchPrefill) {
+            Session::flash('error', 'The selected dispatched batch is not available for this concern.');
+            Response::redirect(url('production/purchases/create'));
+            return;
+        }
+        if ($batchPrefill && !empty($batchPrefill['existingPurchase']['id'])) {
+            Session::flash('info', 'A Purchase Bill (' . $batchPrefill['existingPurchase']['purchase_number'] . ') is already recorded for this batch.');
+            Response::redirect(url('production/purchases/view/' . (int)$batchPrefill['existingPurchase']['id']));
+            return;
+        }
+        $availableBatchPurchases = BatchBillingService::getAvailableBatchesForPurchase($concernId);
+
         Response::view('production.purchases.create', [
             'pageTitle' => 'Record Production Purchase',
             'activeModule' => 'production',
             'activeMenu' => 'prod-purchases',
             'sellers' => $sellers,
             'productionUnits' => $productionUnits,
+            'batchPrefill' => $batchPrefill,
+            'availableBatchPurchases' => $availableBatchPurchases,
             'breadcrumb' => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Purchases', 'url' => url('production/purchases')],
@@ -1407,16 +1446,59 @@ class ProductionController {
         }
 
         $concernId = ConcernTransactionService::activeConcernId();
-        $sellerId = (int)($_POST['seller_id'] ?? 0);
-        $seller = Database::fetchOne(
-            "SELECT id, name, company FROM sellers
-             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? AND is_active = 1",
-            [$sellerId, $concernId]
-        );
-        if (!$seller) {
-            Session::flash('error', 'Select an active registered supplier.');
-            Response::back();
-            return;
+        $sourceBatchId = (int)($_POST['source_batch_id'] ?? 0);
+        $sourceSaleBillId = (int)($_POST['source_sale_bill_id'] ?? 0);
+        $sourceInwardId = (int)($_POST['source_inward_id'] ?? 0);
+        $sourceBatch = null;
+        if ($sourceBatchId > 0) {
+            $sourceBatch = Database::fetchOne(
+                "SELECT id, concern_id, destination_concern_id, sale_bill_id, status
+                 FROM production_batches
+                 WHERE id = ? AND destination_concern_id = ? AND status IN ('DISPATCHED', 'RECEIVED')",
+                [$sourceBatchId, $concernId]
+            );
+            if (!$sourceBatch) {
+                Session::flash('error', 'Selected batch is not authorized for a purchase bill in this concern.');
+                Response::back();
+                return;
+            }
+            $duplicatePurchase = Database::fetchOne(
+                'SELECT id, purchase_number FROM production_purchases WHERE concern_id = ? AND source_batch_id = ? LIMIT 1',
+                [$concernId, $sourceBatchId]
+            );
+            if ($duplicatePurchase) {
+                Session::flash('error', 'A Purchase Bill (' . $duplicatePurchase['purchase_number'] . ') already exists for this batch.');
+                Response::redirect(url('production/purchases/view/' . (int)$duplicatePurchase['id']));
+                return;
+            }
+            $sourceSaleBillId = !empty($sourceBatch['sale_bill_id']) ? (int)$sourceBatch['sale_bill_id'] : 0;
+            if ($sourceInwardId > 0) {
+                $validInward = Database::fetchOne(
+                    "SELECT id FROM production_inwards
+                     WHERE id = ? AND concern_id = ? AND source_type = 'PRODUCTION_BATCH' AND source_id = ? AND status = 'RECEIVED'",
+                    [$sourceInwardId, $concernId, $sourceBatchId]
+                );
+                $sourceInwardId = $validInward ? (int)$validInward['id'] : 0;
+            }
+        } else {
+            $sourceSaleBillId = 0;
+            $sourceInwardId = 0;
+        }
+
+        $rawSellerId = trim((string)($_POST['seller_id'] ?? ''));
+        $autoConcernSupplier = ($rawSellerId === '__AUTO_CONCERN_SUPPLIER__' && $sourceBatch !== null);
+        $sellerId = $autoConcernSupplier ? 0 : (int)$rawSellerId;
+        if (!$autoConcernSupplier) {
+            $seller = Database::fetchOne(
+                "SELECT id, name, company FROM sellers
+                 WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? AND is_active = 1",
+                [$sellerId, $concernId]
+            );
+            if (!$seller) {
+                Session::flash('error', 'Select an active registered supplier.');
+                Response::back();
+                return;
+            }
         }
 
         $purchaseDate = trim((string)($_POST['purchase_date'] ?? ''));
@@ -1450,7 +1532,7 @@ class ProductionController {
             $taxMode = strtoupper(trim((string)($submitted['tax_mode'] ?? 'PERCENT')));
             $taxInput = $submitted['tax_value'] ?? '0';
             $cgstTaxInput = $submitted['cgst_tax_value'] ?? '0';
-            if (!in_array($type, ['FABRIC_ROLL', 'GENERAL_SUPPLY'], true) || $quantity <= 0 || $unitPrice < 0) {
+            if (!in_array($type, ['FABRIC_ROLL', 'GENERAL_SUPPLY', 'FINISHED_GOODS'], true) || $quantity <= 0 || $unitPrice < 0) {
                 Session::flash('error', 'Each purchase line needs a valid item type, quantity, and non-negative price.');
                 Response::back();
                 return;
@@ -1515,13 +1597,13 @@ class ProductionController {
             }
 
             $itemName = trim((string)($submitted['item_name'] ?? ''));
-            $unit = strtoupper(trim((string)($submitted['unit'] ?? '')));
+            $unit = strtoupper(trim((string)($submitted['unit'] ?? ($type === 'FINISHED_GOODS' ? 'PCS' : ''))));
             if ($unit === 'OTHER') {
                 $unit = strtoupper(trim((string)($submitted['custom_unit'] ?? '')));
             }
             if ($itemName === '' || mb_strlen($itemName) > 255 || $unit === '' || mb_strlen($unit) > 30
                 || (!in_array($unit, $allowedUnits, true) && strtoupper(trim((string)($submitted['unit'] ?? ''))) !== 'OTHER')) {
-                Session::flash('error', 'General supply lines require an item name and a valid unit.');
+                Session::flash('error', 'Purchase lines require an item name and a valid unit.');
                 Response::back();
                 return;
             }
@@ -1534,7 +1616,12 @@ class ProductionController {
             $igstAmount = $gstType === 'IGST' ? $calculateTaxAmount($baseTotal, $taxMode, $taxValue) : 0.0;
             $taxAmount = $sgstAmount + $cgstAmount + $igstAmount;
             $items[] = [
-                'type' => $type, 'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
+                'type' => $type,
+                'variant_id' => !empty($submitted['variant_id']) ? (int)$submitted['variant_id'] : null,
+                'sku' => trim((string)($submitted['sku'] ?? '')) ?: null,
+                'size_name' => trim((string)($submitted['size_name'] ?? '')) ?: null,
+                'color_name' => trim((string)($submitted['color_name'] ?? '')) ?: null,
+                'item_name' => mb_strtoupper($itemName), 'quantity' => $quantity,
                 'unit' => $unit, 'weight' => null, 'unit_price' => $unitPrice,
                 'gst_type' => $gstType, 'tax_mode' => $taxMode, 'tax_value' => $taxValue,
                 'cgst_tax_value' => $cgstTaxValue,
@@ -1614,12 +1701,20 @@ class ProductionController {
 
         try {
             Database::beginTransaction();
+            if ($autoConcernSupplier && $sourceBatch !== null) {
+                $sellerId = BatchBillingService::resolveOrCreateConcernSupplier($concernId, (int)$sourceBatch['concern_id']);
+            }
             $temporaryNumber = 'TMP-PP-' . bin2hex(random_bytes(12));
             Database::execute(
                 "INSERT INTO production_purchases
-                    (purchase_number, concern_id, production_unit_id, seller_id, purchase_date, invoice_number, document_url, notes, total_amount, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [$temporaryNumber, $concernId, $unitId, $sellerId, $purchaseDate, $invoiceNumber !== '' ? $invoiceNumber : null,
+                    (purchase_number, concern_id, production_unit_id, source_batch_id, source_sale_bill_id, source_inward_id,
+                     seller_id, purchase_date, invoice_number, document_url, notes, total_amount, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [$temporaryNumber, $concernId, $unitId,
+                    $sourceBatchId > 0 ? $sourceBatchId : null,
+                    $sourceSaleBillId > 0 ? $sourceSaleBillId : null,
+                    $sourceInwardId > 0 ? $sourceInwardId : null,
+                    $sellerId, $purchaseDate, $invoiceNumber !== '' ? $invoiceNumber : null,
                     $documentUrl, $notes !== '' ? $notes : null, $totalAmount, $userId ?: null]
             );
             $purchaseId = (int)Database::lastInsertId();
@@ -1650,12 +1745,14 @@ class ProductionController {
 
                 Database::execute(
                     "INSERT INTO production_purchase_items
-                        (purchase_id, item_type, item_name, quantity, unit, weight_kg, unit_price, total_price,
+                        (purchase_id, variant_id, item_type, item_name, sku, size_name, color_name, quantity, unit, weight_kg, unit_price, total_price,
                          gst_type, tax_input_type, sgst_value, cgst_value, igst_value,
                          sgst_amount, cgst_amount, igst_amount,
                          roll_number, color, design_name, design_count, seller_roll_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [$purchaseId, $item['type'], $item['item_name'], $item['quantity'], $item['unit'], $item['weight'],
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [$purchaseId, $item['variant_id'] ?? null, $item['type'], $item['item_name'],
+                        $item['sku'] ?? null, $item['size_name'] ?? null, $item['color_name'] ?? null,
+                        $item['quantity'], $item['unit'], $item['weight'],
                         $item['unit_price'], $item['line_total'], $item['gst_type'], $item['tax_mode'],
                         $item['sgst_value'], $item['cgst_value'], $item['igst_value'],
                         $item['sgst_amount'], $item['cgst_amount'], $item['igst_amount'],
@@ -7652,7 +7749,11 @@ class ProductionController {
                         SELECT SUM(pbi.quantity)
                         FROM production_batch_items pbi
                         JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                        WHERE pb.qc_batch_id = qb.id AND pb.concern_id = " . (int)$sourceConcernId . " AND pb.status != 'CANCELLED'
+                        WHERE pb.concern_id = " . (int)$sourceConcernId . "
+                          AND pb.status != 'CANCELLED'
+                          AND (pb.qc_batch_id = qb.id
+                               OR (pb.source_type = 'SCAN' AND pbi.source_kind = 'QC'
+                                   AND pbi.qc_item_id IN (SELECT id FROM qc_items WHERE qc_batch_id = qb.id)))
                     ), 0) as already_packed_qty
              FROM qc_batches qb
              JOIN production_programs pp ON qb.program_id = pp.id
@@ -7699,32 +7800,12 @@ class ProductionController {
                     $totalQCPassed = (int)($selectedQC['passed_qty'] ?? 0);
                 }
 
-                $alreadyPackedTotal = (int)(Database::fetchOne(
-                    "SELECT COALESCE(SUM(pbi.quantity), 0) as total
-                     FROM production_batch_items pbi
-                     JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                     WHERE pb.qc_batch_id = ? AND pb.concern_id = ? AND pb.status != 'CANCELLED'",
-                    [(int)$qcBatchId, (int)$sourceConcernId]
-                )['total'] ?? 0);
-
+                // Fetch already packed quantities mapped per variant (including SCAN-mode batches)
+                $variantPackedMap = BatchBillingService::getPackedQtyMapForQCBatch((int)$qcBatchId, (int)$sourceConcernId);
+                $alreadyPackedTotal = array_sum($variantPackedMap);
                 $selectedQC['total_qc_passed'] = $totalQCPassed;
                 $selectedQC['already_packed_qty'] = $alreadyPackedTotal;
                 $selectedQC['remaining_qty'] = max(0, $totalQCPassed - $alreadyPackedTotal);
-
-                // Fetch already packed quantities mapped per variant
-                $variantPackedMap = [];
-                $packedRows = Database::fetchAll(
-                    "SELECT pbi.variant_id, COALESCE(SUM(pbi.quantity), 0) as packed_qty
-                     FROM production_batch_items pbi
-                     JOIN production_batches pb ON pbi.production_batch_id = pb.id
-                     WHERE pb.qc_batch_id = ? AND pb.concern_id = ?
-                       AND pb.status != 'CANCELLED'
-                     GROUP BY pbi.variant_id",
-                    [(int)$qcBatchId, (int)$sourceConcernId]
-                );
-                foreach ($packedRows as $pr) {
-                    $variantPackedMap[(int)$pr['variant_id']] = (int)$pr['packed_qty'];
-                }
 
                 $items = QCBatch::getItems((int)$qcBatchId);
                 $productId = ProductionService::findOrCreateProductForProgram((int)$selectedQC['program_id']);
@@ -7766,8 +7847,23 @@ class ProductionController {
                 }
 
                 $availablePieceTags = ProductionService::getAvailableQCPieceTags((int)$qcBatchId);
+                $progGstRow = Database::fetchOne(
+                    "SELECT COALESCE(p.gst_percentage, 0) AS gst_percentage
+                     FROM production_programs pp
+                     LEFT JOIN products p ON p.id = pp.product_id
+                     WHERE pp.id = ?",
+                    [(int)$selectedQC['program_id']]
+                );
+                $progGst = max(0.0, (float)($progGstRow['gst_percentage'] ?? 0));
                 foreach ($items as &$it) {
                     $it['available_piece_tags'] = $availablePieceTags[(int)$it['id']] ?? [];
+                    $vId = (int)($it['variant_id'] ?? 0);
+                    $pvRow = $vId > 0 ? Database::fetchOne('SELECT mrp, selling_price FROM product_variants WHERE id = ?', [$vId]) : null;
+                    $mrpVal = (float)($pvRow['mrp'] ?? $it['base_price'] ?? 0);
+                    $sellVal = (float)($pvRow['selling_price'] ?? $it['discount_price'] ?? 0);
+                    $it['mrp'] = $mrpVal > 0 ? $mrpVal : $sellVal;
+                    $it['unit_price'] = $sellVal > 0 ? $sellVal : $it['mrp'];
+                    $it['gst_percentage'] = $progGst;
                 }
                 unset($it);
 
@@ -7809,7 +7905,7 @@ class ProductionController {
 
         if ($qcBatchId) {
             $sourceMode = 'qc';
-        } elseif (!in_array($sourceMode, ['qc', 'inward'], true)) {
+        } elseif (!in_array($sourceMode, ['qc', 'inward', 'scan'], true)) {
             $sourceMode = (empty($qcBatches) && !empty($inwardLocations)) ? 'inward' : 'qc';
         }
 
@@ -7823,6 +7919,22 @@ class ProductionController {
             }
             if ($selectedInward !== null) {
                 $items = $selectedInward['items'];
+                foreach ($items as &$it) {
+                    $vId = (int)($it['variant_id'] ?? 0);
+                    $pvMeta = $vId > 0 ? Database::fetchOne(
+                        "SELECT pv.mrp, pv.selling_price, COALESCE(p.gst_percentage, 0) AS gst_percentage
+                         FROM product_variants pv
+                         JOIN products p ON p.id = pv.product_id
+                         WHERE pv.id = ?",
+                        [$vId]
+                    ) : null;
+                    $mrpVal = (float)($pvMeta['mrp'] ?? 0);
+                    $sellVal = (float)($pvMeta['selling_price'] ?? 0);
+                    $it['mrp'] = $mrpVal > 0 ? $mrpVal : $sellVal;
+                    $it['unit_price'] = $sellVal > 0 ? $sellVal : $it['mrp'];
+                    $it['gst_percentage'] = max(0.0, (float)($pvMeta['gst_percentage'] ?? 0));
+                }
+                unset($it);
             }
         }
 
@@ -7852,6 +7964,7 @@ class ProductionController {
             'existingBatches'     => $existingBatches ?? [],
             'items'               => $items,
             'destinationConcerns' => $destinationConcerns,
+            'canDispatchNow'      => hasPermission('outward', 'create'),
             'breadcrumb'          => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Batches', 'url' => url('production/batches')],
@@ -7866,222 +7979,102 @@ class ProductionController {
             Response::back();
             return;
         }
-        $sourceMode = strtolower(trim((string)($_POST['source_mode'] ?? (!empty($_POST['qc_batch_id']) ? 'qc' : 'inward'))));
-        if (!in_array($sourceMode, ['qc', 'inward'], true)) {
-            $sourceMode = 'qc';
-        }
-        $rules = [
-            'destination_concern_id' => 'required|numeric',
-            'box_count'              => 'required|numeric',
-        ];
-        if ($sourceMode === 'qc') {
-            $rules['qc_batch_id'] = 'required|numeric';
-        }
-        $validator = Validator::make($_POST, $rules);
-
-        if ($validator->fails()) {
-            Session::flash('error', $validator->firstError());
-            Response::back();
-            return;
-        }
-
-        $sourceConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
-        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        if (!$sourceConcernId || $scopedUnitId === 0) {
-            Session::flash('error', 'Your active concern or unit scope does not permit packing batches.');
-            Response::back();
-            return;
-        }
-
-        $destinationConcernId = (int)($_POST['destination_concern_id'] ?? 0);
-        $destinationConcern = $sourceConcernId && $destinationConcernId !== (int)$sourceConcernId
-            ? Database::fetchOne(
-                "SELECT c.id
-                 FROM concerns c
-                 WHERE c.id = ? AND c.is_active = 1
-                   AND EXISTS (
-                       SELECT 1 FROM concern_modules cm
-                       WHERE cm.concern_id = c.id AND cm.module_key = 'production_inward'
-                   )",
-                [$destinationConcernId]
-            )
-            : null;
-        if (!$destinationConcern) {
-            Session::flash('error', 'Choose an active receiving concern with Production Inward enabled.');
-            Response::back();
-            return;
-        }
-
-        $items = [];
-        if ($sourceMode === 'inward') {
-            $rawSourceLoc = trim((string)($_POST['source_location'] ?? ''));
-            if (!preg_match('/^(CONCERN|PRODUCTION_UNIT):(\d+)$/i', $rawSourceLoc, $locMatch)) {
-                Session::flash('error', 'Select a valid inward inventory source location.');
-                Response::back();
-                return;
-            }
-            $sourceLocType = strtoupper($locMatch[1]);
-            $sourceLocId = (int)$locMatch[2];
-            try {
-                StockService::assertLocationBelongsToActiveConcern($sourceLocType, $sourceLocId);
-                if ($scopedUnitId !== null && $sourceLocType === 'PRODUCTION_UNIT' && $sourceLocId !== (int)$scopedUnitId) {
-                    throw new InvalidArgumentException('Selected inward inventory belongs to another production unit.');
-                }
-            } catch (\Throwable $e) {
-                Session::flash('error', $e->getMessage());
-                Response::back();
-                return;
-            }
-
-            if (!empty($_POST['items']) && is_array($_POST['items'])) {
-                foreach ($_POST['items'] as $vals) {
-                    $qty = (int)($vals['quantity'] ?? 0);
-                    $variantId = (int)($vals['variant_id'] ?? 0);
-                    if ($qty <= 0 || $variantId <= 0) {
-                        continue;
-                    }
-                    $pieceTags = isset($vals['piece_tags']) && is_array($vals['piece_tags']) ? $vals['piece_tags'] : [];
-                    $items[] = [
-                        'variant_id' => $variantId,
-                        'quantity'   => $qty,
-                        'qc_item_id' => 0,
-                        'piece_tags' => $pieceTags,
-                    ];
-                }
-            }
-
-            if (empty($items)) {
-                Session::flash('error', 'Please select at least 1 inward item and QR code(s) to pack.');
-                Response::back();
-                return;
-            }
-
-            try {
-                $user = Session::get('user');
-                $userId = !empty($user['id']) ? (int)$user['id'] : (int)(Database::fetchOne("SELECT id FROM users LIMIT 1")['id'] ?? 2);
-                ProductionService::createProductionBatch([
-                    'program_id'               => null,
-                    'qc_batch_id'              => null,
-                    'source_type'              => 'INWARD',
-                    'source_location_type'     => $sourceLocType,
-                    'source_location_id'       => $sourceLocId,
-                    'concern_id'               => (int)$sourceConcernId,
-                    'destination_warehouse_id' => null,
-                    'destination_concern_id'   => $destinationConcernId,
-                    'box_count'                => max(1, (int)($_POST['box_count'] ?? 1)),
-                    'status'                   => 'PREPARING',
-                ], $items, $userId);
-
-                Session::flash('success', 'Inward inventory batch packed and reserved successfully.');
-                Response::redirect(url('production/batches'));
-                return;
-            } catch (\Throwable $e) {
-                Session::flash('error', $e->getMessage());
-                Response::back();
-                return;
-            }
-        }
-
-        $qcBatchId = (int)$_POST['qc_batch_id'];
-        $ownedQC = Database::fetchOne(
-            "SELECT qb.id
-             FROM qc_batches qb
-             JOIN production_programs pp ON pp.id = qb.program_id
-             JOIN production_units pu ON pu.id = pp.production_unit_id
-             WHERE qb.id = ? AND pu.concern_id = ?"
-             . ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : ''),
-            [$qcBatchId, (int)$sourceConcernId]
-        );
-        $qcBatch = $ownedQC ? QCBatch::find($qcBatchId) : null;
-        if (!$qcBatch) {
-            Session::flash('error', 'Selected QC Inspection Batch does not belong to the active concern.');
-            Response::back();
-            return;
-        }
-
-        $programId = (int)($qcBatch['program_id'] ?? ($_POST['program_id'] ?? 0));
-        $productId = ProductionService::findOrCreateProductForProgram($programId);
-
-        if (!empty($_POST['items']) && is_array($_POST['items'])) {
-            foreach ($_POST['items'] as $key => $vals) {
-                $qty = (int)($vals['quantity'] ?? 0);
-                if ($qty <= 0) continue;
-
-                $variantId = 0;
-                if (!empty($vals['variant_id']) && is_numeric($vals['variant_id'])) {
-                    $variantId = (int)$vals['variant_id'];
-                } elseif (is_numeric($key) && (int)$key > 0 && empty($vals['size_name'])) {
-                    $variantId = (int)$key;
-                }
-
-                // Verify variant exists in product_variants
-                if ($variantId > 0) {
-                    $exists = Database::fetchOne("SELECT id FROM product_variants WHERE id = ?", [$variantId]);
-                    if (!$exists) {
-                        $variantId = 0;
-                    }
-                }
-
-                // Fallback find or create variant
-                if ($variantId <= 0 && $productId > 0) {
-                    $sizeName = $vals['size_name'] ?? '';
-                    $colorName = $vals['color_name'] ?? '';
-                    $sku = $vals['sku'] ?? '';
-                    $variantId = ProductionService::findOrCreateVariant($productId, $sizeName, $colorName, $sku);
-
-                    if (!empty($vals['qc_item_id']) && $variantId > 0) {
-                        Database::execute("UPDATE qc_items SET variant_id = ? WHERE id = ?", [$variantId, (int)$vals['qc_item_id']]);
-                    }
-                }
-
-                if ($variantId > 0) {
-                    $items[] = [
-                        'variant_id' => $variantId,
-                        'quantity'   => $qty,
-                        'qc_item_id' => (int)($vals['qc_item_id'] ?? 0),
-                        'piece_tags' => isset($vals['piece_tags']) && is_array($vals['piece_tags']) ? $vals['piece_tags'] : [],
-                    ];
-                    
-                    if (!empty($vals['qc_item_id'])) {
-                        $qcItem = Database::fetchOne("SELECT base_price, discount_price FROM qc_items WHERE id = ?", [(int)$vals['qc_item_id']]);
-                        if ($qcItem && ($qcItem['base_price'] > 0 || $qcItem['discount_price'] > 0)) {
-                            Database::execute("UPDATE product_variants SET mrp = ?, selling_price = ? WHERE id = ?", [
-                                (float)$qcItem['base_price'],
-                                (float)$qcItem['discount_price'],
-                                $variantId
-                            ]);
-                        }
-                    }
-                }
-            }
-        }
-
-        if (empty($items)) {
-            Session::flash('error', 'Please pack at least 1 variant item with quantity greater than 0.');
-            Response::back();
-            return;
-        }
-
         try {
             $user = Session::get('user');
             $userId = !empty($user['id']) ? (int)$user['id'] : (int)(Database::fetchOne("SELECT id FROM users LIMIT 1")['id'] ?? 2);
-            $batchId = ProductionService::createProductionBatch([
-                'program_id'               => $programId,
-                'qc_batch_id'              => !empty($_POST['qc_batch_id']) ? (int)$_POST['qc_batch_id'] : null,
-                'source_type'              => 'QC',
-                'concern_id'               => (int)$sourceConcernId,
-                'destination_warehouse_id' => null,
-                'destination_concern_id'   => $destinationConcernId,
-                'box_count'                => max(1, (int)($_POST['box_count'] ?? 1)),
-                'status'                   => 'PREPARING',
-            ], $items, $userId);
-
+            $result = BatchBillingService::createBatchFromRequest($_POST, $userId);
+            if (!empty($result['sale_bill_id'])) {
+                $msg = !empty($result['outward_id'])
+                    ? "Production batch packed, outward dispatched, and Sale Bill {$result['bill_number']} generated."
+                    : "Production batch packed and Sale Bill {$result['bill_number']} generated.";
+                Session::flash('success', $msg);
+                Response::redirect(url('production/batches/sale-bill/' . (int)$result['batch_id']));
+                return;
+            }
             Session::flash('success', 'Production batch packed and created successfully.');
             Response::redirect(url('production/batches'));
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             Session::flash('error', $e->getMessage());
             Response::back();
         }
+    }
+
+    public function searchBatchInventoryAjax(): void {
+        try {
+            $query = trim((string)($_GET['q'] ?? ''));
+            if ($query === '') {
+                Response::json(['success' => true, 'data' => ['items' => []]]);
+                return;
+            }
+            $items = ProductionBillingService::getAvailableInventory(0);
+            $needle = strtoupper($query);
+            $matches = [];
+            foreach ($items as $item) {
+                $matchingTags = array_values(array_filter(
+                    $item['available_tags'],
+                    static fn(string $tag): bool => str_contains(strtoupper($tag), $needle)
+                ));
+                $metadataMatch = stripos((string)$item['product_name'], $query) !== false
+                    || stripos((string)$item['sku'], $query) !== false
+                    || stripos((string)$item['size_name'], $query) !== false
+                    || stripos((string)$item['color_name'], $query) !== false
+                    || stripos((string)$item['program_number'], $query) !== false;
+                if ($metadataMatch || $matchingTags) {
+                    $item['available_tags'] = $matchingTags ?: $item['available_tags'];
+                    $matches[] = $item;
+                    if (count($matches) >= 25) {
+                        break;
+                    }
+                }
+            }
+            Response::json(['success' => true, 'data' => ['items' => $matches]]);
+        } catch (\Throwable $e) {
+            Response::json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function viewBatchSaleBill(string $id): void {
+        $data = BatchBillingService::findAuthorizedBatchSaleBill((int)$id);
+        if (!$data) {
+            Response::error(404, 'Batch Sale Bill not found for the active concern.');
+            return;
+        }
+        $isReceiver = !empty($data['isReceiver']);
+        Response::view('production.batches.sale_bill_view', [
+            'pageTitle' => 'Sale Bill ' . $data['bill']['bill_number'],
+            'activeModule' => 'production',
+            'activeMenu' => $isReceiver ? 'prod-inward' : 'batches',
+            'batch' => $data['batch'],
+            'bill' => $data['bill'],
+            'billItems' => $data['billItems'],
+            'isReceiver' => $isReceiver,
+            'existingPurchase' => $data['existingPurchase'],
+            'canCreatePurchase' => hasPermission('sellers', 'create'),
+            'breadcrumb' => $isReceiver
+                ? [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Inward / GRN', 'url' => url('production/inward')],
+                    ['label' => 'Sale Bill ' . $data['bill']['bill_number']],
+                ]
+                : [
+                    ['label' => 'Production', 'url' => url('production/dashboard')],
+                    ['label' => 'Batches', 'url' => url('production/batches')],
+                    ['label' => 'Sale Bill ' . $data['bill']['bill_number']],
+                ],
+        ]);
+    }
+
+    public function printBatchSaleBill(string $id): void {
+        $data = BatchBillingService::findAuthorizedBatchSaleBill((int)$id);
+        if (!$data) {
+            Response::error(404, 'Batch Sale Bill not found for the active concern.');
+            return;
+        }
+        Response::viewOnly('production.billing.print', [
+            'bill' => $data['bill'],
+            'billItems' => $data['billItems'],
+            'sellerCompany' => SettingsService::getGroup('company'),
+        ]);
     }
 
     public function approveBatch(string $id): void {
@@ -8145,7 +8138,7 @@ class ProductionController {
         $unitClause = $scopedUnitId === 0
             ? ' AND 1 = 0'
             : ($scopedUnitId !== null
-                ? " AND (pp.production_unit_id = " . (int)$scopedUnitId . " OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = " . (int)$scopedUnitId . ")))"
+                ? " AND (pp.production_unit_id = " . (int)$scopedUnitId . " OR (pb.source_type IN ('INWARD', 'SCAN') AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = " . (int)$scopedUnitId . ")))"
                 : '');
         $warehouseClause = $warehouseId > 0 ? ' AND pb.destination_warehouse_id = ' . $warehouseId : '';
         $searchClause = '';
@@ -8159,12 +8152,14 @@ class ProductionController {
             ? Database::fetchAll(
                 "SELECT pb.*, pp.program_number,
                         COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
-                        w.name as warehouse_name, dc.name as destination_concern_name
+                        w.name as warehouse_name, dc.name as destination_concern_name,
+                        sb.bill_number as sale_bill_number, sb.total_amount as sale_bill_total
                  FROM production_batches pb
                  LEFT JOIN production_programs pp ON pb.program_id = pp.id
                  LEFT JOIN products p ON pp.product_id = p.id
                  LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
                  LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+                 LEFT JOIN production_bills sb ON sb.id = pb.sale_bill_id
                  WHERE pb.status = 'APPROVED'
                    AND pb.concern_id = ?
                    AND pb.id NOT IN (SELECT production_batch_id FROM production_outwards WHERE production_batch_id IS NOT NULL)$unitClause$warehouseClause$searchClause
@@ -8344,10 +8339,10 @@ class ProductionController {
                 LEFT JOIN production_programs pp ON pp.id = pb.program_id
                 LEFT JOIN production_units pu ON pu.id = pp.production_unit_id
                 WHERE pb.id = ? AND pb.concern_id = ?
-                  AND ((pb.source_type = 'INWARD' AND pb.program_id IS NULL) OR pu.concern_id = ?)";
+                  AND ((pb.source_type IN ('INWARD', 'SCAN') AND pb.program_id IS NULL) OR pu.concern_id = ?)";
         $params = [$batchId, $concernId, $concernId];
         if ($unitId !== null) {
-            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type IN ('INWARD', 'SCAN') AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
             $params[] = $unitId;
             $params[] = $unitId;
         }

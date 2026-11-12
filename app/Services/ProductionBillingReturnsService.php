@@ -384,8 +384,8 @@ class ProductionBillingReturnsService {
                         [$replacement['tag_code']]
                     );
                     $replacementClaim = Database::fetchOne(
-                        'SELECT id, status FROM production_bill_item_tags WHERE tag_code = ? FOR UPDATE',
-                        [$replacement['tag_code']]
+                        'SELECT id, status FROM production_bill_item_tags WHERE concern_id = ? AND tag_code = ? FOR UPDATE',
+                        [$concernId, $replacement['tag_code']]
                     );
                     if ($replacementClaim) {
                         if ($replacementClaim['status'] !== 'RETURNED' || !$returnedReplacement) {
@@ -397,9 +397,9 @@ class ProductionBillingReturnsService {
                         );
                     } else {
                         Database::execute(
-                            "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, qc_item_id, tag_code, status)
-                             VALUES (?, ?, ?, ?, 'BILLED')",
-                            [$billId, (int)$tag['bill_item_id'], (int)$replacement['qc_item_id'], $replacement['tag_code']]
+                            "INSERT INTO production_bill_item_tags (bill_id, bill_item_id, concern_id, qc_item_id, tag_code, status)
+                             VALUES (?, ?, ?, ?, ?, 'BILLED')",
+                            [$billId, (int)$tag['bill_item_id'], $concernId, (int)$replacement['qc_item_id'], $replacement['tag_code']]
                         );
                     }
                     if ($returnedReplacement) {

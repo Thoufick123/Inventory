@@ -59,12 +59,17 @@
                                         <i class="bi bi-box-seam me-1"></i><?= e($ab['batch_number']) ?>
                                     </div>
                                     <small class="text-muted"><i class="bi bi-calendar3 me-1"></i><?= formatDate($ab['created_at']) ?></small>
+                                    <?php if (!empty($ab['sale_bill_id'])): ?>
+                                        <div class="mt-1"><span class="badge bg-success-subtle text-success border border-success-subtle font-monospace"><i class="bi bi-receipt me-1"></i><?= e($ab['sale_bill_number']) ?> · ₹<?= number_format((float)($ab['sale_bill_total'] ?? 0), 2) ?></span></div>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="fw-bold text-dark"><?= e($ab['product_name']) ?></div>
                                     <small class="text-muted">
                                         <?php if (!empty($ab['program_id'])): ?>
                                             Program: <a href="<?= url('production/programs/view/' . $ab['program_id']) ?>" class="text-decoration-none fw-semibold"><?= e($ab['program_number']) ?></a>
+                                        <?php elseif (($ab['source_type'] ?? '') === 'SCAN'): ?>
+                                            Source: <span class="fw-semibold text-primary">QR Scan Batch</span>
                                         <?php else: ?>
                                             Source: <span class="fw-semibold text-info">Inwarded Inventory</span>
                                         <?php endif; ?>
@@ -87,11 +92,18 @@
                                     </span>
                                 </td>
                                 <td class="text-end">
-                                    <button type="button" 
-                                            class="btn btn-sm btn-primary fw-semibold shadow-xs" 
-                                            onclick='openDispatchModal(<?= json_encode($ab, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>)'>
-                                        <i class="bi bi-truck me-1"></i> Dispatch Now &rarr;
-                                    </button>
+                                    <div class="d-inline-flex gap-1 flex-wrap justify-content-end">
+                                        <?php if (!empty($ab['sale_bill_id'])): ?>
+                                            <a href="<?= url('production/batches/sale-bill/' . (int)$ab['id']) ?>" class="btn btn-sm btn-outline-success" title="View Sale Bill">
+                                                <i class="bi bi-receipt me-1"></i>Sale Bill
+                                            </a>
+                                        <?php endif; ?>
+                                        <button type="button" 
+                                                class="btn btn-sm btn-primary fw-semibold shadow-xs" 
+                                                onclick='openDispatchModal(<?= json_encode($ab, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>)'>
+                                            <i class="bi bi-truck me-1"></i> Dispatch Now &rarr;
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -155,6 +167,7 @@
                                     ($o['lr_number'] ?? '') . ' ' .
                                     ($o['status'] ?? '') . ' ' .
                                     ($o['created_by_name'] ?? '') . ' ' . 
+                                    ($o['sale_bill_number'] ?? '') . ' ' . 
                                     ($o['total_qty'] ?? '') . ' ' . 
                                     ($o['box_count'] ?? '')
                                 );
@@ -164,7 +177,12 @@
                                     <div class="fw-bold text-primary font-monospace"><?= e($o['outward_number']) ?></div>
                                     <small class="text-muted">Dispatched by <?= e($o['created_by_name'] ?? 'Staff') ?></small>
                                 </td>
-                                <td><code class="fw-bold text-dark"><?= e($o['batch_number']) ?></code></td>
+                                <td>
+                                    <code class="fw-bold text-dark"><?= e($o['batch_number']) ?></code>
+                                    <?php if (!empty($o['sale_bill_id'])): ?>
+                                        <div class="mt-1"><span class="badge bg-success-subtle text-success border border-success-subtle font-monospace"><i class="bi bi-receipt me-1"></i><?= e($o['sale_bill_number']) ?> · ₹<?= number_format((float)($o['sale_bill_total'] ?? 0), 2) ?></span></div>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?= e($o['product_name']) ?></td>
                                 <td><span class="badge bg-light text-dark border"><?= e($o['destination_concern_name'] ?: $o['warehouse_name'] ?: 'Unassigned') ?></span></td>
                                 <td class="text-success fw-bold"><?= number_format($o['total_qty']) ?> pcs (<?= $o['box_count'] ?> <?= $o['box_count'] == 1 ? 'box' : 'boxes' ?>)</td>
@@ -176,14 +194,24 @@
                                     <?php if (!empty($o['received_date'])): ?><small class="d-block text-muted mt-1">Received <?= e(formatDateTime($o['received_date'])) ?></small><?php endif; ?>
                                 </td>
                                 <td class="text-end">
-                                    <?php if (!empty($o['production_batch_id']) && hasPermission('batches', 'print')): ?>
-                                        <a href="<?= url('production/batches/label/' . (int)$o['production_batch_id']) ?>" target="_blank" class="btn btn-sm btn-outline-secondary fw-semibold" title="Print the QR label for receiving this outward batch">
-                                            <i class="bi bi-qr-code me-1"></i> Batch Label
-                                        </a>
-                                    <?php endif; ?>
-                                    <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" onclick="viewOutwardDispatchDetails(<?= $o['id'] ?>)" title="View Outward & Product Breakdown">
-                                        <i class="bi bi-eye me-1"></i> View
-                                    </button>
+                                    <div class="d-inline-flex gap-1 flex-wrap justify-content-end">
+                                        <?php if (!empty($o['sale_bill_id']) && !empty($o['production_batch_id'])): ?>
+                                            <a href="<?= url('production/batches/sale-bill/' . (int)$o['production_batch_id']) ?>" class="btn btn-sm btn-outline-success fw-semibold" title="View Batch Sale Bill">
+                                                <i class="bi bi-receipt me-1"></i>Sale Bill
+                                            </a>
+                                            <a href="<?= url('production/batches/sale-bill/print/' . (int)$o['production_batch_id']) ?>" target="_blank" class="btn btn-sm btn-outline-dark" title="Print Batch Sale Bill">
+                                                <i class="bi bi-printer"></i>
+                                            </a>
+                                        <?php endif; ?>
+                                        <?php if (!empty($o['production_batch_id']) && hasPermission('batches', 'print')): ?>
+                                            <a href="<?= url('production/batches/label/' . (int)$o['production_batch_id']) ?>" target="_blank" class="btn btn-sm btn-outline-secondary fw-semibold" title="Print the QR label for receiving this outward batch">
+                                                <i class="bi bi-qr-code me-1"></i> Batch Label
+                                            </a>
+                                        <?php endif; ?>
+                                        <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" onclick="viewOutwardDispatchDetails(<?= $o['id'] ?>)" title="View Outward & Product Breakdown">
+                                            <i class="bi bi-eye me-1"></i> View
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -305,7 +333,8 @@
                     </div>
                 </div>
             </div>
-            <div class="modal-footer bg-light py-2">
+            <div class="modal-footer bg-light py-2 justify-content-between">
+                <div id="vodSaleBillAction"></div>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
@@ -496,7 +525,23 @@ function viewOutwardDispatchDetails(outwardId) {
             statusBadge.className = `badge px-3 py-2 fs-7 ${outwardStatus === 'RECEIVED' ? 'bg-success' : (outwardStatus === 'DISCREPANCY' ? 'bg-warning text-dark' : 'bg-primary')}`;
             document.getElementById('vodBatchNumber').textContent = batch.batch_number || outward.batch_number || '—';
             document.getElementById('vodProductName').textContent = batch.product_name || outward.product_name || 'Finished Product';
-            document.getElementById('vodProgramNumber').textContent = batch.program_number || outward.program_number || '—';
+            document.getElementById('vodProgramNumber').textContent = batch.program_number || outward.program_number || ((batch.source_type || outward.source_type) === 'SCAN' ? 'QR Scan Batch' : 'Inwarded Stock');
+            const saleBatchId = batch.id || outward.production_batch_id;
+            const saleBillId = batch.sale_bill_id || outward.sale_bill_id;
+            const saleBillNum = batch.sale_bill_number || outward.sale_bill_number || '';
+            const saleAction = document.getElementById('vodSaleBillAction');
+            if (saleAction) {
+                if (saleBillId && saleBatchId) {
+                    const viewHref = '<?= url("production/batches/sale-bill") ?>/' + saleBatchId;
+                    const printHref = '<?= url("production/batches/sale-bill/print") ?>/' + saleBatchId;
+                    saleAction.innerHTML = `<div class="d-inline-flex gap-2">
+                        <a href="${viewHref}" class="btn btn-sm btn-success"><i class="bi bi-receipt me-1"></i>Sale Bill ${escapeHtml(saleBillNum)}</a>
+                        <a href="${printHref}" target="_blank" class="btn btn-sm btn-outline-dark"><i class="bi bi-printer me-1"></i>Print Sale Bill</a>
+                    </div>`;
+                } else {
+                    saleAction.innerHTML = '';
+                }
+            }
             document.getElementById('vodWarehouseName').textContent = batch.destination_concern_name || outward.destination_concern_name || batch.warehouse_name || outward.warehouse_name || 'Unassigned';
 
             const totalQty = parseInt(outward.total_qty || batch.total_qty || 0);

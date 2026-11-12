@@ -299,9 +299,10 @@ final class Database
                 'box_count' => $params[7],
                 'destination_warehouse_id' => $params[8],
                 'destination_concern_id' => $params[9],
-                'concern_id' => $params[10],
-                'status' => $params[11],
-                'prepared_by' => $params[12],
+                'sale_bill_id' => $params[10],
+                'concern_id' => $params[11],
+                'status' => $params[12],
+                'prepared_by' => $params[13],
             ];
             return 1;
         }
@@ -312,8 +313,12 @@ final class Database
                 'id' => self::$nextInsert,
                 'production_batch_id' => (int)$params[0],
                 'variant_id' => (int)$params[1],
-                'quantity' => (int)$params[2],
-                'piece_tags' => $params[3],
+                'qc_item_id' => $params[2],
+                'source_kind' => $params[3],
+                'source_location_type' => $params[4],
+                'source_location_id' => $params[5],
+                'quantity' => (int)$params[6],
+                'piece_tags' => $params[7],
             ];
             return 1;
         }
@@ -695,7 +700,7 @@ final class Database
             return array_values(self::$batchItems);
         }
 
-        if (str_contains($sql, 'FROM production_batch_items WHERE production_batch_id = ?')) {
+        if (str_contains($sql, 'FROM production_batch_items') && str_contains($sql, 'WHERE production_batch_id = ?')) {
             $bid = (int)$params[0];
             return array_values(array_filter(self::$batchItems, static fn(array $bi): bool => (int)$bi['production_batch_id'] === $bid));
         }
@@ -869,12 +874,6 @@ assertSame5(null, Database::$batches[$batchId]['program_id'], 'Inward batch stor
 assertSame5(1.0, StockService::getBalance(6, 'CONCERN', 2, 'AVAILABLE'), 'Packing inward batch moves 1 pc out of AVAILABLE');
 assertSame5(1.0, StockService::getBalance(6, 'CONCERN', 2, 'RESERVED'), 'Packing inward batch reserves 1 pc into RESERVED');
 
-Database::$batchItems[$batchId] = [
-    'production_batch_id' => $batchId,
-    'variant_id' => 6,
-    'quantity' => 1,
-    'piece_tags' => json_encode(['INW112601']),
-];
 $approved = ProductionService::approveProductionBatch($batchId, 9);
 assertTrue5($approved, 'approveProductionBatch handles NULL program_id inward batches cleanly');
 

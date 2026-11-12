@@ -55,6 +55,9 @@ $taxLabels = ['SGST' => 'SGST', 'CGST' => 'CGST', 'IGST' => 'IGST'];
     <div class="meta">
         <p><strong>Purchase Date:</strong> <?= e(formatDate($purchase['purchase_date'])) ?></p>
         <p><strong>Invoice / Bill No.:</strong> <?= e($purchase['invoice_number'] ?: '—') ?></p>
+        <?php if (!empty($purchase['source_batch_number'])): ?>
+            <p><strong>Inter-Concern Batch:</strong> <?= e($purchase['source_batch_number']) ?><?= !empty($purchase['source_sale_bill_number']) ? ' (Sale Bill ' . e($purchase['source_sale_bill_number']) . ')' : '' ?></p>
+        <?php endif; ?>
     </div>
 
     <table class="items">
@@ -64,15 +67,23 @@ $taxLabels = ['SGST' => 'SGST', 'CGST' => 'CGST', 'IGST' => 'IGST'];
             <?php
                 $taxType = $item['gst_type'] ?? 'LEGACY';
                 $itemTax = (float)($item['sgst_amount'] ?? 0) + (float)($item['cgst_amount'] ?? 0) + (float)($item['igst_amount'] ?? 0);
-                $description = $item['item_type'] === 'FABRIC_ROLL'
-                    ? trim(($item['item_name'] ?? '') . ' — ' . ($item['roll_number'] ?? '') . ' — ' . ($item['color'] ?? '') . ' / ' . ($item['design_name'] ?? ''), ' —/')
-                    : ($item['item_name'] ?? '');
+                if ($item['item_type'] === 'FABRIC_ROLL') {
+                    $description = trim(($item['item_name'] ?? '') . ' — ' . ($item['roll_number'] ?? '') . ' — ' . ($item['color'] ?? '') . ' / ' . ($item['design_name'] ?? ''), ' —/');
+                    $typeLabel = 'Fabric Roll';
+                } elseif ($item['item_type'] === 'FINISHED_GOODS') {
+                    $variantPart = trim(($item['size_name'] ?? '') . ' / ' . ($item['color_name'] ?? ''), ' /');
+                    $description = trim(($item['item_name'] ?? '') . (!empty($item['sku']) ? ' (' . $item['sku'] . ')' : '') . ($variantPart !== '' ? ' — ' . $variantPart : ''));
+                    $typeLabel = 'Finished Goods';
+                } else {
+                    $description = $item['item_name'] ?? '';
+                    $typeLabel = 'Other Garment Supply';
+                }
                 if ($taxType === 'LEGACY') $taxType = $itemTax > 0 ? 'SGST / CGST' : 'Exempted';
                 if ($taxType === 'BOTH') $taxType = 'SGST + CGST';
             ?>
             <tr>
                 <td><?= $index + 1 ?></td>
-                <td><?= e($description) ?><br><small><?= $item['item_type'] === 'FABRIC_ROLL' ? 'Fabric Roll' : 'Other Garment Supply' ?></small></td>
+                <td><?= e($description) ?><br><small><?= $typeLabel ?></small></td>
                 <td><?= number_format((float)$item['quantity'], 3) ?> <?= e($item['unit']) ?><?= !empty($item['weight_kg']) ? ' · ' . number_format((float)$item['weight_kg'], 2) . ' kg' : '' ?></td>
                 <td class="num"><?= e($currency) ?><?= number_format((float)$item['unit_price'], 2) ?></td>
                 <td class="num"><?= e($currency) ?><?= number_format((float)$item['base_amount'], 2) ?></td>

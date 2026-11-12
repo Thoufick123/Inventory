@@ -21,13 +21,14 @@ class ProductionOutward {
         $params = [$id, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type IN ('INWARD', 'SCAN') AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
             $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT po.*, 
                     pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
+                    pb.sale_bill_id, sb.bill_number as sale_bill_number, sb.total_amount as sale_bill_total, sb.payment_status as sale_bill_payment_status,
                     pp.program_number,
                     COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                     p.code as product_code,
@@ -38,6 +39,7 @@ class ProductionOutward {
                     ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
+             LEFT JOIN production_bills sb ON sb.id = pb.sale_bill_id
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
@@ -65,13 +67,14 @@ class ProductionOutward {
         $params = [$batchId, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type IN ('INWARD', 'SCAN') AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
             $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT po.*, 
                     pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
+                    pb.sale_bill_id, sb.bill_number as sale_bill_number, sb.total_amount as sale_bill_total, sb.payment_status as sale_bill_payment_status,
                     pp.program_number,
                     COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                     p.code as product_code,
@@ -82,6 +85,7 @@ class ProductionOutward {
                     ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
+             LEFT JOIN production_bills sb ON sb.id = pb.sale_bill_id
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
@@ -110,13 +114,14 @@ class ProductionOutward {
         $params = [$outwardNumber, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type IN ('INWARD', 'SCAN') AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
             $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT po.*, 
                     pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
+                    pb.sale_bill_id, sb.bill_number as sale_bill_number, sb.total_amount as sale_bill_total, sb.payment_status as sale_bill_payment_status,
                     pp.program_number,
                     COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                     p.code as product_code,
@@ -127,6 +132,7 @@ class ProductionOutward {
                     ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
+             LEFT JOIN production_bills sb ON sb.id = pb.sale_bill_id
              LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
@@ -155,6 +161,7 @@ class ProductionOutward {
         }
         $sql = "SELECT po.*, 
                        pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
+                       pb.sale_bill_id, sb.bill_number as sale_bill_number, sb.total_amount as sale_bill_total, sb.payment_status as sale_bill_payment_status,
                        pp.program_number,
                        COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                        w.name as warehouse_name,
@@ -164,6 +171,7 @@ class ProductionOutward {
                        ur.full_name as received_by_name
                 FROM production_outwards po
                 JOIN production_batches pb ON po.production_batch_id = pb.id
+                LEFT JOIN production_bills sb ON sb.id = pb.sale_bill_id
                 LEFT JOIN production_programs pp ON pb.program_id = pp.id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
@@ -175,7 +183,7 @@ class ProductionOutward {
         $params = [(int)$concernId];
 
         if ($scopedUnitId !== null && $scopedUnitId !== '') {
-            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type IN ('INWARD', 'SCAN') AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
             $params[] = (int)$scopedUnitId;
             $params[] = (int)$scopedUnitId;
         }
@@ -191,9 +199,9 @@ class ProductionOutward {
         }
 
         if (!empty($filters['search'])) {
-            $sql .= " AND (po.outward_number LIKE ? OR pb.batch_number LIKE ? OR po.vehicle_number LIKE ? OR po.driver_name LIKE ? OR po.transporter_name LIKE ? OR po.lr_number LIKE ? OR w.name LIKE ? OR dc.name LIKE ? OR pp.program_number LIKE ?)";
+            $sql .= " AND (po.outward_number LIKE ? OR pb.batch_number LIKE ? OR COALESCE(sb.bill_number, '') LIKE ? OR po.vehicle_number LIKE ? OR po.driver_name LIKE ? OR po.transporter_name LIKE ? OR po.lr_number LIKE ? OR w.name LIKE ? OR dc.name LIKE ? OR pp.program_number LIKE ?)";
             $search = '%' . $filters['search'] . '%';
-            $params = array_merge($params, array_fill(0, 9, $search));
+            $params = array_merge($params, array_fill(0, 10, $search));
         }
 
         $sql .= " ORDER BY po.created_at DESC";
@@ -230,7 +238,7 @@ class ProductionOutward {
                 if (empty($data['production_unit_id'])) {
                     $data['production_unit_id'] = !empty($pb['production_unit_id'])
                         ? (int)$pb['production_unit_id']
-                        : (($pb['source_type'] ?? '') === 'INWARD' && ($pb['source_location_type'] ?? '') === 'PRODUCTION_UNIT'
+                        : (in_array((string)($pb['source_type'] ?? ''), ['INWARD', 'SCAN'], true) && ($pb['source_location_type'] ?? '') === 'PRODUCTION_UNIT'
                             ? ($pb['source_location_id'] ?? null)
                             : null);
                 }

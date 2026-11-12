@@ -8,6 +8,7 @@
 <?php
 $fabricItems = array_values(array_filter($items, static fn(array $item): bool => $item['item_type'] === 'FABRIC_ROLL'));
 $supplyItems = array_values(array_filter($items, static fn(array $item): bool => $item['item_type'] === 'GENERAL_SUPPLY'));
+$finishedItems = array_values(array_filter($items, static fn(array $item): bool => $item['item_type'] === 'FINISHED_GOODS'));
 $fabricDescription = $fabricItems[0]['item_name'] ?? '';
 $knownUnits = ['PCS', 'KG', 'METRE', 'LITRE', 'BOX', 'PACK', 'PAIR', 'SET', 'BUNDLE'];
 $taxTypeForItem = static function (array $item): string {
@@ -196,6 +197,91 @@ $taxValueForItem = static function (array $item, string $type): float {
         </div>
     </div>
 
+    <?php if (!empty($finishedItems)): ?>
+    <div class="card shadow-sm border mb-4" id="editFinishedGoodsCard">
+        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div><h5 class="mb-0 fw-bold"><i class="bi bi-boxes me-2 text-success"></i>Finished Goods Items</h5><small class="text-muted">Update quantities, prices, or GST for purchased finished goods.</small></div>
+            <span class="badge bg-success-subtle text-success border"><?= count($finishedItems) ?> Item(s)</span>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" style="font-size:13px">
+                    <thead class="table-light small text-uppercase">
+                        <tr>
+                            <th>Product &amp; Variant</th>
+                            <th style="width:130px;">Qty (PCS) *</th>
+                            <th style="width:130px;">Unit Price *</th>
+                            <th style="width:140px;">GST Type</th>
+                            <th style="width:220px;">Tax Rate / Amount</th>
+                            <th class="text-end" style="width:110px;">Tax</th>
+                            <th class="text-end bg-success-subtle text-success" style="width:120px;">Line Total</th>
+                            <th style="width:45px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="editFinishedGoodsBody">
+                        <?php foreach ($finishedItems as $item):
+                            $key = (int)$item['id'];
+                            $gstType = $taxTypeForItem($item);
+                            $taxValue = $taxValueForItem($item, $gstType);
+                            $cgstValue = $gstType === 'BOTH' ? (float)($item['cgst_value'] ?? 0) : 0;
+                        ?>
+                            <tr class="fg-row" data-item-id="<?= $key ?>">
+                                <td>
+                                    <input type="hidden" name="items[<?= $key ?>][id]" value="<?= $key ?>">
+                                    <input type="hidden" name="items[<?= $key ?>][item_type]" value="FINISHED_GOODS">
+                                    <input type="hidden" name="items[<?= $key ?>][variant_id]" value="<?= (int)($item['variant_id'] ?? 0) ?>">
+                                    <input type="hidden" name="items[<?= $key ?>][sku]" value="<?= e($item['sku'] ?? '') ?>">
+                                    <input type="hidden" name="items[<?= $key ?>][size_name]" value="<?= e($item['size_name'] ?? '') ?>">
+                                    <input type="hidden" name="items[<?= $key ?>][color_name]" value="<?= e($item['color_name'] ?? '') ?>">
+                                    <input type="hidden" name="items[<?= $key ?>][unit]" value="PCS">
+                                    <input type="text" name="items[<?= $key ?>][item_name]" class="form-control form-control-sm fw-semibold text-uppercase mb-1" value="<?= e($item['item_name']) ?>" required>
+                                    <div class="small text-muted font-monospace">
+                                        <?= e($item['sku'] ?? '') ?>
+                                        <?php if (!empty($item['size_name']) || !empty($item['color_name'])): ?>
+                                            &middot; <?= e(trim(($item['size_name'] ?? '') . ' / ' . ($item['color_name'] ?? ''), ' /')) ?>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                                <td><input type="number" step="1" min="1" name="items[<?= $key ?>][quantity]" class="form-control form-control-sm fg-quantity fw-semibold" value="<?= (int)$item['quantity'] ?>" required></td>
+                                <td><input type="number" step="0.01" min="0" name="items[<?= $key ?>][unit_price]" class="form-control form-control-sm fg-price fw-semibold" value="<?= number_format((float)$item['unit_price'], 2, '.', '') ?>" required></td>
+                                <td>
+                                    <select name="items[<?= $key ?>][gst_type]" class="form-select form-select-sm item-gst-type">
+                                        <?php foreach (['EXEMPTED'=>'Exempted','BOTH'=>'SGST + CGST','SGST'=>'SGST','CGST'=>'CGST','IGST'=>'IGST'] as $type => $label): ?>
+                                            <option value="<?= e($type) ?>" <?= $gstType === $type ? 'selected' : '' ?>><?= e($label) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
+                                <td>
+                                    <div class="row g-1 align-items-center">
+                                        <div class="col-4 tax-mode-field">
+                                            <select name="items[<?= $key ?>][tax_mode]" class="form-select form-select-sm item-tax-mode">
+                                                <option value="PERCENT" <?= ($item['tax_input_type'] ?? '') !== 'AMOUNT' ? 'selected' : '' ?>>%</option>
+                                                <option value="AMOUNT" <?= ($item['tax_input_type'] ?? '') === 'AMOUNT' ? 'selected' : '' ?>>₹</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-4 tax-value-field">
+                                            <input type="number" step="0.01" min="0" name="items[<?= $key ?>][tax_value]" class="form-control form-control-sm item-tax-value" value="<?= e($taxValue) ?>">
+                                            <small class="d-none item-tax-label"></small>
+                                        </div>
+                                        <div class="col-4 tax-cgst-field">
+                                            <input type="number" step="0.01" min="0" name="items[<?= $key ?>][cgst_tax_value]" class="form-control form-control-sm item-cgst-value" value="<?= e($cgstValue) ?>">
+                                            <small class="d-none item-cgst-label"></small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="text-end fg-line-tax">₹0.00</td>
+                                <td class="text-end fw-bold text-success fg-line-total">₹0.00</td>
+                                <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger remove-fg" title="Remove item"><i class="bi bi-trash"></i></button></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot id="editFinishedGoodsFoot" class="table-light fw-bold"></tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <div class="card border shadow-sm mb-4"><div class="card-body">
         <div class="d-flex justify-content-between align-items-center mb-2"><span>Subtotal</span><strong id="purchaseSubtotal">₹0.00</strong></div>
         <div class="d-flex justify-content-between align-items-center mb-2"><span>Taxes</span><strong id="purchaseTaxes">₹0.00</strong></div>
@@ -342,9 +428,30 @@ $taxValueForItem = static function (array $item, string $type): float {
         supplyTableBody.innerHTML = supplyTableRows.length ? supplyTableRows.join('') : '<tr><td colspan="9" class="text-center text-muted py-4">Add garment supplies to see their purchase details.</td></tr>';
         supplyTableFoot.innerHTML = supplyTableRows.length ? `<tr><td colspan="5" class="text-end">Totals</td><td class="text-end">${money(supplyBase)}</td><td></td><td class="text-end">${money(supplyTax)}</td><td class="text-end text-success">${money(supplyTotal)}</td></tr>` : '';
 
-        subtotal += supplyBase;
-        taxes += supplyTax;
-        total += supplyTotal;
+        let fgBase = 0, fgTax = 0, fgTotal = 0;
+        const fgRows = Array.from(document.querySelectorAll('#editFinishedGoodsBody tr.fg-row')).filter(row => !row.classList.contains('d-none'));
+        fgRows.forEach(row => {
+            const quantity = Number(row.querySelector('.fg-quantity').value) || 0;
+            const unitPrice = Number(row.querySelector('.fg-price').value) || 0;
+            const base = quantity * unitPrice;
+            const tax = calculateTax(row, base);
+            const rowTotal = base + tax.amount;
+            fgBase += base;
+            fgTax += tax.amount;
+            fgTotal += rowTotal;
+            row.querySelector('.fg-line-tax').textContent = money(tax.amount);
+            row.querySelector('.fg-line-total').textContent = money(rowTotal);
+        });
+        const fgFoot = document.getElementById('editFinishedGoodsFoot');
+        if (fgFoot) {
+            fgFoot.innerHTML = fgRows.length
+                ? `<tr><td colspan="5" class="text-end">Finished Goods Totals (Base: ${money(fgBase)})</td><td class="text-end">${money(fgTax)}</td><td class="text-end text-success">${money(fgTotal)}</td><td></td></tr>`
+                : '';
+        }
+
+        subtotal += supplyBase + fgBase;
+        taxes += supplyTax + fgTax;
+        total += supplyTotal + fgTotal;
         document.getElementById('purchaseSubtotal').textContent = money(subtotal);
         document.getElementById('purchaseTaxes').textContent = money(taxes);
         document.getElementById('purchaseTotal').textContent = money(total);
@@ -445,6 +552,34 @@ $taxValueForItem = static function (array $item, string $type): float {
         card.querySelector('.item-tax-mode').addEventListener('change', () => { updateTaxFields(card); updateSummary(); });
         updateTaxFields(card);
     });
+    document.querySelectorAll('#editFinishedGoodsBody tr.fg-row').forEach(row => {
+        row.querySelectorAll('input,select').forEach(input => {
+            input.addEventListener('input', updateSummary);
+            input.addEventListener('change', updateSummary);
+        });
+        row.querySelector('.item-gst-type')?.addEventListener('change', () => { updateTaxFields(row); updateSummary(); });
+        row.querySelector('.item-tax-mode')?.addEventListener('change', () => { updateTaxFields(row); updateSummary(); });
+        row.querySelector('.remove-fg')?.addEventListener('click', () => {
+            const itemId = row.dataset.itemId;
+            if (itemId) {
+                let removeField = row.querySelector('.remove-item-value');
+                if (!removeField) {
+                    removeField = document.createElement('input');
+                    removeField.type = 'hidden';
+                    removeField.name = `items[${itemId}][remove_item]`;
+                    removeField.className = 'remove-item-value';
+                    removeField.value = '1';
+                    row.appendChild(removeField);
+                }
+                row.classList.add('d-none');
+                row.querySelectorAll('input,select').forEach(input => {
+                    if (!input.classList.contains('remove-item-value') && !input.name.endsWith('[id]') && !input.name.endsWith('[item_type]')) input.disabled = true;
+                });
+            }
+            updateSummary();
+        });
+        updateTaxFields(row);
+    });
     suppliesContainer.querySelectorAll('.supply-row').forEach(configureSupplyRow);
     document.getElementById('editFabricDescription').addEventListener('input', updateSummary);
     document.getElementById('addSupply').addEventListener('click', addSupplyRow);
@@ -452,9 +587,10 @@ $taxValueForItem = static function (array $item, string $type): float {
     form.addEventListener('submit', event => {
         const hasRoll = rollsContainer.querySelector('.roll-card');
         const hasSupply = suppliesContainer.querySelector('.supply-row:not(.d-none)');
-        if (!hasRoll && !hasSupply) {
+        const hasFg = document.querySelector('#editFinishedGoodsBody tr.fg-row:not(.d-none)');
+        if (!hasRoll && !hasSupply && !hasFg) {
             event.preventDefault();
-            alert('Add at least one fabric roll or general supply.');
+            alert('Keep at least one finished goods line, fabric roll, or general supply.');
         }
     });
     updateSummary();

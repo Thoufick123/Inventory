@@ -71,11 +71,12 @@
                 <thead class="table-light">
                     <tr>
                         <th>Batch #</th>
-                        <th>Program</th>
+                        <th>Program / Source</th>
                         <th>Product</th>
                         <th>Total Pieces</th>
                         <th>Box Count</th>
                         <th>Destination Concern / Warehouse</th>
+                        <th>Sale Bill</th>
                         <th>Packed By</th>
                         <th>Status</th>
                         <th class="text-end">Actions</th>
@@ -84,7 +85,7 @@
                 <tbody id="batchesTableBody">
                     <?php if (empty($batches)): ?>
                         <tr>
-                            <td colspan="9" class="text-center py-5 text-muted">
+                            <td colspan="10" class="text-center py-5 text-muted">
                                 <i class="bi bi-inbox fs-2 d-block mb-2 text-secondary"></i>
                                 <h6 class="fw-semibold mb-1"><?= (!empty($filters['status']) || !empty($filters['destination_warehouse_id']) || !empty($filters['search'])) ? 'No Matching Production Batches Found' : 'No Finished Production Batches Found' ?></h6>
                                 <p class="small text-muted mb-3">
@@ -119,6 +120,7 @@
                                     ($b['prepared_by_name'] ?? '') . ' ' . 
                                     ($b['status'] ?? '') . ' ' . 
                                     'batch #' . ($b['id'] ?? '') . ' ' . 
+                                    ($b['sale_bill_number'] ?? '') . ' ' . 
                                     'program #' . ($b['program_id'] ?? '')
                                 );
                             ?>
@@ -136,6 +138,8 @@
                                         <a href="<?= url('production/programs/view/' . $b['program_id']) ?>" class="text-decoration-none fw-semibold">
                                             <?= e($b['program_number'] ?: ('Program #' . $b['program_id'])) ?>
                                         </a>
+                                    <?php elseif (($b['source_type'] ?? '') === 'SCAN'): ?>
+                                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">QR Scan Batch</span>
                                     <?php else: ?>
                                         <span class="badge bg-info-subtle text-info border border-info-subtle">Inwarded Stock</span>
                                     <?php endif; ?>
@@ -146,10 +150,26 @@
                                 <td class="text-success fw-bold"><?= number_format($b['total_qty']) ?> pcs</td>
                                 <td><span class="fw-semibold"><?= number_format($b['box_count']) ?></span> boxes</td>
                                 <td><span class="badge bg-light text-dark border"><?= e($b['destination_concern_name'] ?: $b['warehouse_name'] ?: 'Unassigned') ?></span></td>
+                                <td>
+                                    <?php if (!empty($b['sale_bill_id'])): ?>
+                                        <div class="fw-semibold font-monospace small text-success"><?= e($b['sale_bill_number']) ?></div>
+                                        <small class="text-muted">₹<?= number_format((float)($b['sale_bill_total'] ?? 0), 2) ?></small>
+                                    <?php else: ?>
+                                        <span class="text-muted small">Internal Transfer</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?= e($b['prepared_by_name'] ?: 'Staff') ?></td>
                                 <td><span class="badge <?= $statusClass ?>"><?= e($b['status']) ?></span></td>
                                 <td class="text-end">
-                                    <div class="d-inline-flex gap-1">
+                                    <div class="d-inline-flex gap-1 flex-wrap justify-content-end">
+                                        <?php if (!empty($b['sale_bill_id'])): ?>
+                                            <a href="<?= url('production/batches/sale-bill/' . $b['id']) ?>" class="btn btn-sm btn-outline-success" title="View Batch Sale Bill">
+                                                <i class="bi bi-receipt me-1"></i>Sale Bill
+                                            </a>
+                                            <a href="<?= url('production/batches/sale-bill/print/' . $b['id']) ?>" target="_blank" class="btn btn-sm btn-outline-dark" title="Print Batch Sale Bill">
+                                                <i class="bi bi-printer"></i>
+                                            </a>
+                                        <?php endif; ?>
                                         <a href="<?= url('production/batches/label/' . $b['id']) ?>" target="_blank" class="btn btn-sm btn-outline-secondary" title="Print the outward batch QR label for inward receiving">
                                             <i class="bi bi-qr-code me-1"></i> Batch Label
                                         </a>
@@ -280,7 +300,8 @@
                     </div>
                 </div>
             </div>
-            <div class="modal-footer bg-light py-2">
+            <div class="modal-footer bg-light py-2 justify-content-between">
+                <div id="vbdSaleBillAction"></div>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
@@ -339,7 +360,21 @@ function viewBatchDispatchDetails(batchId) {
             if (elProdName) elProdName.textContent = batch.product_name || 'Finished Product';
 
             const elProgNum = document.getElementById('vbdProgramNumber');
-            if (elProgNum) elProgNum.textContent = batch.program_number || (batch.program_id ? ('Program #' + batch.program_id) : 'Inwarded Stock');
+            if (elProgNum) elProgNum.textContent = batch.program_number || (batch.program_id ? ('Program #' + batch.program_id) : (batch.source_type === 'SCAN' ? 'QR Scan Batch' : 'Inwarded Stock'));
+
+            const saleAction = document.getElementById('vbdSaleBillAction');
+            if (saleAction) {
+                if (batch.sale_bill_id) {
+                    const viewHref = '<?= url("production/batches/sale-bill") ?>/' + batch.id;
+                    const printHref = '<?= url("production/batches/sale-bill/print") ?>/' + batch.id;
+                    saleAction.innerHTML = `<div class="d-inline-flex gap-2">
+                        <a href="${viewHref}" class="btn btn-sm btn-success"><i class="bi bi-receipt me-1"></i>Sale Bill ${escapeHtml(batch.sale_bill_number || '')}</a>
+                        <a href="${printHref}" target="_blank" class="btn btn-sm btn-outline-dark"><i class="bi bi-printer me-1"></i>Print Sale Bill</a>
+                    </div>`;
+                } else {
+                    saleAction.innerHTML = '';
+                }
+            }
 
             const elWhName = document.getElementById('vbdWarehouseName');
             if (elWhName) elWhName.textContent = batch.destination_concern_name || batch.warehouse_name || 'Unassigned';

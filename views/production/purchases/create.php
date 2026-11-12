@@ -1,13 +1,81 @@
+<?php
+$batchPrefill = $batchPrefill ?? null;
+$availableBatchPurchases = $availableBatchPurchases ?? [];
+$prefillBatch = $batchPrefill['batch'] ?? null;
+$prefillInward = $batchPrefill['inward'] ?? null;
+$prefillMatchedSellerId = !empty($batchPrefill['matchedSeller']['id']) ? (int)$batchPrefill['matchedSeller']['id'] : 0;
+$prefillItems = $batchPrefill['prefillItems'] ?? [];
+$defaultPurchaseDate = !empty($prefillBatch['bill_date']) ? $prefillBatch['bill_date'] : date('Y-m-d');
+$defaultInvoiceNo = !empty($prefillBatch['bill_number']) ? $prefillBatch['bill_number'] : (!empty($prefillBatch['batch_number']) ? $prefillBatch['batch_number'] : '');
+$defaultNotes = $prefillBatch ? trim('Purchase Bill against Batch ' . ($prefillBatch['batch_number'] ?? '') . (!empty($prefillBatch['bill_number']) ? ' / Sale Bill ' . $prefillBatch['bill_number'] : '')) : '';
+?>
 <div class="page-header mb-4 d-flex align-items-center justify-content-between flex-wrap gap-2">
     <div>
         <h2 class="mb-1"><i class="bi bi-bag-plus me-2 text-primary"></i>Record Production Purchase</h2>
-        <span class="text-muted">Record supplier invoices, fabric rolls, and other garment supplies.</span>
+        <span class="text-muted">Record supplier invoices, inter-concern finished goods bills, fabric rolls, and garment supplies.</span>
     </div>
     <a href="<?= url('production/purchases') ?>" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Back to Purchases</a>
 </div>
 
+<?php if ($prefillBatch): ?>
+<div class="alert alert-success border border-success-subtle shadow-sm mb-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+        <div class="fw-bold"><i class="bi bi-link-45deg me-1"></i>Recording Purchase Bill from Inter-Concern Batch <?= e($prefillBatch['batch_number']) ?></div>
+        <div class="small">
+            Sender: <strong><?= e($prefillBatch['source_concern_name']) ?></strong>
+            <?php if (!empty($prefillBatch['bill_number'])): ?>
+                &bull; Sender Sale Bill: <strong class="font-monospace"><?= e($prefillBatch['bill_number']) ?></strong> (₹<?= number_format((float)($prefillBatch['sale_bill_total'] ?? 0), 2) ?>)
+            <?php endif; ?>
+            <?php if ($prefillInward): ?>
+                &bull; Inward GRN: <strong class="font-monospace"><?= e($prefillInward['grn_number']) ?></strong>
+            <?php else: ?>
+                &bull; <span class="text-warning-emphasis fw-semibold">Not yet inwarded (using billed quantities)</span>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <?php if (!empty($prefillBatch['sale_bill_id'])): ?>
+            <a href="<?= url('production/purchases/sale-bill/' . (int)$prefillBatch['id']) ?>" target="_blank" class="btn btn-sm btn-outline-success">
+                <i class="bi bi-receipt me-1"></i>View Sender Sale Bill
+            </a>
+        <?php endif; ?>
+        <a href="<?= url('production/purchases/create') ?>" class="btn btn-sm btn-outline-secondary">Clear Batch Import</a>
+    </div>
+</div>
+<?php elseif (!empty($availableBatchPurchases)): ?>
+<div class="card border-primary-subtle bg-primary bg-opacity-10 mb-4">
+    <div class="card-body py-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-9">
+                <label class="form-label fw-semibold text-primary mb-1" for="importBatchSelect">
+                    <i class="bi bi-box-arrow-in-down me-1"></i>Import Inter-Concern Sale Bill / Batch
+                </label>
+                <select class="form-select form-select-sm" id="importBatchSelect">
+                    <option value="">-- Select a dispatched / inwarded batch with Sale Bill to record its Purchase Bill --</option>
+                    <?php foreach ($availableBatchPurchases as $abp): ?>
+                        <option value="<?= (int)$abp['batch_id'] ?>" data-inward-id="<?= (int)($abp['inward_id'] ?? 0) ?>">
+                            <?= e($abp['batch_number']) ?> · From <?= e($abp['source_concern_name']) ?> · Sale Bill <?= e($abp['sale_bill_number']) ?> (₹<?= number_format((float)($abp['sale_bill_total'] ?? 0), 2) ?>)<?= !empty($abp['grn_number']) ? ' · GRN ' . e($abp['grn_number']) : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button type="button" class="btn btn-sm btn-primary w-100" onclick="importSelectedBatchPurchase()">
+                    <i class="bi bi-download me-1"></i>Load Sale Bill Items
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 <form method="POST" action="<?= url('production/purchases/store') ?>" enctype="multipart/form-data" id="productionPurchaseForm">
     <?= CSRF::field() ?>
+    <?php if ($prefillBatch): ?>
+        <input type="hidden" name="source_batch_id" value="<?= (int)$prefillBatch['id'] ?>">
+        <input type="hidden" name="source_sale_bill_id" value="<?= (int)($prefillBatch['sale_bill_id'] ?? 0) ?>">
+        <input type="hidden" name="source_inward_id" value="<?= (int)($prefillInward['id'] ?? 0) ?>">
+    <?php endif; ?>
     <div class="card shadow-sm border mb-4">
         <div class="card-header bg-white py-3"><h5 class="mb-0 fw-bold"><i class="bi bi-receipt me-2 text-primary"></i>Purchase &amp; Supplier Details</h5></div>
         <div class="card-body">
@@ -26,8 +94,22 @@
                     <label class="form-label required" for="purchaseSeller">Supplier *</label>
                     <select class="form-select" name="seller_id" id="purchaseSeller" required>
                         <option value="">-- Select registered supplier --</option>
+                        <?php if ($prefillBatch): ?>
+                            <option value="__AUTO_CONCERN_SUPPLIER__"
+                                <?= $prefillMatchedSellerId <= 0 ? 'selected' : '' ?>
+                                data-supplier-name="<?= e($prefillBatch['source_concern_name']) ?>"
+                                data-supplier-company="<?= e($prefillBatch['source_concern_name']) ?>"
+                                data-supplier-phone="—"
+                                data-supplier-email="—"
+                                data-supplier-gst="—"
+                                data-supplier-city="Inter-Concern Supplier"
+                                data-supplier-state=""
+                                data-supplier-address="Auto-linked to sending concern on save"
+                                data-supplier-payment-terms="Inter-concern settlement">Auto-register Sender Concern (<?= e($prefillBatch['source_concern_name']) ?>)</option>
+                        <?php endif; ?>
                         <?php foreach ($sellers as $seller): ?>
                             <option value="<?= (int)$seller['id'] ?>"
+                                <?= $prefillMatchedSellerId === (int)$seller['id'] ? 'selected' : '' ?>
                                 data-supplier-name="<?= e($seller['name'] ?? '') ?>"
                                 data-supplier-company="<?= e($seller['company'] ?? '') ?>"
                                 data-supplier-phone="<?= e($seller['phone'] ?? '') ?>"
@@ -39,15 +121,15 @@
                                 data-supplier-payment-terms="<?= e($seller['payment_terms'] ?? '') ?>"><?= e($seller['company'] ?: $seller['name']) ?><?= $seller['company'] ? ' — ' . e($seller['name']) : '' ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <?php if (empty($sellers)): ?><small class="text-danger">Add a supplier profile before recording a purchase.</small><?php endif; ?>
+                    <?php if (empty($sellers) && !$prefillBatch): ?><small class="text-danger">Add a supplier profile before recording a purchase.</small><?php endif; ?>
                 </div>
                 <div class="col-md-3">
                     <label class="form-label required" for="purchaseDate">Purchase Date *</label>
-                    <input type="date" class="form-control" name="purchase_date" id="purchaseDate" required value="<?= e(date('Y-m-d')) ?>">
+                    <input type="date" class="form-control" name="purchase_date" id="purchaseDate" required value="<?= e($defaultPurchaseDate) ?>">
                 </div>
                 <div class="col-md-4">
                     <label class="form-label" for="invoiceNumber">Invoice / Bill Number</label>
-                    <input type="text" class="form-control" name="invoice_number" id="invoiceNumber" maxlength="100">
+                    <input type="text" class="form-control" name="invoice_number" id="invoiceNumber" maxlength="100" value="<?= e($defaultInvoiceNo) ?>">
                 </div>
                 <div class="col-md-6">
                     <label class="form-label" for="purchaseDocument">Tax Invoice / Bill Attachment (Optional)</label>
@@ -56,7 +138,7 @@
                 </div>
                 <div class="col-md-6">
                     <label class="form-label" for="purchaseNotes">Purchase Notes</label>
-                    <input type="text" class="form-control" name="notes" id="purchaseNotes" maxlength="500">
+                    <input type="text" class="form-control" name="notes" id="purchaseNotes" maxlength="500" value="<?= e($defaultNotes) ?>">
                 </div>
                 <div class="col-12 d-none" id="selectedSupplierDetails" aria-live="polite">
                     <div class="border rounded bg-light p-3">
@@ -76,6 +158,101 @@
             </div>
         </div>
     </div>
+
+    <?php if (!empty($prefillItems)): ?>
+    <div class="card shadow-sm border mb-4" id="finishedGoodsCard">
+        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h5 class="mb-0 fw-bold"><i class="bi bi-boxes me-2 text-success"></i>Finished Goods Items (Inter-Concern Sale Bill)</h5>
+                <small class="text-muted">Copied from sender's Sale Bill. Stock is already posted by Production Inward — saving records this invoice for Purchases &amp; Accounting only.</small>
+            </div>
+            <span class="badge bg-success-subtle text-success border"><?= count($prefillItems) ?> Item(s)</span>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" style="font-size:13px">
+                    <thead class="table-light small text-uppercase">
+                        <tr>
+                            <th>Product &amp; Variant</th>
+                            <th style="width: 140px;">Qty (PCS) *</th>
+                            <th style="width: 130px;">Unit Price *</th>
+                            <th style="width: 140px;">GST Type</th>
+                            <th style="width: 220px;">Tax Rate / Amount</th>
+                            <th class="text-end" style="width: 110px;">Tax</th>
+                            <th class="text-end bg-success-subtle text-success" style="width: 120px;">Line Total</th>
+                            <th style="width: 45px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="finishedGoodsBody">
+                        <?php foreach ($prefillItems as $fgIdx => $fg): ?>
+                            <?php $fgKey = 'fg_' . $fgIdx; ?>
+                            <tr class="fg-row">
+                                <td>
+                                    <input type="hidden" name="items[<?= $fgKey ?>][item_type]" value="FINISHED_GOODS">
+                                    <input type="hidden" name="items[<?= $fgKey ?>][variant_id]" value="<?= (int)($fg['variant_id'] ?? 0) ?>">
+                                    <input type="hidden" name="items[<?= $fgKey ?>][sku]" value="<?= e($fg['sku'] ?? '') ?>">
+                                    <input type="hidden" name="items[<?= $fgKey ?>][size_name]" value="<?= e($fg['size_name'] ?? '') ?>">
+                                    <input type="hidden" name="items[<?= $fgKey ?>][color_name]" value="<?= e($fg['color_name'] ?? '') ?>">
+                                    <input type="hidden" name="items[<?= $fgKey ?>][unit]" value="PCS">
+                                    <input type="text" name="items[<?= $fgKey ?>][item_name]" class="form-control form-control-sm fw-semibold text-uppercase mb-1" value="<?= e($fg['item_name'] ?? 'FINISHED GARMENT') ?>" required>
+                                    <div class="small text-muted">
+                                        <?php if (!empty($fg['sku'])): ?><span class="font-monospace"><?= e($fg['sku']) ?></span><?php endif; ?>
+                                        <?php if (!empty($fg['size_name']) || !empty($fg['color_name'])): ?>
+                                            &middot; <?= e(trim(($fg['size_name'] ?? '') . ' / ' . ($fg['color_name'] ?? ''), ' /')) ?>
+                                        <?php endif; ?>
+                                        &middot; Billed: <?= number_format((int)($fg['billed_qty'] ?? 0)) ?> pcs
+                                        <?php if ($prefillInward): ?>
+                                            &middot; Good Inward: <span class="text-success fw-semibold"><?= number_format((int)($fg['received_good_qty'] ?? 0)) ?> pcs</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                                <td>
+                                    <input type="number" step="1" min="1" name="items[<?= $fgKey ?>][quantity]" class="form-control form-control-sm fg-quantity fw-semibold" value="<?= max(1, (int)($fg['quantity'] ?? 1)) ?>" required>
+                                </td>
+                                <td>
+                                    <input type="number" step="0.01" min="0" name="items[<?= $fgKey ?>][unit_price]" class="form-control form-control-sm fg-price fw-semibold" value="<?= number_format((float)($fg['unit_price'] ?? 0), 2, '.', '') ?>" required>
+                                </td>
+                                <td>
+                                    <select name="items[<?= $fgKey ?>][gst_type]" class="form-select form-select-sm item-gst-type">
+                                        <option value="EXEMPTED" <?= ($fg['gst_type'] ?? '') === 'EXEMPTED' ? 'selected' : '' ?>>Exempted</option>
+                                        <option value="BOTH" <?= ($fg['gst_type'] ?? '') === 'BOTH' ? 'selected' : '' ?>>SGST + CGST</option>
+                                        <option value="SGST" <?= ($fg['gst_type'] ?? '') === 'SGST' ? 'selected' : '' ?>>SGST</option>
+                                        <option value="CGST" <?= ($fg['gst_type'] ?? '') === 'CGST' ? 'selected' : '' ?>>CGST</option>
+                                        <option value="IGST" <?= ($fg['gst_type'] ?? '') === 'IGST' ? 'selected' : '' ?>>IGST</option>
+                                    </select>
+                                </td>
+                                <td>
+                                    <div class="row g-1 align-items-center">
+                                        <div class="col-4 tax-mode-field">
+                                            <select name="items[<?= $fgKey ?>][tax_mode]" class="form-select form-select-sm item-tax-mode">
+                                                <option value="PERCENT" <?= ($fg['tax_mode'] ?? 'PERCENT') === 'PERCENT' ? 'selected' : '' ?>>%</option>
+                                                <option value="AMOUNT" <?= ($fg['tax_mode'] ?? '') === 'AMOUNT' ? 'selected' : '' ?>>₹</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-4 tax-value-field">
+                                            <input type="number" step="0.01" min="0" name="items[<?= $fgKey ?>][tax_value]" class="form-control form-control-sm item-tax-value" value="<?= number_format((float)($fg['tax_value'] ?? 0), 2, '.', '') ?>" title="Tax Value">
+                                            <small class="d-none item-tax-label"></small>
+                                        </div>
+                                        <div class="col-4 tax-cgst-field">
+                                            <input type="number" step="0.01" min="0" name="items[<?= $fgKey ?>][cgst_tax_value]" class="form-control form-control-sm item-cgst-value" value="<?= number_format((float)($fg['cgst_tax_value'] ?? 0), 2, '.', '') ?>" title="CGST Value">
+                                            <small class="d-none item-cgst-label"></small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="text-end fg-line-tax">₹0.00</td>
+                                <td class="text-end fw-bold text-success fg-line-total">₹0.00</td>
+                                <td class="text-end">
+                                    <button type="button" class="btn btn-sm btn-outline-danger remove-fg" title="Remove row"><i class="bi bi-trash"></i></button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot id="finishedGoodsFoot" class="table-light fw-bold"></tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <div class="card shadow-sm border mb-4">
         <div class="card-header bg-white py-3">
@@ -401,8 +578,29 @@
             }).join('');
             tableFoot.innerHTML = `<tr><td colspan="5" class="text-end">Totals</td><td class="text-end">${money(supplyTotals.base)}</td><td></td><td class="text-end">${money(supplyTotals.tax)}</td><td class="text-end text-success">${money(supplyTotals.total)}</td></tr>`;
         }
-        const subtotal = rollTotals.base + supplyTotals.base;
-        const totalTax = rollTotals.tax + supplyTotals.tax;
+        const fgRows = Array.from(document.querySelectorAll('#finishedGoodsBody tr.fg-row'));
+        const fgTotals = {base: 0, tax: 0, total: 0};
+        fgRows.forEach(row => {
+            const quantity = Number(row.querySelector('.fg-quantity').value) || 0;
+            const unitPrice = Number(row.querySelector('.fg-price').value) || 0;
+            const base = quantity * unitPrice;
+            const tax = calculateItemTax(row, base);
+            const total = base + tax.amount;
+            fgTotals.base += base;
+            fgTotals.tax += tax.amount;
+            fgTotals.total += total;
+            row.querySelector('.fg-line-tax').textContent = money(tax.amount);
+            row.querySelector('.fg-line-total').textContent = money(total);
+        });
+        const fgFoot = document.getElementById('finishedGoodsFoot');
+        if (fgFoot) {
+            fgFoot.innerHTML = fgRows.length
+                ? `<tr><td colspan="5" class="text-end">Finished Goods Subtotal / Tax / Total (Base: ${money(fgTotals.base)})</td><td class="text-end">${money(fgTotals.tax)}</td><td class="text-end text-success">${money(fgTotals.total)}</td><td></td></tr>`
+                : '';
+        }
+
+        const subtotal = rollTotals.base + supplyTotals.base + fgTotals.base;
+        const totalTax = rollTotals.tax + supplyTotals.tax + fgTotals.tax;
         document.getElementById('purchaseSubtotal').textContent = money(subtotal);
         document.getElementById('purchaseTaxes').textContent = money(totalTax);
         document.getElementById('purchaseTotal').textContent = money(subtotal + totalTax);
@@ -553,6 +751,32 @@
         bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseLabelsModal')).show();
     }
 
+    window.importSelectedBatchPurchase = function() {
+        const sel = document.getElementById('importBatchSelect');
+        if (!sel || !sel.value) {
+            alert('Select a dispatched or received batch first.');
+            return;
+        }
+        const inwardId = sel.options[sel.selectedIndex]?.dataset?.inwardId || '';
+        let targetUrl = '<?= url('production/purchases/create') ?>?from_batch_id=' + encodeURIComponent(sel.value);
+        if (inwardId && Number(inwardId) > 0) {
+            targetUrl += '&inward_id=' + encodeURIComponent(inwardId);
+        }
+        window.location.href = targetUrl;
+    };
+
+    const hasBatchPrefill = <?= $prefillBatch ? 'true' : 'false' ?>;
+    document.querySelectorAll('#finishedGoodsBody tr.fg-row').forEach(row => {
+        row.querySelectorAll('input,select').forEach(input => {
+            input.addEventListener('input', updateTotal);
+            input.addEventListener('change', updateTotal);
+        });
+        row.querySelector('.item-gst-type')?.addEventListener('change', () => { updateTaxInputs(row); updateTotal(); });
+        row.querySelector('.item-tax-mode')?.addEventListener('change', () => { updateTaxInputs(row); updateTotal(); });
+        row.querySelector('.remove-fg')?.addEventListener('click', () => { row.remove(); updateTotal(); });
+        updateTaxInputs(row);
+    });
+
     document.getElementById('addFabricRoll').addEventListener('click', addRoll);
     document.getElementById('addSupply').addEventListener('click', addSupply);
     document.getElementById('previewLabels').addEventListener('click', previewLabels);
@@ -566,14 +790,20 @@
             nextSequence = Number(response.data.start_seq);
             updateCodes();
         })
-        .catch(error => { console.error(error); alert('Could not load the next fabric roll code. Refresh the page before recording the purchase.'); });
+        .catch(error => {
+            console.error(error);
+            if (!hasBatchPrefill) {
+                alert('Could not load the next fabric roll code. Refresh the page before recording the purchase.');
+            }
+        });
 
     form.addEventListener('submit', event => {
         const hasRoll = rollsContainer.querySelector('.roll-card');
         const hasSupply = suppliesContainer.querySelector('.supply-row');
-        if (!hasRoll && !hasSupply) {
+        const hasFinishedGoods = document.querySelector('#finishedGoodsBody tr.fg-row');
+        if (!hasRoll && !hasSupply && !hasFinishedGoods) {
             event.preventDefault();
-            alert('Add at least one fabric roll or general supply.');
+            alert('Add at least one finished goods line, fabric roll, or general supply.');
             return;
         }
         if (hasRoll && !document.getElementById('fabricDescription').value.trim()) {
@@ -581,6 +811,10 @@
             document.getElementById('fabricDescription').focus();
         }
     });
-    addRoll();
+    if (!hasBatchPrefill) {
+        addRoll();
+    } else {
+        updateTotal();
+    }
 })();
 </script>
