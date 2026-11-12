@@ -27,7 +27,7 @@ $reportType = 'profitability';
                     <div class="text-uppercase small fw-bold text-success" style="font-size: 0.72rem; letter-spacing: 0.5px;">Gross Revenue</div>
                     <div class="fs-4 fw-bold text-dark mt-1 font-monospace">₹<?= number_format($pnl['gross_revenue'], 2) ?></div>
                     <div class="small text-muted mt-1" style="font-size: 0.75rem;">
-                        <i class="bi bi-shop me-1"></i>WH: ₹<?= number_format($pnl['wh_sales_revenue'], 2) ?> &bull; POS: ₹<?= number_format($pnl['shop_sales_revenue'], 2) ?>
+                        <i class="bi bi-shop me-1"></i>WH: ₹<?= number_format($pnl['wh_sales_revenue'], 2) ?> &bull; POS: ₹<?= number_format($pnl['shop_sales_revenue'], 2) ?> &bull; Prod: ₹<?= number_format((float)($pnl['prod_sales_revenue'] ?? 0), 2) ?>
                     </div>
                 </div>
                 <div class="bg-success text-white p-2.5 rounded-3 shadow-xs">
@@ -192,6 +192,12 @@ $reportType = 'profitability';
                         <td class="ps-5">&bull; Retail Shop POS Collections</td>
                         <td><span class="badge bg-success-subtle text-success">Retail POS</span></td>
                         <td class="text-end font-monospace">₹<?= number_format($pnl['shop_sales_revenue'], 2) ?></td>
+                        <td class="text-end pe-4"></td>
+                    </tr>
+                    <tr>
+                        <td class="ps-5">&bull; Production &amp; Concern Billing Sales</td>
+                        <td><span class="badge bg-success-subtle text-success">Production Billing</span></td>
+                        <td class="text-end font-monospace">₹<?= number_format((float)($pnl['prod_sales_revenue'] ?? 0), 2) ?></td>
                         <td class="text-end pe-4"></td>
                     </tr>
                     <tr>

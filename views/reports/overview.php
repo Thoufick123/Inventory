@@ -239,6 +239,19 @@ if (!empty($monthlyTrend)) {
 
                     <div class="list-group-item d-flex align-items-center justify-content-between px-0 py-2.5 border-bottom">
                         <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-success rounded-circle p-2"><i class="bi bi-receipt-cutoff"></i></span>
+                            <div>
+                                <div class="fw-semibold text-dark">Production &amp; Concern Billing</div>
+                                <small class="text-muted">QR-scanned finished goods &amp; concern invoices</small>
+                            </div>
+                        </div>
+                        <div class="text-end font-monospace fw-bold text-dark">
+                            ₹<?= number_format((float)($pnl['prod_sales_revenue'] ?? 0), 2) ?>
+                        </div>
+                    </div>
+
+                    <div class="list-group-item d-flex align-items-center justify-content-between px-0 py-2.5 border-bottom">
+                        <div class="d-flex align-items-center gap-2">
                             <span class="badge bg-warning text-dark rounded-circle p-2"><i class="bi bi-scissors"></i></span>
                             <div>
                                 <div class="fw-semibold text-dark">Cutting Scrap / Wastage Sales</div>

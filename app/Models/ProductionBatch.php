@@ -21,17 +21,19 @@ class ProductionBatch {
         $params = [$id, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = ' AND pp.production_unit_id = ?';
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT pb.*, 
                     pp.program_number, pp.target_date, pp.name as program_name, pp.production_unit_id,
-                    COALESCE(p.name, pp.name, 'Finished Product') as product_name, p.code as product_code,
+                    COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
+                    p.code as product_code,
                     w.name as warehouse_name, w.code as warehouse_code,
                     dc.name as destination_concern_name,
-                    COALESCE(pu.name, 'Main Production Facility') as production_unit_name,
-                    COALESCE(pu.code, 'PU1') as production_unit_code,
+                    COALESCE(pu.name, CASE WHEN pb.source_type = 'INWARD' THEN CONCAT(COALESCE(sc_src.name, 'Concern'), ' (Inward Stock)') ELSE 'Main Production Facility' END) as production_unit_name,
+                    COALESCE(pu.code, CASE WHEN pb.source_type = 'INWARD' THEN pb.source_location_type ELSE 'PU1' END) as production_unit_code,
                     pu.manager_name as production_unit_manager,
                     pu.phone as production_unit_phone,
                     pu.address as production_unit_address,
@@ -48,6 +50,7 @@ class ProductionBatch {
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+             LEFT JOIN concerns sc_src ON pb.concern_id = sc_src.id
              LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN users u_prep ON pb.prepared_by = u_prep.id
              LEFT JOIN users u_appr ON pb.approved_by = u_appr.id
@@ -73,16 +76,17 @@ class ProductionBatch {
         $params = [$batchNumber, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = ' AND pp.production_unit_id = ?';
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT pb.*, pp.program_number, pp.name as program_name, pp.production_unit_id,
-                    COALESCE(p.name, pp.name, 'Finished Product') as product_name,
+                    COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                     w.name as warehouse_name, w.code as warehouse_code,
                     dc.name as destination_concern_name,
-                    COALESCE(pu.name, 'Main Production Facility') as production_unit_name,
-                    COALESCE(pu.code, 'PU1') as production_unit_code,
+                    COALESCE(pu.name, CASE WHEN pb.source_type = 'INWARD' THEN CONCAT(COALESCE(sc_src.name, 'Concern'), ' (Inward Stock)') ELSE 'Main Production Facility' END) as production_unit_name,
+                    COALESCE(pu.code, CASE WHEN pb.source_type = 'INWARD' THEN pb.source_location_type ELSE 'PU1' END) as production_unit_code,
                     pu.manager_name as production_unit_manager,
                     po.id as outward_id,
                     po.outward_number,
@@ -95,6 +99,7 @@ class ProductionBatch {
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+             LEFT JOIN concerns sc_src ON pb.concern_id = sc_src.id
              LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN production_outwards po ON po.production_batch_id = pb.id
              LEFT JOIN users u_disp ON po.created_by = u_disp.id
@@ -121,13 +126,13 @@ class ProductionBatch {
                        pp.program_number,
                        pp.name as program_name,
                        pp.production_unit_id,
-                       COALESCE(p.name, pp.name, 'Finished Product') as product_name,
+                       COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                        p.code as product_code,
                        w.name as warehouse_name,
                        w.code as warehouse_code,
                        dc.name as destination_concern_name,
-                       COALESCE(pu.name, 'Main Production Facility') as production_unit_name,
-                       COALESCE(pu.code, 'PU1') as production_unit_code,
+                       COALESCE(pu.name, CASE WHEN pb.source_type = 'INWARD' THEN CONCAT(COALESCE(sc_src.name, 'Concern'), ' (Inward Stock)') ELSE 'Main Production Facility' END) as production_unit_name,
+                       COALESCE(pu.code, CASE WHEN pb.source_type = 'INWARD' THEN pb.source_location_type ELSE 'PU1' END) as production_unit_code,
                        pu.manager_name as production_unit_manager,
                        u_prep.full_name as prepared_by_name,
                        u_appr.full_name as approved_by_name,
@@ -142,6 +147,7 @@ class ProductionBatch {
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
                 LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
+                LEFT JOIN concerns sc_src ON pb.concern_id = sc_src.id
                 LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
                 LEFT JOIN users u_prep ON pb.prepared_by = u_prep.id
                 LEFT JOIN users u_appr ON pb.approved_by = u_appr.id
@@ -151,7 +157,8 @@ class ProductionBatch {
         $params = [(int)$concernId];
 
         if ($scopedUnitId !== null) {
-            $sql .= " AND pp.production_unit_id = ?";
+            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = (int)$scopedUnitId;
             $params[] = (int)$scopedUnitId;
         }
 
@@ -166,7 +173,8 @@ class ProductionBatch {
         }
 
         if (array_key_exists('production_unit_id', $filters) && $filters['production_unit_id'] !== null && $filters['production_unit_id'] !== '') {
-            $sql .= " AND pp.production_unit_id = ?";
+            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND pb.source_location_type = 'PRODUCTION_UNIT' AND pb.source_location_id = ?))";
+            $params[] = (int)$filters['production_unit_id'];
             $params[] = (int)$filters['production_unit_id'];
         }
 
@@ -450,12 +458,15 @@ class ProductionBatch {
         }
         Database::execute(
             "INSERT INTO production_batches 
-             (batch_number, program_id, qc_batch_id, total_qty, box_count, destination_warehouse_id, destination_concern_id, concern_id, status, prepared_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (batch_number, program_id, qc_batch_id, source_type, source_location_type, source_location_id, total_qty, box_count, destination_warehouse_id, destination_concern_id, concern_id, status, prepared_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $data['batch_number'],
-                $data['program_id'],
-                $data['qc_batch_id'] ?? null,
+                !empty($data['program_id']) ? (int)$data['program_id'] : null,
+                !empty($data['qc_batch_id']) ? (int)$data['qc_batch_id'] : null,
+                strtoupper((string)($data['source_type'] ?? (!empty($data['qc_batch_id']) || !empty($data['program_id']) ? 'QC' : 'INWARD'))),
+                !empty($data['source_location_type']) ? strtoupper((string)$data['source_location_type']) : null,
+                !empty($data['source_location_id']) ? (int)$data['source_location_id'] : null,
                 $data['total_qty'] ?? 0,
                 $data['box_count'] ?? 0,
                 $data['destination_warehouse_id'] ?? null,

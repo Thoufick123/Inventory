@@ -136,12 +136,13 @@ class ProductionInwardService {
             return [];
         }
         $batches = Database::fetchAll(
-            "SELECT pb.id, pb.batch_number, pb.total_qty, pb.box_count, pb.created_at,
-                    pp.program_number, COALESCE(p.name, pp.name, 'Finished Product') AS product_name,
+            "SELECT pb.id, pb.batch_number, pb.total_qty, pb.box_count, pb.created_at, pb.source_type,
+                    COALESCE(pp.program_number, 'Inward Stock') AS program_number,
+                    COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') AS product_name,
                     src_concern.name AS source_concern_name, po.outward_number, po.dispatch_date,
                     po.vehicle_number, po.transporter_name, po.lr_number
              FROM production_batches pb
-             JOIN production_programs pp ON pp.id = pb.program_id
+             LEFT JOIN production_programs pp ON pp.id = pb.program_id
              LEFT JOIN products p ON p.id = pp.product_id
              JOIN concerns src_concern ON src_concern.id = pb.concern_id
              JOIN production_outwards po ON po.production_batch_id = pb.id AND po.status = 'DISPATCHED'

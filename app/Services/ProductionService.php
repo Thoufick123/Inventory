@@ -826,6 +826,19 @@ class ProductionService {
         $unavailableTagsByItem = self::getUnavailableQCPieceTags($qcBatchId);
         try {
             $unavailableDamageTags = ProductionInventoryDamage::getUnavailableTags($qcBatchId);
+            if (method_exists('ProductionInventoryDamage', 'getUnavailableConcernTags')) {
+                $concernDamageRow = Database::fetchOne(
+                    "SELECT pu.concern_id
+                     FROM qc_batches qb
+                     JOIN production_programs pp ON pp.id = qb.program_id
+                     JOIN production_units pu ON pu.id = pp.production_unit_id
+                     WHERE qb.id = ?",
+                    [$qcBatchId]
+                );
+                if (!empty($concernDamageRow['concern_id'])) {
+                    $unavailableDamageTags += ProductionInventoryDamage::getUnavailableConcernTags((int)$concernDamageRow['concern_id']);
+                }
+            }
         } catch (\Throwable $e) {
             error_log('Unable to load Production inventory damage tags: ' . $e->getMessage());
             $unavailableDamageTags = [];
@@ -963,12 +976,150 @@ class ProductionService {
     }
 
     /**
+     * Load available inwarded Concern / Production Unit inventory grouped by source location for packing.
+     */
+    public static function getAvailableInwardLocationsForPacking(?int $concernId = null, ?int $scopedUnitId = null): array {
+        $concernId = $concernId ?? (function_exists('currentConcernId') ? currentConcernId() : null);
+        if (!$concernId || $scopedUnitId === 0) {
+            return [];
+        }
+        if (!class_exists('ProductionBillingService')) {
+            require_once BASE_PATH . '/app/Services/ProductionBillingService.php';
+        }
+
+        $locations = [];
+        foreach (ProductionBillingService::getAvailableInventory(0) as $entry) {
+            if (($entry['source_kind'] ?? '') !== 'INWARD') {
+                continue;
+            }
+            $locType = strtoupper(trim((string)($entry['stock_location_type'] ?? '')));
+            $locId = (int)($entry['stock_location_id'] ?? 0);
+            $variantId = (int)($entry['variant_id'] ?? 0);
+            $tags = array_values($entry['available_tags'] ?? []);
+            $stockQty = (int)($entry['stock_qty'] ?? 0);
+            if (!in_array($locType, ['CONCERN', 'PRODUCTION_UNIT'], true) || $locId <= 0 || $variantId <= 0 || $stockQty <= 0 || !$tags) {
+                continue;
+            }
+            if ($scopedUnitId !== null && $locType === 'PRODUCTION_UNIT' && $locId !== (int)$scopedUnitId) {
+                continue;
+            }
+
+            $locKey = $locType . ':' . $locId;
+            if (!isset($locations[$locKey])) {
+                $locations[$locKey] = [
+                    'location_key' => $locKey,
+                    'location_type' => $locType,
+                    'location_id' => $locId,
+                    'location_label' => (string)($entry['location_label'] ?? ($locType === 'CONCERN' ? 'Concern Inventory' : 'Production Unit #' . $locId)),
+                    'total_qty' => 0,
+                    'items' => [],
+                ];
+            }
+
+            $packableQty = min($stockQty, count($tags));
+            $locations[$locKey]['total_qty'] += $packableQty;
+            $locations[$locKey]['items'][] = [
+                'variant_id' => $variantId,
+                'product_name' => (string)($entry['product_name'] ?? 'Finished Product'),
+                'sku' => (string)($entry['sku'] ?? ''),
+                'size_name' => (string)($entry['size_name'] ?? 'Std'),
+                'color_name' => (string)($entry['color_name'] ?? 'Std'),
+                'grn_label' => (string)($entry['program_number'] ?? ''),
+                'stock_qty' => $stockQty,
+                'packable_qty' => $packableQty,
+                'available_piece_tags' => $tags,
+            ];
+        }
+
+        return array_values($locations);
+    }
+
+    /**
      * Create Production Batch (Finished Goods Packing).
      */
     public static function createProductionBatch(array $batchData, array $items, int $userId): int {
         Database::beginTransaction();
         try {
-            if (!empty($batchData['qc_batch_id'])) {
+            $sourceType = strtoupper(trim((string)($batchData['source_type'] ?? (!empty($batchData['qc_batch_id']) ? 'QC' : 'INWARD'))));
+            $concernId = (int)($batchData['concern_id'] ?? (function_exists('currentConcernId') ? currentConcernId() : 0));
+            $reservedFromLocation = null;
+
+            if ($sourceType === 'INWARD') {
+                $locType = strtoupper(trim((string)($batchData['source_location_type'] ?? '')));
+                $locId = (int)($batchData['source_location_id'] ?? 0);
+                if (!in_array($locType, ['CONCERN', 'PRODUCTION_UNIT'], true) || $locId <= 0) {
+                    throw new Exception('Choose a valid inward inventory location to pack.');
+                }
+                if (!class_exists('StockService')) {
+                    require_once BASE_PATH . '/app/Services/StockService.php';
+                }
+                StockService::assertLocationBelongsToActiveConcern($locType, $locId);
+
+                $locKey = $locType . ':' . $locId;
+                $locBucket = null;
+                foreach (self::getAvailableInwardLocationsForPacking($concernId) as $loc) {
+                    if ($loc['location_key'] === $locKey) {
+                        $locBucket = $loc;
+                        break;
+                    }
+                }
+                if (!$locBucket || empty($locBucket['items'])) {
+                    throw new Exception('No available inward inventory remains at the selected source location.');
+                }
+
+                $availableByVariant = [];
+                foreach ($locBucket['items'] as $locItem) {
+                    $availableByVariant[(int)$locItem['variant_id']] = [
+                        'stock_qty' => (int)$locItem['stock_qty'],
+                        'tags' => array_fill_keys(array_map('strtoupper', $locItem['available_piece_tags']), true),
+                    ];
+                }
+
+                $requestedTags = [];
+                $qtyByVariant = [];
+                foreach ($items as &$item) {
+                    $variantId = (int)($item['variant_id'] ?? 0);
+                    $qty = (int)($item['quantity'] ?? 0);
+                    if ($qty <= 0) {
+                        continue;
+                    }
+                    $tags = array_values(array_unique(array_filter(array_map(
+                        static fn($tag) => strtoupper(trim((string)$tag)),
+                        is_array($item['piece_tags'] ?? null) ? $item['piece_tags'] : []
+                    ), static fn($tag) => $tag !== '')));
+                    $item['piece_tags'] = $tags;
+
+                    if ($variantId <= 0 || empty($availableByVariant[$variantId])) {
+                        throw new Exception('A packed product variant is not available at the selected inward location.');
+                    }
+                    if (count($tags) !== $qty) {
+                        throw new Exception("Select exactly {$qty} available QR code(s) for each packed variant.");
+                    }
+                    foreach ($tags as $tag) {
+                        if (empty($availableByVariant[$variantId]['tags'][$tag]) || isset($requestedTags[$tag])) {
+                            throw new Exception("QR code {$tag} is no longer available in inward inventory.");
+                        }
+                        $requestedTags[$tag] = true;
+                    }
+                    $qtyByVariant[$variantId] = ($qtyByVariant[$variantId] ?? 0) + $qty;
+                    if ($qtyByVariant[$variantId] > $availableByVariant[$variantId]['stock_qty']) {
+                        throw new Exception('Packed quantity exceeds available inward stock balance for a variant.');
+                    }
+                }
+                unset($item);
+
+                if (empty($qtyByVariant)) {
+                    throw new Exception('Select at least one available inward QR piece to pack.');
+                }
+
+                $batchData['program_id'] = null;
+                $batchData['qc_batch_id'] = null;
+                $batchData['source_type'] = 'INWARD';
+                $batchData['source_location_type'] = $locType;
+                $batchData['source_location_id'] = $locId;
+                $reservedFromLocation = ['type' => $locType, 'id' => $locId, 'qty_by_variant' => $qtyByVariant];
+            } elseif (!empty($batchData['qc_batch_id'])) {
+                $batchData['source_type'] = 'QC';
                 $qcId = (int)$batchData['qc_batch_id'];
                 $availableTagsByItem = self::getAvailableQCPieceTags($qcId);
                 $qcItemsById = [];
@@ -1066,6 +1217,21 @@ class ProductionService {
                 }
             }
 
+            if ($reservedFromLocation !== null) {
+                foreach ($reservedFromLocation['qty_by_variant'] as $variantId => $qty) {
+                    StockService::reserve(
+                        (int)$variantId,
+                        $reservedFromLocation['type'],
+                        (int)$reservedFromLocation['id'],
+                        (float)$qty,
+                        'production_batches',
+                        $batchId,
+                        $userId ?: null,
+                        "Reserved inward stock for batch {$batchData['batch_number']}"
+                    );
+                }
+            }
+
             AuditService::log('production', 'create', 'production_batch', $batchId, null, $batchData);
             Database::commit();
             return $batchId;
@@ -1092,8 +1258,10 @@ class ProductionService {
 
         $result = ProductionBatch::approve($id, $userId);
         if ($result) {
-            // Update program completed quantity
-            ProductionProgram::recalculateCompletedQty((int)$batch['program_id']);
+            // Update program completed quantity for manufacturing-origin batches
+            if (!empty($batch['program_id'])) {
+                ProductionProgram::recalculateCompletedQty((int)$batch['program_id']);
+            }
             AuditService::log('production', 'approve', 'production_batch', $id, ['status' => $batch['status']], ['status' => 'APPROVED']);
         }
         return $result;
@@ -1111,13 +1279,24 @@ class ProductionService {
                 throw new Exception("Production batch not found.");
             }
             $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
+            if ($scopedUnitId === 0) {
+                throw new Exception('You cannot dispatch a batch without an active unit in this concern.');
+            }
+            $isInwardBatch = strtoupper((string)($batch['source_type'] ?? 'QC')) === 'INWARD' || empty($batch['program_id']);
             if ($scopedUnitId !== null) {
-                $batchUnit = Database::fetchOne(
-                    "SELECT production_unit_id FROM production_programs WHERE id = ?",
-                    [(int)$batch['program_id']]
-                );
-                if ((int)($batchUnit['production_unit_id'] ?? 0) !== (int)$scopedUnitId) {
-                    throw new Exception('You cannot dispatch a batch assigned to another production unit.');
+                if ($isInwardBatch) {
+                    if (strtoupper((string)($batch['source_location_type'] ?? '')) === 'PRODUCTION_UNIT'
+                        && (int)($batch['source_location_id'] ?? 0) !== (int)$scopedUnitId) {
+                        throw new Exception('You cannot dispatch a batch packed from another production unit.');
+                    }
+                } else {
+                    $batchUnit = Database::fetchOne(
+                        "SELECT production_unit_id FROM production_programs WHERE id = ?",
+                        [(int)$batch['program_id']]
+                    );
+                    if ((int)($batchUnit['production_unit_id'] ?? 0) !== (int)$scopedUnitId) {
+                        throw new Exception('You cannot dispatch a batch assigned to another production unit.');
+                    }
                 }
             }
             if ($batch['status'] === 'DISPATCHED' || $batch['status'] === 'RECEIVED') {
@@ -1143,6 +1322,42 @@ class ProductionService {
 
             // Update batch status to DISPATCHED
             ProductionBatch::updateStatus($batch['id'], 'DISPATCHED');
+
+            // Deduct sender balance for inward-packed batches
+            if ($isInwardBatch
+                && !empty($batch['source_location_type'])
+                && !empty($batch['source_location_id'])) {
+                if (!class_exists('StockService')) {
+                    require_once BASE_PATH . '/app/Services/StockService.php';
+                }
+                $srcType = strtoupper((string)$batch['source_location_type']);
+                $srcId = (int)$batch['source_location_id'];
+                $batchItems = Database::fetchAll(
+                    "SELECT variant_id, quantity FROM production_batch_items WHERE production_batch_id = ? AND quantity > 0",
+                    [$batchId]
+                );
+                foreach ($batchItems as $bItem) {
+                    $qty = (float)$bItem['quantity'];
+                    $variantId = (int)$bItem['variant_id'];
+                    if ($qty <= 0 || $variantId <= 0) {
+                        continue;
+                    }
+                    $reservedBal = StockService::getBalance($variantId, $srcType, $srcId, 'RESERVED');
+                    $deductState = $reservedBal >= $qty ? 'RESERVED' : 'AVAILABLE';
+                    StockService::decrease(
+                        $variantId,
+                        $srcType,
+                        $srcId,
+                        $deductState,
+                        $qty,
+                        'PRODUCTION_OUTWARD',
+                        'production_outwards',
+                        $outwardId,
+                        $userId ?: null,
+                        "Dispatched inward batch {$batch['batch_number']} via {$outwardData['outward_number']}"
+                    );
+                }
+            }
 
             AuditService::log('production', 'create', 'production_outward', $outwardId, null, $outwardData);
             Database::commit();
@@ -1429,6 +1644,43 @@ class ProductionService {
     }
 
     /**
+     * Generate the next unused GRM-STY-XXXX catalog code scoped to a concern.
+     */
+    public static function generateNextCatalogCode(?int $concernId = null): string {
+        $concernId = $concernId ?? (function_exists('currentConcernId') ? currentConcernId() : null);
+        $rows = $concernId
+            ? Database::fetchAll(
+                "SELECT code FROM products WHERE concern_id = ? AND code LIKE 'GRM-STY-%'",
+                [$concernId]
+            )
+            : Database::fetchAll("SELECT code FROM products WHERE code LIKE 'GRM-STY-%'");
+
+        $maxNum = 0;
+        foreach ($rows as $row) {
+            if (preg_match('/^GRM-STY-(\d+)/i', (string)($row['code'] ?? ''), $matches)) {
+                $num = (int)$matches[1];
+                if ($num > $maxNum) {
+                    $maxNum = $num;
+                }
+            }
+        }
+
+        $nextNum = $maxNum + 1;
+        do {
+            $candidate = 'GRM-STY-' . str_pad((string)$nextNum, 4, '0', STR_PAD_LEFT);
+            $exists = $concernId
+                ? Database::fetchOne(
+                    "SELECT id FROM products WHERE concern_id = ? AND code = ? LIMIT 1",
+                    [$concernId, $candidate]
+                )
+                : Database::fetchOne("SELECT id FROM products WHERE code = ? LIMIT 1", [$candidate]);
+            $nextNum++;
+        } while ($exists);
+
+        return $candidate;
+    }
+
+    /**
      * Find or create a product for a production program.
      */
     public static function findOrCreateProductForProgram(int $programId): int {
@@ -1441,8 +1693,28 @@ class ProductionService {
             return 0;
         }
 
+        $concernId = null;
+        if (!empty($prog['production_unit_id'])) {
+            $unitRow = Database::fetchOne(
+                "SELECT concern_id FROM production_units WHERE id = ?",
+                [(int)$prog['production_unit_id']]
+            );
+            if (!empty($unitRow['concern_id'])) {
+                $concernId = (int)$unitRow['concern_id'];
+            }
+        }
+        if (!$concernId && function_exists('currentConcernId')) {
+            $concernId = currentConcernId();
+        }
+        if (!$concernId) {
+            throw new RuntimeException('Unable to determine concern ownership for production program product.');
+        }
+
         if (!empty($prog['product_id'])) {
-            $existing = Database::fetchOne("SELECT id FROM products WHERE id = ?", [(int)$prog['product_id']]);
+            $existing = Database::fetchOne(
+                "SELECT id FROM products WHERE id = ? AND concern_id = ?",
+                [(int)$prog['product_id'], $concernId]
+            );
             if ($existing) {
                 return (int)$existing['id'];
             }
@@ -1452,20 +1724,20 @@ class ProductionService {
         $prod = null;
         if (!empty($prog['sub_subcategory_id'])) {
             $prod = Database::fetchOne(
-                "SELECT id FROM products WHERE sub_subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
-                [(int)$prog['sub_subcategory_id']]
+                "SELECT id FROM products WHERE concern_id = ? AND sub_subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, (int)$prog['sub_subcategory_id']]
             );
         }
         if (!$prod && !empty($prog['subcategory_id'])) {
             $prod = Database::fetchOne(
-                "SELECT id FROM products WHERE subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
-                [(int)$prog['subcategory_id']]
+                "SELECT id FROM products WHERE concern_id = ? AND subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, (int)$prog['subcategory_id']]
             );
         }
         if (!$prod && !empty($prog['name'])) {
             $prod = Database::fetchOne(
-                "SELECT id FROM products WHERE name = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
-                [$prog['name']]
+                "SELECT id FROM products WHERE concern_id = ? AND name = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $prog['name']]
             );
         }
 
@@ -1504,13 +1776,7 @@ class ProductionService {
         }
 
         $name = !empty($catNames) ? implode(' - ', array_reverse($catNames)) : (!empty($prog['name']) ? $prog['name'] : 'PRODUCT STYLE');
-
-        $count = Database::fetchOne("SELECT COUNT(*) as c FROM products WHERE source_type = 'OWN_PRODUCTION'")['c'] ?? 0;
-        $code = 'GRM-STY-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
-        $existingCode = Database::fetchOne("SELECT id FROM products WHERE code = ?", [$code]);
-        if ($existingCode) {
-            $code .= '-' . rand(10, 99);
-        }
+        $code = self::generateNextCatalogCode($concernId);
 
         $qrPrefix = '';
         if ($catCode) $qrPrefix .= substr(strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $catCode)), 0, 1);
@@ -1518,9 +1784,10 @@ class ProductionService {
         if ($sscCode) $qrPrefix .= substr(strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $sscCode)), 0, 1);
 
         Database::execute(
-            "INSERT INTO products (name, code, category_id, subcategory_id, sub_subcategory_id, category_code, subcategory_code, sub_subcategory_code, qr_code_prefix, source_type, is_active, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OWN_PRODUCTION', 1, NOW(), NOW())",
+            "INSERT INTO products (concern_id, name, code, category_id, subcategory_id, sub_subcategory_id, category_code, subcategory_code, sub_subcategory_code, qr_code_prefix, source_type, is_active, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OWN_PRODUCTION', 1, NOW(), NOW())",
             [
+                $concernId,
                 $name,
                 $code,
                 $prog['category_id'] ?? null,
@@ -1545,6 +1812,10 @@ class ProductionService {
     public static function findOrCreateVariant(int $productId, ?string $sizeName = null, ?string $colorName = null, ?string $sku = null): int {
         $sizeName = trim($sizeName ?? '');
         $colorName = trim($colorName ?? '');
+        $product = Database::fetchOne("SELECT concern_id, code, name FROM products WHERE id = ?", [$productId]);
+        $concernId = !empty($product['concern_id'])
+            ? (int)$product['concern_id']
+            : (function_exists('currentConcernId') ? currentConcernId() : null);
 
         $sizeId = null;
         if ($sizeName !== '' && $sizeName !== 'Standard' && $sizeName !== 'All') {
@@ -1596,7 +1867,6 @@ class ProductionService {
         }
 
         // Generate SKU if needed
-        $product = Database::fetchOne("SELECT code, name FROM products WHERE id = ?", [$productId]);
         $prodCode = $product['code'] ?? ('PRD-' . $productId);
 
         $skuParts = [$prodCode];
@@ -1604,17 +1874,105 @@ class ProductionService {
         if ($colorName !== '' && $colorName !== 'Assorted') $skuParts[] = substr(strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $colorName)), 0, 4);
         $generatedSku = implode('-', $skuParts);
 
-        // Check if this generated SKU exists
-        $v = Database::fetchOne("SELECT id FROM product_variants WHERE sku = ?", [$generatedSku]);
+        // Check if this generated SKU exists within the same concern
+        $v = $concernId
+            ? Database::fetchOne(
+                "SELECT id FROM product_variants WHERE concern_id = ? AND sku = ?",
+                [$concernId, $generatedSku]
+            )
+            : Database::fetchOne("SELECT id FROM product_variants WHERE sku = ?", [$generatedSku]);
         if ($v) return (int)$v['id'];
 
         // Insert new variant
         Database::execute(
-            "INSERT INTO product_variants (product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
-             VALUES (?, ?, ?, ?, 0.00, 0.00, 0.00, 0.00, 1)",
-            [$productId, $sizeId, $colorId, $generatedSku]
+            "INSERT INTO product_variants (concern_id, product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
+             VALUES (?, ?, ?, ?, ?, 0.00, 0.00, 0.00, 0.00, 1)",
+            [$concernId, $productId, $sizeId, $colorId, $generatedSku]
         );
 
         return (int)Database::lastInsertId();
+    }
+
+    /**
+     * Generate a non-colliding sequential document code (e.g. PRG-20261111-0001).
+     */
+    public static function generateNextSequentialCode(string $table, string $column, string $prefix, int $padLength = 4): array {
+        $allowedColumnsByTable = [
+            'production_programs' => 'program_number',
+            'cutting_batches' => 'batch_number',
+            'stitching_batches' => 'batch_number',
+            'label_batches' => 'batch_number',
+            'wastage_sales' => 'sale_number',
+            'stitching_wastage_sales' => 'sale_number',
+            'production_expenses' => 'expense_number',
+            'production_warehouse_reworks' => 'rework_number',
+        ];
+        if (!isset($allowedColumnsByTable[$table]) || $allowedColumnsByTable[$table] !== $column) {
+            throw new InvalidArgumentException("Unsupported sequential code target: {$table}.{$column}");
+        }
+
+        $rows = Database::fetchAll(
+            "SELECT `{$column}` AS doc_code FROM `{$table}` WHERE `{$column}` LIKE ?",
+            [$prefix . '%']
+        );
+        $maxNum = 0;
+        $quotedPrefix = preg_quote($prefix, '/');
+        foreach ($rows as $row) {
+            $val = (string)($row['doc_code'] ?? '');
+            if (preg_match('/^' . $quotedPrefix . '(\d+)$/i', $val, $matches)) {
+                $num = (int)$matches[1];
+                if ($num > $maxNum) {
+                    $maxNum = $num;
+                }
+            }
+        }
+
+        $nextNum = $maxNum + 1;
+        do {
+            $candidate = $prefix . str_pad((string)$nextNum, $padLength, '0', STR_PAD_LEFT);
+            $exists = Database::fetchOne(
+                "SELECT id FROM `{$table}` WHERE `{$column}` = ? LIMIT 1",
+                [$candidate]
+            );
+            $nextNum++;
+        } while ($exists);
+
+        return [
+            'seq' => $nextNum - 1,
+            'code' => $candidate,
+        ];
+    }
+
+    /**
+     * Fetch deleted production QR label codes scoped to the active concern.
+     */
+    public static function getDeletedLabelCodesForConcern(?int $concernId = null): array {
+        $concernId = $concernId ?? (function_exists('currentConcernId') ? currentConcernId() : null);
+        if (!$concernId) {
+            return [];
+        }
+        $rows = Database::fetchAll(
+            "SELECT DISTINCT pdlc.code
+             FROM production_deleted_label_codes pdlc
+             LEFT JOIN users u ON u.id = pdlc.created_by
+             LEFT JOIN production_units pu_user ON pu_user.id = u.production_unit_id
+             WHERE pu_user.concern_id = ?
+                OR EXISTS (
+                    SELECT 1 FROM user_concerns uc
+                    WHERE uc.user_id = pdlc.created_by AND uc.concern_id = ?
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM label_items li
+                    JOIN label_batches lb ON lb.id = li.label_batch_id
+                    JOIN production_programs pp ON pp.id = lb.program_id
+                    JOIN production_units pu ON pu.id = pp.production_unit_id
+                    WHERE pu.concern_id = ?
+                      AND li.start_code IS NOT NULL
+                      AND pdlc.code LIKE CONCAT(TRIM(TRAILING '0123456789' FROM li.start_code), '%')
+                )",
+            [(int)$concernId, (int)$concernId, (int)$concernId]
+        );
+        return array_values(array_unique(array_filter(array_column($rows, 'code'))));
     }
 }

@@ -5,7 +5,9 @@
  * Production Units, Warehouses, Retail Shops, and Office fleet equipment.
  */
 
-require_once BASE_PATH . '/app/Helpers/Database.php';
+if (!class_exists('Database', false)) {
+    require_once BASE_PATH . '/app/Helpers/Database.php';
+}
 
 class AssetService {
 
@@ -1099,7 +1101,7 @@ class AssetService {
         ];
     }
 
-    private static function assetConcernScope(string $alias): array {
+    public static function assetConcernScope(string $alias = 'a'): array {
         $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         if ($concernId === null) {
             return ['1 = 0', []];

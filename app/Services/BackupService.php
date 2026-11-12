@@ -6,8 +6,12 @@
  * and automated safety pre-wipe test database purge.
  */
 
-require_once BASE_PATH . '/app/Helpers/Session.php';
-require_once BASE_PATH . '/app/Helpers/Database.php';
+if (!class_exists('Session', false)) {
+    require_once BASE_PATH . '/app/Helpers/Session.php';
+}
+if (!class_exists('Database', false)) {
+    require_once BASE_PATH . '/app/Helpers/Database.php';
+}
 require_once BASE_PATH . '/app/Services/AuditService.php';
 require_once BASE_PATH . '/app/Services/MailService.php';
 

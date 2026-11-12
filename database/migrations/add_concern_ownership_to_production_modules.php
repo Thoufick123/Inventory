@@ -25,12 +25,35 @@ try {
     $indexExists = static function (string $table, string $indexName): bool {
         return (bool)Database::fetchOne("SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$indexName]);
     };
+    $uniqueIndexExists = static function (string $table, string $indexName): bool {
+        return (bool)Database::fetchOne("SHOW INDEX FROM `{$table}` WHERE Key_name = ? AND Non_unique = 0", [$indexName]);
+    };
     $constraintExists = static function (string $table, string $constraintName): bool {
         return (bool)Database::fetchOne(
             "SELECT 1 FROM information_schema.KEY_COLUMN_USAGE
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?",
             [$table, $constraintName]
         );
+    };
+    $swapGlobalUniqueForConcern = static function (
+        string $table,
+        string $legacyUniqueIndex,
+        string $concernUniqueIndex,
+        string $column,
+        ?string $lookupIndex = null
+    ) use ($tableExists, $indexExists, $uniqueIndexExists): void {
+        if (!$tableExists($table)) {
+            return;
+        }
+        if ($lookupIndex !== null && !$indexExists($table, $lookupIndex)) {
+            Database::execute("ALTER TABLE `{$table}` ADD INDEX `{$lookupIndex}` (`{$column}`)");
+        }
+        if ($uniqueIndexExists($table, $legacyUniqueIndex)) {
+            Database::execute("ALTER TABLE `{$table}` DROP INDEX `{$legacyUniqueIndex}`");
+        }
+        if (!$indexExists($table, $concernUniqueIndex)) {
+            Database::execute("ALTER TABLE `{$table}` ADD UNIQUE KEY `{$concernUniqueIndex}` (concern_id, `{$column}`)");
+        }
     };
 
     $addConcernColumn = static function (string $table, string $idxName, string $fkName) use ($tableExists, $columnExists, $indexExists, $constraintExists): void {
@@ -57,6 +80,7 @@ try {
     $addConcernColumn('seller_rolls', 'idx_seller_rolls_concern', 'fk_seller_rolls_concern');
     $addConcernColumn('roll_damages', 'idx_roll_damages_concern', 'fk_roll_damages_concern');
     $addConcernColumn('products', 'idx_products_concern', 'fk_products_concern');
+    $addConcernColumn('product_variants', 'idx_product_variants_concern', 'fk_product_variants_concern');
     $addConcernColumn('production_inventory_damages', 'idx_prod_inv_damages_concern', 'fk_prod_inv_damages_concern');
 
     if ($tableExists('production_inventory_damages')) {
@@ -72,6 +96,21 @@ try {
         Database::execute("ALTER TABLE production_inventory_damages MODIFY qc_batch_id INT UNSIGNED NULL DEFAULT NULL");
         Database::execute("ALTER TABLE production_inventory_damages MODIFY qc_item_id INT UNSIGNED NULL DEFAULT NULL");
         Database::execute("ALTER TABLE production_inventory_damages MODIFY program_id INT UNSIGNED NULL DEFAULT NULL");
+
+        if (!$indexExists('production_inventory_damages', 'idx_prod_inv_damages_variant')) {
+            Database::execute("ALTER TABLE production_inventory_damages ADD INDEX idx_prod_inv_damages_variant (variant_id)");
+        }
+        if (!$constraintExists('production_inventory_damages', 'fk_prod_inv_damages_variant') && $tableExists('product_variants')) {
+            Database::execute(
+                "ALTER TABLE production_inventory_damages
+                 ADD CONSTRAINT fk_prod_inv_damages_variant
+                 FOREIGN KEY (variant_id) REFERENCES product_variants (id)
+                 ON DELETE RESTRICT"
+            );
+        }
+        if (!$indexExists('production_inventory_damages', 'idx_prod_inv_damages_location')) {
+            Database::execute("ALTER TABLE production_inventory_damages ADD INDEX idx_prod_inv_damages_location (stock_location_type, stock_location_id)");
+        }
     }
 
     $primaryConcernRow = Database::fetchOne("SELECT id FROM concerns ORDER BY id ASC LIMIT 1");
@@ -118,6 +157,8 @@ try {
              WHERE rd.concern_id IS NULL",
             [$primaryConcernId]
         );
+        $swapGlobalUniqueForConcern('roll_damages', 'uniq_roll_damages_number', 'uniq_roll_damages_concern_number', 'damage_number', 'idx_roll_damages_number');
+        $swapGlobalUniqueForConcern('roll_damages', 'uniq_roll_damages_qr_code', 'uniq_roll_damages_concern_qr_code', 'qr_code', 'idx_roll_damages_qr_code');
     }
 
     if ($tableExists('products')) {
@@ -134,6 +175,22 @@ try {
              WHERE p.concern_id IS NULL",
             [$primaryConcernId]
         );
+        $swapGlobalUniqueForConcern('products', 'code', 'uniq_products_concern_code', 'code', 'idx_products_code');
+        if ($columnExists('products', 'qr_code_prefix') && !$indexExists('products', 'idx_products_concern_qr_prefix')) {
+            Database::execute("ALTER TABLE products ADD INDEX idx_products_concern_qr_prefix (concern_id, qr_code_prefix)");
+        }
+    }
+
+    if ($tableExists('product_variants')) {
+        Database::execute(
+            "UPDATE product_variants pv
+             LEFT JOIN products p ON p.id = pv.product_id
+             SET pv.concern_id = COALESCE(pv.concern_id, p.concern_id, ?)
+             WHERE pv.concern_id IS NULL",
+            [$primaryConcernId]
+        );
+        $swapGlobalUniqueForConcern('product_variants', 'sku', 'uniq_variants_concern_sku', 'sku', 'idx_variant_sku');
+        $swapGlobalUniqueForConcern('product_variants', 'qr_code', 'uniq_variants_concern_qr_code', 'qr_code', 'idx_variant_qr');
     }
 
     if ($tableExists('production_inventory_damages')) {
@@ -146,6 +203,8 @@ try {
              WHERE d.concern_id IS NULL",
             [$primaryConcernId]
         );
+        $swapGlobalUniqueForConcern('production_inventory_damages', 'uniq_production_inventory_damage_number', 'uniq_prod_inv_dmg_concern_number', 'damage_number', 'idx_prod_inv_damages_number');
+        $swapGlobalUniqueForConcern('production_inventory_damages', 'uniq_production_inventory_damage_tag', 'uniq_prod_inv_dmg_concern_tag', 'tag_code', 'idx_prod_inv_damages_tag');
     }
 
     echo "Concern ownership migration for Production modules completed successfully.\n";

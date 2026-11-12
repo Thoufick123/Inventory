@@ -21,14 +21,16 @@ class ProductionOutward {
         $params = [$id, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = ' AND pp.production_unit_id = ?';
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT po.*, 
-                    pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status,
+                    pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
                     pp.program_number,
-                    COALESCE(p.name, pp.name) as product_name, p.code as product_code,
+                    COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
+                    p.code as product_code,
                     w.id as warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
                     dc.name as destination_concern_name,
                     u.full_name as created_by_name,
@@ -36,7 +38,7 @@ class ProductionOutward {
                     ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
-             JOIN production_programs pp ON pb.program_id = pp.id
+             LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
@@ -63,14 +65,16 @@ class ProductionOutward {
         $params = [$batchId, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = ' AND pp.production_unit_id = ?';
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT po.*, 
-                    pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status,
+                    pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
                     pp.program_number,
-                    COALESCE(p.name, pp.name) as product_name, p.code as product_code,
+                    COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
+                    p.code as product_code,
                     w.id as warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
                     dc.name as destination_concern_name,
                     u.full_name as created_by_name,
@@ -78,7 +82,7 @@ class ProductionOutward {
                     ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
-             JOIN production_programs pp ON pb.program_id = pp.id
+             LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
@@ -106,14 +110,16 @@ class ProductionOutward {
         $params = [$outwardNumber, $concernId];
         $unitClause = '';
         if ($scopedUnitId !== null) {
-            $unitClause = ' AND pp.production_unit_id = ?';
+            $unitClause = " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = $scopedUnitId;
             $params[] = $scopedUnitId;
         }
         return Database::fetchOne(
             "SELECT po.*, 
-                    pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status,
+                    pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
                     pp.program_number,
-                    COALESCE(p.name, pp.name) as product_name, p.code as product_code,
+                    COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
+                    p.code as product_code,
                     w.id as warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
                     dc.name as destination_concern_name,
                     u.full_name as created_by_name,
@@ -121,7 +127,7 @@ class ProductionOutward {
                     ur.full_name as received_by_name
              FROM production_outwards po
              JOIN production_batches pb ON po.production_batch_id = pb.id
-             JOIN production_programs pp ON pb.program_id = pp.id
+             LEFT JOIN production_programs pp ON pb.program_id = pp.id
              LEFT JOIN products p ON pp.product_id = p.id
              LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
              LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
@@ -148,9 +154,9 @@ class ProductionOutward {
             return [];
         }
         $sql = "SELECT po.*, 
-                       pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status,
+                       pb.batch_number, pb.total_qty, pb.box_count, pb.status as batch_status, pb.source_type,
                        pp.program_number,
-                       COALESCE(p.name, pp.name) as product_name,
+                       COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                        w.name as warehouse_name,
                        dc.name as destination_concern_name,
                        u.full_name as created_by_name,
@@ -158,7 +164,7 @@ class ProductionOutward {
                        ur.full_name as received_by_name
                 FROM production_outwards po
                 JOIN production_batches pb ON po.production_batch_id = pb.id
-                JOIN production_programs pp ON pb.program_id = pp.id
+                LEFT JOIN production_programs pp ON pb.program_id = pp.id
                 LEFT JOIN products p ON pp.product_id = p.id
                 LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
                 LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
@@ -169,7 +175,8 @@ class ProductionOutward {
         $params = [(int)$concernId];
 
         if ($scopedUnitId !== null && $scopedUnitId !== '') {
-            $sql .= " AND pp.production_unit_id = ?";
+            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = (int)$scopedUnitId;
             $params[] = (int)$scopedUnitId;
         }
 
@@ -220,21 +227,32 @@ class ProductionOutward {
                 [$data['production_batch_id']]
             );
             if ($pb) {
-                if (empty($data['production_unit_id'])) $data['production_unit_id'] = $pb['production_unit_id'] ?? null;
+                if (empty($data['production_unit_id'])) {
+                    $data['production_unit_id'] = !empty($pb['production_unit_id'])
+                        ? (int)$pb['production_unit_id']
+                        : (($pb['source_type'] ?? '') === 'INWARD' && ($pb['source_location_type'] ?? '') === 'PRODUCTION_UNIT'
+                            ? ($pb['source_location_id'] ?? null)
+                            : null);
+                }
                 if (empty($data['warehouse_id'])) $data['warehouse_id'] = $pb['destination_warehouse_id'] ?? null;
+                if (empty($data['concern_id'])) $data['concern_id'] = $pb['concern_id'] ?? null;
                 if (empty($data['quantity'])) $data['quantity'] = $pb['total_qty'] ?? ($pb['quantity'] ?? 0);
                 if (empty($data['total_boxes'])) $data['total_boxes'] = $pb['box_count'] ?? 0;
             }
         }
+        $concernId = !empty($data['concern_id'])
+            ? (int)$data['concern_id']
+            : (function_exists('currentConcernId') ? currentConcernId() : null);
 
         Database::execute(
             "INSERT INTO production_outwards 
-             (production_batch_id, production_unit_id, warehouse_id, outward_number, quantity, total_boxes, total_quantity, dispatch_date, vehicle_number, driver_name, driver_contact, transporter_name, lr_number, notes, created_by, dispatched_by, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISPATCHED')",
+             (production_batch_id, production_unit_id, warehouse_id, concern_id, outward_number, quantity, total_boxes, total_quantity, dispatch_date, vehicle_number, driver_name, driver_contact, transporter_name, lr_number, notes, created_by, dispatched_by, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISPATCHED')",
             [
                 $data['production_batch_id'],
                 !empty($data['production_unit_id']) ? (int)$data['production_unit_id'] : null,
                 !empty($data['warehouse_id']) ? (int)$data['warehouse_id'] : null,
+                $concernId,
                 $data['outward_number'],
                 $data['quantity'] ?? 0,
                 $data['total_boxes'] ?? 0,

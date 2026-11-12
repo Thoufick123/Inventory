@@ -36,8 +36,8 @@
             <?php else: foreach ($damages as $damage): ?>
                 <tr>
                     <td class="ps-3"><strong class="font-monospace"><?= e($damage['damage_number']) ?></strong><small class="d-block text-muted"><?= e(date('d M Y, h:i A', strtotime($damage['created_at']))) ?></small></td>
-                    <td><span class="font-monospace fw-semibold"><?= e($damage['tag_code']) ?></span><small class="d-block text-muted"><?= e($damage['product_name'] ?? $damage['program_name']) ?> · <?= e($damage['size_name'] ?? 'Std') ?> / <?= e($damage['color_name'] ?? 'Std') ?></small></td>
-                    <td><?= e($damage['qc_batch_number'] ?? '-') ?><small class="d-block text-muted"><?= e($damage['program_number'] ?? '') ?></small></td>
+                    <td><span class="font-monospace fw-semibold"><?= e($damage['tag_code']) ?></span><small class="d-block text-muted"><?= e($damage['product_name'] ?? $damage['program_name'] ?? 'Finished Product') ?> · <?= e($damage['size_name'] ?? 'Std') ?> / <?= e($damage['color_name'] ?? 'Std') ?></small></td>
+                    <td><?= e($damage['qc_batch_number'] ?? (!empty($damage['stock_location_type']) ? ('Inward (' . $damage['stock_location_type'] . ')') : 'Inward Stock')) ?><small class="d-block text-muted"><?= e($damage['program_number'] ?? ($damage['sku'] ?? '')) ?></small></td>
                     <td><span class="badge bg-light text-dark border"><?= e(str_replace('_', ' ', $damage['source_stage'])) ?></span><small class="d-block text-danger mt-1"><?= e($damage['damage_reason']) ?></small></td>
                     <td>₹<?= number_format((float)$damage['unit_value'], 2) ?></td>
                     <td><span class="badge <?= in_array($damage['status'], ['REPAIRED', 'RESTOCKED'], true) ? 'bg-success-subtle text-success' : (in_array($damage['status'], ['WRITTEN_OFF', 'SALVAGED'], true) ? 'bg-secondary-subtle text-secondary' : 'bg-warning-subtle text-warning-emphasis') ?>"><?= e(str_replace('_', ' ', $damage['status'])) ?></span></td>

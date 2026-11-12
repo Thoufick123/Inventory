@@ -80,6 +80,49 @@ class ProductionBillingService
         return $deleted;
     }
 
+    public static function getPackedInwardTagSet(int $concernId): array
+    {
+        if ($concernId <= 0) {
+            return [];
+        }
+        $rows = Database::fetchAll(
+            "SELECT pbi.piece_tags
+             FROM production_batch_items pbi
+             JOIN production_batches pb ON pb.id = pbi.production_batch_id
+             WHERE pb.concern_id = ?
+               AND pb.source_type = 'INWARD'
+               AND pb.status != 'CANCELLED'
+               AND pbi.piece_tags IS NOT NULL
+               AND pbi.piece_tags != ''",
+            [$concernId]
+        );
+        $packed = [];
+        foreach ($rows as $row) {
+            $decoded = json_decode((string)($row['piece_tags'] ?? ''), true);
+            if (!is_array($decoded)) {
+                continue;
+            }
+            foreach ($decoded as $tag) {
+                $clean = strtoupper(trim((string)$tag));
+                if ($clean !== '') {
+                    $packed[$clean] = true;
+                }
+            }
+        }
+        return $packed;
+    }
+
+    public static function getQuarantinedConcernTagSet(int $concernId): array
+    {
+        if ($concernId <= 0) {
+            return [];
+        }
+        if (class_exists('ProductionInventoryDamage') && method_exists('ProductionInventoryDamage', 'getUnavailableConcernTags')) {
+            return ProductionInventoryDamage::getUnavailableConcernTags($concernId);
+        }
+        return [];
+    }
+
     public static function getBillHeldStockMap(int $billId, int $concernId): array
     {
         if ($billId <= 0 || $concernId <= 0) {
@@ -219,6 +262,8 @@ class ProductionBillingService
 
         $soldTags = self::getSoldTagSet($excludeBillId, $concernId);
         $deletedTags = self::getDeletedTagSet();
+        $quarantinedConcernTags = self::getQuarantinedConcernTagSet($concernId);
+        $packedInwardTags = self::getPackedInwardTagSet($concernId);
         $seenTags = [];
         $available = [];
 
@@ -400,6 +445,8 @@ class ProductionBillingService
                     || isset($missingSet[$upper])
                     || isset($soldTags[$upper])
                     || isset($deletedTags[$upper])
+                    || isset($quarantinedConcernTags[$upper])
+                    || isset($packedInwardTags[$upper])
                     || isset($seenTags[$upper])) {
                     continue;
                 }
@@ -424,7 +471,12 @@ class ProductionBillingService
         );
         foreach ($returnedInwardRows as $retRow) {
             $newTag = strtoupper(trim((string)($retRow['new_tag_code'] ?? '')));
-            if ($newTag === '' || isset($soldTags[$newTag]) || isset($deletedTags[$newTag]) || isset($seenTags[$newTag])) {
+            if ($newTag === ''
+                || isset($soldTags[$newTag])
+                || isset($deletedTags[$newTag])
+                || isset($quarantinedConcernTags[$newTag])
+                || isset($packedInwardTags[$newTag])
+                || isset($seenTags[$newTag])) {
                 continue;
             }
             $variantId = (int)($retRow['variant_id'] ?? 0);
@@ -592,8 +644,11 @@ class ProductionBillingService
                         'qc_item_id' => (int)$entry['qc_item_id'],
                         'qc_batch_id' => (int)$entry['qc_batch_id'],
                         'variant_id' => (int)$entry['variant_id'],
+                        'production_unit_id' => (int)($entry['production_unit_id'] ?? 0),
                         'stock_location_type' => $entry['stock_location_type'],
                         'stock_location_id' => $entry['stock_location_id'],
+                        'location_label' => (string)($entry['location_label'] ?? ''),
+                        'program_number' => (string)($entry['program_number'] ?? ''),
                         'tag_code' => $tagCode,
                         'product_name' => $entry['product_name'],
                         'sku' => $entry['sku'],

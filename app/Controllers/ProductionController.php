@@ -72,6 +72,206 @@ class ProductionController {
     }
 
     /**
+     * Fetch active staff assigned to the active concern (via user_concerns or concern production unit).
+     */
+    private function getConcernActiveUsers(?int $concernId = null): array {
+        $concernId = $concernId ?? (function_exists('currentConcernId') ? currentConcernId() : null);
+        if (!$concernId) {
+            return [];
+        }
+        return Database::fetchAll(
+            "SELECT u.id, u.full_name
+             FROM users u
+             LEFT JOIN production_units pu ON u.production_unit_id = pu.id
+             WHERE u.is_active = 1
+               AND (
+                   EXISTS (SELECT 1 FROM user_concerns uc WHERE uc.user_id = u.id AND uc.concern_id = ?)
+                   OR pu.concern_id = ?
+               )
+             ORDER BY u.full_name ASC",
+            [(int)$concernId, (int)$concernId]
+        );
+    }
+
+    /**
+     * Fetch active fabric rolls owned by a concern, optionally with program usage & damage balances.
+     */
+    private function getConcernSellerRolls(?int $concernId, bool $withBalances = false, ?int $excludeProgramId = null): array {
+        if (!$concernId) {
+            return [];
+        }
+        if (!$withBalances) {
+            return Database::fetchAll(
+                "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
+                 FROM seller_rolls sr
+                 JOIN sellers s ON sr.seller_id = s.id
+                 WHERE sr.concern_id = ? AND s.concern_id = ? AND s.is_active = 1
+                 ORDER BY sr.id DESC",
+                [(int)$concernId, (int)$concernId]
+            );
+        }
+
+        $params = [(int)$concernId];
+        $excludeClause = '';
+        if ($excludeProgramId !== null) {
+            $excludeClause = ' AND pp.id != ?';
+            $params[] = $excludeProgramId;
+        }
+        $params[] = (int)$concernId;
+        $params[] = (int)$concernId;
+        $params[] = (int)$concernId;
+
+        return Database::fetchAll(
+            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type,
+                    COALESCE(u.used_quantity, 0) as used_quantity,
+                    COALESCE(u.used_weight, 0) as used_weight,
+                    COALESCE(u.used_price, 0) as used_price,
+                    COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
+                    COALESCE(dmg.damaged_weight, 0) as damaged_weight,
+                    COALESCE(dmg.damaged_price, 0) as damaged_price,
+                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
+                    GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight,
+                    GREATEST(0.0, sr.price - COALESCE(u.used_price, 0) - COALESCE(dmg.damaged_price, 0)) as available_price,
+                    dmg.damage_reason,
+                    dmg.damage_status
+             FROM seller_rolls sr
+             JOIN sellers s ON sr.seller_id = s.id
+             LEFT JOIN (
+                 SELECT ppr.seller_roll_id,
+                        SUM(ppr.roll_qty) as used_quantity,
+                        SUM(ppr.roll_weight) as used_weight,
+                        SUM(ppr.roll_price) as used_price
+                 FROM production_program_rolls ppr
+                 JOIN production_programs pp ON ppr.production_program_id = pp.id
+                 JOIN production_units pu ON pu.id = pp.production_unit_id
+                 WHERE pu.concern_id = ? AND pp.is_active = 1 AND pp.status != 'CANCELLED'{$excludeClause}
+                 GROUP BY ppr.seller_roll_id
+             ) u ON sr.id = u.seller_roll_id
+             LEFT JOIN (
+                 SELECT rd.seller_roll_id,
+                        SUM(rd.damaged_quantity) as damaged_quantity,
+                        SUM(rd.damaged_weight) as damaged_weight,
+                        SUM(rd.loss_amount) as damaged_price,
+                        MAX(rd.damage_reason) as damage_reason,
+                        MAX(rd.status) as damage_status
+                 FROM roll_damages rd
+                 WHERE rd.concern_id = ? AND rd.status NOT IN ('CLOSED', 'CANCELLED')
+                 GROUP BY rd.seller_roll_id
+             ) dmg ON sr.id = dmg.seller_roll_id
+             WHERE sr.concern_id = ? AND s.concern_id = ? AND s.is_active = 1
+             ORDER BY sr.id DESC",
+            $params
+        );
+    }
+
+    /**
+     * Fetch a single fabric roll verified against the active concern.
+     */
+    private function findConcernSellerRoll(int $rollId, int $concernId): ?array {
+        if ($rollId <= 0) {
+            return null;
+        }
+        return Database::fetchOne(
+            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
+             FROM seller_rolls sr
+             JOIN sellers s ON s.id = sr.seller_id
+             WHERE sr.id = ? AND sr.concern_id = ? AND s.concern_id = ?",
+            [$rollId, $concernId, $concernId]
+        );
+    }
+
+    /**
+     * Resolve the active concern's catalog product matching a category hierarchy.
+     */
+    private function findConcernProductByHierarchy(int $concernId, ?int $categoryId, ?int $subcategoryId, ?int $subSubcategoryId, ?int $productId = null): ?array {
+        if ($productId) {
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE id = ? AND concern_id = ?",
+                [$productId, $concernId]
+            );
+            if ($product) {
+                return $product;
+            }
+        }
+        if ($subSubcategoryId) {
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE concern_id = ? AND sub_subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $subSubcategoryId]
+            );
+            if ($product) {
+                return $product;
+            }
+        }
+        if ($subcategoryId) {
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE concern_id = ? AND subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $subcategoryId]
+            );
+            if ($product) {
+                return $product;
+            }
+        }
+        if ($categoryId) {
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE concern_id = ? AND category_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $categoryId]
+            );
+            if ($product) {
+                return $product;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validate requested program roll quantities against concern-scoped roll balances.
+     */
+    private function checkConcernRollStockAvailability(int $concernId, array $rollUsageMap, ?int $excludeProgramId = null): ?string {
+        foreach ($rollUsageMap as $rid => $reqQty) {
+            $params = [$concernId];
+            $excludeClause = '';
+            if ($excludeProgramId !== null) {
+                $excludeClause = ' AND pp.id != ?';
+                $params[] = $excludeProgramId;
+            }
+            $params[] = $concernId;
+            $params[] = (int)$rid;
+            $params[] = $concernId;
+
+            $sellerRoll = Database::fetchOne(
+                "SELECT sr.roll_number, sr.quantity,
+                        GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity
+                 FROM seller_rolls sr
+                 LEFT JOIN (
+                     SELECT ppr.seller_roll_id, SUM(ppr.roll_qty) as used_quantity
+                     FROM production_program_rolls ppr
+                     JOIN production_programs pp ON ppr.production_program_id = pp.id
+                     JOIN production_units pu ON pu.id = pp.production_unit_id
+                     WHERE pu.concern_id = ? AND pp.is_active = 1 AND pp.status != 'CANCELLED'{$excludeClause}
+                     GROUP BY ppr.seller_roll_id
+                 ) u ON sr.id = u.seller_roll_id
+                 LEFT JOIN (
+                     SELECT rd.seller_roll_id, SUM(rd.damaged_quantity) as damaged_quantity
+                     FROM roll_damages rd
+                     WHERE rd.concern_id = ? AND rd.status NOT IN ('CLOSED', 'CANCELLED')
+                     GROUP BY rd.seller_roll_id
+                 ) dmg ON sr.id = dmg.seller_roll_id
+                 WHERE sr.id = ? AND sr.concern_id = ?",
+                $params
+            );
+            if (!$sellerRoll) {
+                return 'Selected raw material roll does not belong to the active concern.';
+            }
+            $maxStock = (int)($sellerRoll['available_quantity'] ?? $sellerRoll['quantity']);
+            if ($reqQty > $maxStock) {
+                $suffix = $excludeProgramId !== null ? 'other active programs' : 'active programs';
+                return "Total requested quantity ({$reqQty} pcs) for Roll '{$sellerRoll['roll_number']}' exceeds available stock ({$maxStock} pcs after deducting damages and {$suffix}). Please adjust quantities.";
+            }
+        }
+        return null;
+    }
+
+    /**
      * Production Dashboard.
      */
     public function dashboard(): void {
@@ -145,10 +345,11 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         Database::execute(
-            "INSERT INTO sellers (name, company, phone, email, gst_number, city, state, address, payment_terms, seller_type, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'MATERIAL_SUPPLIER', 1)",
-            [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
+            "INSERT INTO sellers (concern_id, name, company, phone, email, gst_number, city, state, address, payment_terms, seller_type, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'MATERIAL_SUPPLIER', 1)",
+            [$concernId, $name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
                 $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null]
         );
         $sellerId = (int)Database::lastInsertId();
@@ -161,9 +362,10 @@ class ProductionController {
     }
 
     private function updateSupplierProfile(int $sellerId): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $existing = Database::fetchOne(
-            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
-            [$sellerId]
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [$sellerId, $concernId]
         );
         if (!$existing) {
             Session::flash('error', 'Supplier not found.');
@@ -223,10 +425,10 @@ class ProductionController {
         Database::execute(
             "UPDATE sellers SET name = ?, company = ?, phone = ?, email = ?, gst_number = ?, city = ?, state = ?,
                     address = ?, payment_terms = ?, is_active = ?, updated_at = NOW()
-             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'",
+             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
             [$name, $company, $phone, $email !== '' ? $email : null, $gstNumber !== '' ? $gstNumber : null,
                 $city, $state, $address, $paymentTerms !== '' ? $paymentTerms : null,
-                isset($_POST['is_active']) ? 1 : 0, $sellerId]
+                isset($_POST['is_active']) ? 1 : 0, $sellerId, $concernId]
         );
         AuditService::log('production', 'UPDATE', 'sellers', $sellerId, $existing, [
             'name' => $name, 'company' => $company, 'phone' => $phone, 'email' => $email,
@@ -238,12 +440,13 @@ class ProductionController {
     }
 
     public function sellerList(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['status'] ?? '';
         $city = trim($_GET['city'] ?? '');
 
-        $sql = "SELECT s.* FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER'";
-        $params = [];
+        $sql = "SELECT s.* FROM sellers s WHERE s.seller_type = 'MATERIAL_SUPPLIER' AND s.concern_id = ?";
+        $params = [$concernId];
 
         if ($search !== '') {
             $sql .= " AND (s.name LIKE ? OR s.company LIKE ? OR s.phone LIKE ? OR s.city LIKE ?
@@ -265,7 +468,10 @@ class ProductionController {
         $sql .= " ORDER BY s.created_at DESC";
         $sellers = Database::fetchAll($sql, $params);
 
-        $cities = Database::fetchAll("SELECT DISTINCT city FROM sellers WHERE seller_type = 'MATERIAL_SUPPLIER' AND city IS NOT NULL AND TRIM(city) != '' ORDER BY city ASC");
+        $cities = Database::fetchAll(
+            "SELECT DISTINCT city FROM sellers WHERE seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? AND city IS NOT NULL AND TRIM(city) != '' ORDER BY city ASC",
+            [$concernId]
+        );
 
         Response::view('production.sellers.index', [
             'pageTitle'      => 'Production Suppliers',
@@ -297,9 +503,14 @@ class ProductionController {
     }
 
     public function viewSeller(string $id): void {
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'", [(int)$id]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [(int)$id, $concernId]
+        );
         if (!$seller) {
             Response::error(404, 'Material Supplier not found.');
+            return;
         }
 
         Response::view('production.sellers.profile_view', [
@@ -325,9 +536,14 @@ class ProductionController {
     }
 
     public function editSeller(string $id): void {
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER'", [(int)$id]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [(int)$id, $concernId]
+        );
         if (!$seller) {
             Response::error(404, 'Supplier not found.');
+            return;
         }
 
         Response::view('production.sellers.profile_edit', [
@@ -359,7 +575,11 @@ class ProductionController {
             return;
         }
 
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$id]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [(int)$id, $concernId]
+        );
         if (!$seller) {
             Session::flash('error', 'Supplier not found.');
             Response::redirect(url('production/sellers'));
@@ -367,11 +587,21 @@ class ProductionController {
         }
 
         $purchaseCount = Database::fetchOne(
-            "SELECT COUNT(*) AS purchase_count FROM production_purchases WHERE seller_id = ?",
-            [(int)$id]
+            "SELECT COUNT(*) AS purchase_count FROM production_purchases WHERE seller_id = ? AND concern_id = ?",
+            [(int)$id, $concernId]
         );
         if ((int)($purchaseCount['purchase_count'] ?? 0) > 0) {
             Session::flash('error', 'This supplier has purchase history and cannot be deleted. Deactivate the supplier to prevent future purchases.');
+            Response::redirect(url('production/sellers'));
+            return;
+        }
+
+        $usedDamages = Database::fetchOne(
+            "SELECT damage_number FROM roll_damages WHERE seller_id = ? AND concern_id = ? LIMIT 1",
+            [(int)$id, $concernId]
+        );
+        if ($usedDamages) {
+            Session::flash('error', 'This supplier has roll damage history (' . $usedDamages['damage_number'] . ') and cannot be deleted.');
             Response::redirect(url('production/sellers'));
             return;
         }
@@ -381,17 +611,19 @@ class ProductionController {
             "SELECT DISTINCT pp.program_number, pp.name as program_name
              FROM production_program_rolls ppr
              JOIN production_programs pp ON ppr.production_program_id = pp.id
-             WHERE ppr.seller_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'",
-            [(int)$id]
+             JOIN production_units pu ON pp.production_unit_id = pu.id
+             WHERE ppr.seller_id = ? AND pu.concern_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'",
+            [(int)$id, $concernId]
         );
 
         if (empty($usedPrograms)) {
             $usedPrograms = Database::fetchAll(
                 "SELECT pp.program_number, pp.name as program_name
                  FROM production_programs pp
-                 WHERE (pp.seller_id = ? OR pp.seller_roll_id IN (SELECT id FROM seller_rolls WHERE seller_id = ?))
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pu.concern_id = ? AND (pp.seller_id = ? OR pp.seller_roll_id IN (SELECT id FROM seller_rolls WHERE seller_id = ? AND concern_id = ?))
                    AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'",
-                [(int)$id, (int)$id]
+                [$concernId, (int)$id, (int)$id, $concernId]
             );
         }
 
@@ -403,10 +635,10 @@ class ProductionController {
         }
 
         // Delete all associated seller rolls
-        Database::execute("DELETE FROM seller_rolls WHERE seller_id = ?", [(int)$id]);
+        Database::execute("DELETE FROM seller_rolls WHERE seller_id = ? AND concern_id = ?", [(int)$id, $concernId]);
 
         // Delete the seller record
-        Database::execute("DELETE FROM sellers WHERE id = ?", [(int)$id]);
+        Database::execute("DELETE FROM sellers WHERE id = ? AND concern_id = ?", [(int)$id, $concernId]);
 
         $delSnapshot = [
             'Supplier Name'  => $seller['name'] ?? '',
@@ -488,6 +720,9 @@ class ProductionController {
         $rollInventoryParams = [$concernId];
         $progRollClause = $this->buildProductionUnitSqlClause('pp', $scopedUnitId, $rollInventoryParams);
         $rollInventoryParams[] = $concernId;
+        $rollInventoryParams[] = $concernId;
+        $rollInventoryParams[] = $concernId;
+        $rollInventoryParams[] = $concernId;
         $purchaseRollClause = $this->buildProductionUnitSqlClause('purchase', $scopedUnitId, $rollInventoryParams);
         $fabricRollInventory = Database::fetchAll(
             "SELECT sr.*, s.name AS seller_name, s.company,
@@ -508,10 +743,12 @@ class ProductionController {
              LEFT JOIN (
                  SELECT rd.seller_roll_id, SUM(rd.damaged_quantity) AS damaged_quantity
                  FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
+                 WHERE rd.concern_id = ? AND rd.status NOT IN ('CLOSED', 'CANCELLED')
                  GROUP BY rd.seller_roll_id
              ) dmg ON dmg.seller_roll_id = sr.id
              WHERE s.seller_type = 'MATERIAL_SUPPLIER'
+               AND s.concern_id = ?
+               AND sr.concern_id = ?
                AND sr.id IN (
                    SELECT ppi.seller_roll_id FROM production_purchase_items ppi
                    JOIN production_purchases purchase ON purchase.id = ppi.purchase_id
@@ -536,17 +773,41 @@ class ProductionController {
         ]);
     }
 
-    private function refreshSupplierRollTotals(int $sellerId): void {
-        $totals = Database::fetchOne(
-            "SELECT COUNT(*) AS roll_count, COALESCE(SUM(weight), 0) AS roll_weight,
-                    COALESCE(SUM(price), 0) AS roll_price
+    private function refreshSupplierRollTotals(int $sellerId, ?int $concernId = null): void {
+        $concernId = $concernId ?? ConcernTransactionService::activeConcernId();
+        $rolls = Database::fetchAll(
+            "SELECT weight, price, color, design_name
              FROM seller_rolls
-             WHERE seller_id = ?",
-            [$sellerId]
+             WHERE seller_id = ? AND concern_id = ?",
+            [$sellerId, $concernId]
         );
+        $rollCount = count($rolls);
+        $totalWeight = (float)array_sum(array_column($rolls, 'weight'));
+        $totalPrice = (float)array_sum(array_column($rolls, 'price'));
+        $uniqueColors = array_unique(array_filter(array_map('trim', array_column($rolls, 'color'))));
+        $uniqueDesigns = array_unique(array_filter(array_map('trim', array_column($rolls, 'design_name'))));
+
         Database::execute(
-            "UPDATE sellers SET roll_count = ?, roll_weight = ?, roll_price = ? WHERE id = ?",
-            [(int)$totals['roll_count'], (float)$totals['roll_weight'], (float)$totals['roll_price'], $sellerId]
+            "UPDATE sellers SET
+                roll_count = ?,
+                color_count = ?,
+                design_count = ?,
+                color_design_count = ?,
+                roll_weight = ?,
+                roll_price = ?,
+                colors = ?
+             WHERE id = ? AND concern_id = ?",
+            [
+                $rollCount,
+                count($uniqueColors),
+                count($uniqueDesigns),
+                count($uniqueColors) + count($uniqueDesigns),
+                $totalWeight,
+                $totalPrice,
+                !empty($uniqueColors) ? implode(', ', $uniqueColors) : '',
+                $sellerId,
+                $concernId,
+            ]
         );
     }
 
@@ -974,9 +1235,9 @@ class ProductionController {
                         Database::execute(
                             "UPDATE seller_rolls SET roll_number = ?, color = ?, design_name = ?, design_count = ?,
                                     weight = ?, price = ?, material_type = ?, photo_url = ?
-                             WHERE id = ?",
+                             WHERE id = ? AND concern_id = ?",
                             [$item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
-                                $item['weight'], $item['unit_price'], $item['item_name'], $item['photo_url'], $item['seller_roll_id']]
+                                $item['weight'], $item['unit_price'], $item['item_name'], $item['photo_url'], $item['seller_roll_id'], $concernId]
                         );
                     }
                     continue;
@@ -995,7 +1256,7 @@ class ProductionController {
                         $item['sgst_amount'], $item['cgst_amount'], $item['igst_amount']]
                 );
             }
-            $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
+            $this->refreshSupplierRollTotals((int)$purchase['seller_id'], $concernId);
             $updateParams = [
                 $purchaseDate, trim((string)($_POST['invoice_number'] ?? '')) ?: null, $documentUrl,
                 trim((string)($_POST['notes'] ?? '')) ?: null, round($totalAmount, 2), $purchaseId, $concernId
@@ -1090,10 +1351,10 @@ class ProductionController {
             Database::execute(
                 "DELETE sr FROM seller_rolls sr
                  JOIN production_purchase_items ppi ON ppi.seller_roll_id = sr.id
-                 WHERE ppi.purchase_id = ?",
-                [$purchaseId]
+                 WHERE ppi.purchase_id = ? AND sr.concern_id = ?",
+                [$purchaseId, $concernId]
             );
-            $this->refreshSupplierRollTotals((int)$purchase['seller_id']);
+            $this->refreshSupplierRollTotals((int)$purchase['seller_id'], $concernId);
             $deleteParams = [$purchaseId, $concernId];
             $deleteUnitClause = '';
             if ($scopedUnitId !== null) {
@@ -1115,11 +1376,13 @@ class ProductionController {
     }
 
     public function createProductionPurchase(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sellers = Database::fetchAll(
             "SELECT id, name, company, phone, email, gst_number, city, state, address, payment_terms
              FROM sellers
-             WHERE seller_type = 'MATERIAL_SUPPLIER' AND is_active = 1
-             ORDER BY company, name"
+             WHERE seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? AND is_active = 1
+             ORDER BY company, name",
+            [$concernId]
         );
         $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         Response::view('production.purchases.create', [
@@ -1143,11 +1406,12 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $sellerId = (int)($_POST['seller_id'] ?? 0);
         $seller = Database::fetchOne(
             "SELECT id, name, company FROM sellers
-             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND is_active = 1",
-            [$sellerId]
+             WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? AND is_active = 1",
+            [$sellerId, $concernId]
         );
         if (!$seller) {
             Session::flash('error', 'Select an active registered supplier.');
@@ -1374,10 +1638,10 @@ class ProductionController {
                         : $sequence['start_code'];
                     Database::execute(
                         "INSERT INTO seller_rolls
-                            (seller_id, roll_number, color, design_name, design_count, quantity, weight, price,
+                            (concern_id, seller_id, roll_number, color, design_name, design_count, quantity, weight, price,
                              material_type, photo_url, start_seq, end_seq, start_code, end_code, qr_code)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        [$sellerId, $item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [$concernId, $sellerId, $item['roll_number'], $item['color'], $item['design_name'], $item['design_count'],
                             $item['quantity'], $item['weight'], $item['unit_price'], $item['item_name'], $item['photo_url'],
                             $sequence['start_seq'], $sequence['end_seq'], $sequence['start_code'], $sequence['end_code'], $rollQrCode]
                     );
@@ -1432,13 +1696,14 @@ class ProductionController {
             Response::back();
             return;
         }
+        $concernId = ConcernTransactionService::activeConcernId();
         $purchaseItem = Database::fetchOne(
             "SELECT ppi.id, pp.purchase_number
              FROM production_purchase_items ppi
              JOIN production_purchases pp ON pp.id = ppi.purchase_id
              WHERE ppi.seller_roll_id = ? AND pp.concern_id = ?
              LIMIT 1",
-            [(int)$id, ConcernTransactionService::activeConcernId()]
+            [(int)$id, $concernId]
         );
         if ($purchaseItem) {
             Session::flash('error', 'This fabric roll is part of purchase ' . $purchaseItem['purchase_number'] . '. It cannot be deleted from stock; retain its purchase history.');
@@ -1446,7 +1711,10 @@ class ProductionController {
             return;
         }
 
-        $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ?", [(int)$id]);
+        $roll = Database::fetchOne(
+            "SELECT * FROM seller_rolls WHERE id = ? AND concern_id = ?",
+            [(int)$id, $concernId]
+        );
         if (!$roll) {
             Session::flash('error', 'Fabric roll not found.');
             Response::back();
@@ -1460,18 +1728,20 @@ class ProductionController {
             "SELECT pp.program_number, pp.name as program_name 
              FROM production_program_rolls ppr
              JOIN production_programs pp ON ppr.production_program_id = pp.id
-             WHERE ppr.seller_roll_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'
+             JOIN production_units pu ON pp.production_unit_id = pu.id
+             WHERE ppr.seller_roll_id = ? AND pu.concern_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'
              LIMIT 1",
-            [(int)$id]
+            [(int)$id, $concernId]
         );
 
         if (!$used) {
             $used = Database::fetchOne(
                 "SELECT pp.program_number, pp.name as program_name 
                  FROM production_programs pp
-                 WHERE pp.seller_roll_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pp.seller_roll_id = ? AND pu.concern_id = ? AND (pp.is_active = 1 OR pp.is_active IS NULL) AND pp.status != 'CANCELLED'
                  LIMIT 1",
-                [(int)$id]
+                [(int)$id, $concernId]
             );
         }
 
@@ -1483,37 +1753,10 @@ class ProductionController {
         }
 
         // Delete roll
-        Database::execute("DELETE FROM seller_rolls WHERE id = ?", [(int)$id]);
+        Database::execute("DELETE FROM seller_rolls WHERE id = ? AND concern_id = ?", [(int)$id, $concernId]);
 
         // Recalculate seller summary totals
-        $remainingRolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ?", [$sellerId]);
-        $computedRollCount = count($remainingRolls);
-        $computedTotalWeight = array_sum(array_column($remainingRolls, 'weight'));
-        $computedTotalPrice = array_sum(array_column($remainingRolls, 'price'));
-        $uniqueColors = array_unique(array_filter(array_map('trim', array_column($remainingRolls, 'color'))));
-        $uniqueDesigns = array_unique(array_filter(array_map('trim', array_column($remainingRolls, 'design_name'))));
-
-        Database::execute(
-            "UPDATE sellers SET 
-                roll_count = ?, 
-                color_count = ?, 
-                design_count = ?, 
-                color_design_count = ?, 
-                roll_weight = ?, 
-                roll_price = ?, 
-                colors = ?
-             WHERE id = ?",
-            [
-                $computedRollCount,
-                count($uniqueColors),
-                count($uniqueDesigns),
-                count($uniqueColors) + count($uniqueDesigns),
-                $computedTotalWeight,
-                $computedTotalPrice,
-                !empty($uniqueColors) ? implode(', ', $uniqueColors) : '',
-                $sellerId
-            ]
-        );
+        $this->refreshSupplierRollTotals($sellerId, $concernId);
 
         $delRollSnapshot = [
             'Roll Number'  => $roll['roll_number'] ?? '',
@@ -1531,7 +1774,16 @@ class ProductionController {
     }
 
     public function ajaxSellerRolls(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sellerId = (int)$id;
+        $sellerExists = Database::fetchOne(
+            "SELECT id FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [$sellerId, $concernId]
+        );
+        if (!$sellerExists) {
+            Response::json(['success' => false, 'message' => 'Material supplier not found.', 'rolls' => []], 404);
+            return;
+        }
         $excludeDamageId = max(0, (int)($_GET['exclude_damage_id'] ?? 0));
         $rolls = Database::fetchAll(
             "SELECT sr.id, sr.roll_number, sr.color, sr.design_name, sr.quantity, sr.weight, sr.price, sr.photo_url,
@@ -1548,7 +1800,8 @@ class ProductionController {
                         SUM(ppr.roll_weight) as used_weight
                  FROM production_program_rolls ppr
                  JOIN production_programs pp ON ppr.production_program_id = pp.id
-                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pu.concern_id = ? AND pp.is_active = 1 AND pp.status != 'CANCELLED'
                  GROUP BY ppr.seller_roll_id
              ) u ON sr.id = u.seller_roll_id
              LEFT JOIN (
@@ -1556,13 +1809,14 @@ class ProductionController {
                         SUM(rd.damaged_quantity) as damaged_quantity,
                         SUM(rd.damaged_weight) as damaged_weight
                  FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
+                 WHERE rd.concern_id = ?
+                   AND rd.status NOT IN ('CLOSED', 'CANCELLED')
                    AND (? = 0 OR rd.id != ?)
                  GROUP BY rd.seller_roll_id
              ) dmg ON sr.id = dmg.seller_roll_id
-             WHERE sr.seller_id = ?
+             WHERE sr.seller_id = ? AND sr.concern_id = ?
              ORDER BY sr.id ASC",
-            [$excludeDamageId, $excludeDamageId, $sellerId]
+            [$concernId, $concernId, $excludeDamageId, $excludeDamageId, $sellerId, $concernId]
         );
 
         Response::json([
@@ -1572,6 +1826,12 @@ class ProductionController {
     }
 
     public function ajaxLookupDamageRoll(): void {
+        try {
+            $concernId = ConcernTransactionService::activeConcernId();
+        } catch (\Throwable $e) {
+            Response::json(['success' => false, 'message' => $e->getMessage()], 400);
+            return;
+        }
         $rawScan = trim((string)($_GET['code'] ?? ''));
         $scanCode = strtoupper(trim(explode('|', $rawScan, 2)[0]));
 
@@ -1588,9 +1848,9 @@ class ProductionController {
                     s.name as seller_name, s.company as seller_company
              FROM seller_rolls sr
              JOIN sellers s ON s.id = sr.seller_id
-             WHERE sr.start_code LIKE ? AND sr.end_code LIKE ?
+             WHERE sr.concern_id = ? AND s.concern_id = ? AND sr.start_code LIKE ? AND sr.end_code LIKE ?
              ORDER BY sr.id ASC",
-            [$prefix . '%', $prefix . '%']
+            [$concernId, $concernId, $prefix . '%', $prefix . '%']
         );
 
         $matchesForCode = array_values(array_filter($rolls, static function (array $roll) use ($prefix, $sequence): bool {
@@ -1621,8 +1881,8 @@ class ProductionController {
         }
 
         $existingDamage = Database::fetchOne(
-            "SELECT damage_number FROM roll_damages WHERE qr_code = ? LIMIT 1",
-            [$scanCode]
+            "SELECT damage_number FROM roll_damages WHERE qr_code = ? AND concern_id = ? LIMIT 1",
+            [$scanCode, $concernId]
         );
         if ($existingDamage) {
             Response::json([
@@ -1651,10 +1911,11 @@ class ProductionController {
      * Download or stream bill / invoice document for a supplier.
      */
     public function downloadBill(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sellerId = (int)$id;
         $seller = Database::fetchOne(
-            "SELECT id, name, document_url FROM sellers WHERE id = ?",
-            [$sellerId]
+            "SELECT id, name, document_url FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [$sellerId, $concernId]
         );
 
         if (!$seller || empty($seller['document_url'])) {
@@ -1740,13 +2001,14 @@ class ProductionController {
      * Download or stream fabric roll photo.
      */
     public function downloadRollPhoto(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $rollId = (int)$id;
         $roll = Database::fetchOne(
-            "SELECT sr.id, sr.roll_number, sr.photo_url, s.name as seller_name 
-             FROM seller_rolls sr 
-             LEFT JOIN sellers s ON sr.seller_id = s.id 
-             WHERE sr.id = ?",
-            [$rollId]
+            "SELECT sr.id, sr.roll_number, sr.photo_url, s.name as seller_name
+             FROM seller_rolls sr
+             JOIN sellers s ON sr.seller_id = s.id
+             WHERE sr.id = ? AND sr.concern_id = ? AND s.concern_id = ?",
+            [$rollId, $concernId, $concernId]
         );
 
         if (!$roll || empty($roll['photo_url'])) {
@@ -1801,14 +2063,21 @@ class ProductionController {
      * Preview and print all fabric roll labels for a seller lot.
      */
     public function printSellerLabels(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $sellerId = (int)$id;
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [$sellerId]);
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+            [$sellerId, $concernId]
+        );
         if (!$seller) {
             Response::error(404, 'Material supplier not found.');
             return;
         }
 
-        $rolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ? ORDER BY id ASC", [$sellerId]);
+        $rolls = Database::fetchAll(
+            "SELECT * FROM seller_rolls WHERE seller_id = ? AND concern_id = ? ORDER BY id ASC",
+            [$sellerId, $concernId]
+        );
         $stickers = $this->buildStickersForRolls($seller, $rolls);
 
         Response::viewOnly('production.sellers.labels', [
@@ -1824,14 +2093,25 @@ class ProductionController {
      * Preview and print labels for a single fabric roll.
      */
     public function printSellerRollLabel(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $rollId = (int)$id;
-        $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ?", [$rollId]);
+        $roll = Database::fetchOne(
+            "SELECT * FROM seller_rolls WHERE id = ? AND concern_id = ?",
+            [$rollId, $concernId]
+        );
         if (!$roll) {
             Response::error(404, 'Fabric roll not found.');
             return;
         }
 
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$roll['seller_id']]);
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND concern_id = ?",
+            [(int)$roll['seller_id'], $concernId]
+        );
+        if (!$seller) {
+            Response::error(404, 'Material supplier not found.');
+            return;
+        }
         $stickers = $this->buildStickersForRolls($seller, [$roll]);
 
         Response::viewOnly('production.sellers.labels', [
@@ -1848,23 +2128,40 @@ class ProductionController {
      * AJAX endpoint to fetch fabric roll stickers JSON.
      */
     public function ajaxSellerRollLabels(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $rollId = !empty($_GET['roll_id']) ? (int)$_GET['roll_id'] : 0;
         if ($rollId > 0) {
-            $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ?", [$rollId]);
+            $roll = Database::fetchOne(
+                "SELECT * FROM seller_rolls WHERE id = ? AND concern_id = ?",
+                [$rollId, $concernId]
+            );
             if (!$roll) {
                 Response::json(['success' => false, 'message' => 'Fabric roll not found.'], 404);
                 return;
             }
-            $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$roll['seller_id']]);
-            $rolls = [$roll];
-        } else {
-            $sellerId = (int)$id;
-            $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [$sellerId]);
+            $seller = Database::fetchOne(
+                "SELECT * FROM sellers WHERE id = ? AND concern_id = ?",
+                [(int)$roll['seller_id'], $concernId]
+            );
             if (!$seller) {
                 Response::json(['success' => false, 'message' => 'Material supplier not found.'], 404);
                 return;
             }
-            $rolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ? ORDER BY id ASC", [$sellerId]);
+            $rolls = [$roll];
+        } else {
+            $sellerId = (int)$id;
+            $seller = Database::fetchOne(
+                "SELECT * FROM sellers WHERE id = ? AND seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ?",
+                [$sellerId, $concernId]
+            );
+            if (!$seller) {
+                Response::json(['success' => false, 'message' => 'Material supplier not found.'], 404);
+                return;
+            }
+            $rolls = Database::fetchAll(
+                "SELECT * FROM seller_rolls WHERE seller_id = ? AND concern_id = ? ORDER BY id ASC",
+                [$sellerId, $concernId]
+            );
         }
 
         $stickers = $this->buildStickersForRolls($seller, $rolls);
@@ -1895,8 +2192,12 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $rollId = (int)$id;
-        $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ?", [$rollId]);
+        $roll = Database::fetchOne(
+            "SELECT * FROM seller_rolls WHERE id = ? AND concern_id = ?",
+            [$rollId, $concernId]
+        );
         if (!$roll) {
             if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax'])) {
                 Response::json(['success' => false, 'message' => 'Fabric roll not found.'], 404);
@@ -1907,7 +2208,10 @@ class ProductionController {
             return;
         }
 
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$roll['seller_id']]);
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND concern_id = ?",
+            [(int)$roll['seller_id'], $concernId]
+        );
         if (!$seller) {
             if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax'])) {
                 Response::json(['success' => false, 'message' => 'Material supplier not found.'], 404);
@@ -1958,24 +2262,12 @@ class ProductionController {
                 end_seq = ?, 
                 end_code = ?, 
                 qr_code = ? 
-             WHERE id = ?",
-            [$newQty, $newEndSeq, $newEndCode, $newQrCode, $rollId]
+             WHERE id = ? AND concern_id = ?",
+            [$newQty, $newEndSeq, $newEndCode, $newQrCode, $rollId, $concernId]
         );
 
         // Recalculate seller summary totals
-        $allRolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ?", [$seller['id']]);
-        $computedRollCount = count($allRolls);
-        $computedTotalWeight = array_sum(array_column($allRolls, 'weight'));
-        $computedTotalPrice = array_sum(array_column($allRolls, 'price'));
-
-        Database::execute(
-            "UPDATE sellers SET 
-                roll_count = ?, 
-                roll_weight = ?, 
-                roll_price = ? 
-             WHERE id = ?",
-            [$computedRollCount, $computedTotalWeight, $computedTotalPrice, $seller['id']]
-        );
+        $this->refreshSupplierRollTotals((int)$seller['id'], $concernId);
 
         $supplierName = mb_strtoupper(trim($seller['company'] ?: ($seller['name'] ?? 'GRM FABRIC')));
         $materialType = mb_strtoupper(trim($seller['material_type'] ?? 'STANDARD FABRIC'));
@@ -2057,8 +2349,12 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $rollId = (int)$id;
-        $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ?", [$rollId]);
+        $roll = Database::fetchOne(
+            "SELECT * FROM seller_rolls WHERE id = ? AND concern_id = ?",
+            [$rollId, $concernId]
+        );
         if (!$roll) {
             if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax'])) {
                 Response::json(['success' => false, 'message' => 'Fabric roll not found.'], 404);
@@ -2069,7 +2365,10 @@ class ProductionController {
             return;
         }
 
-        $seller = Database::fetchOne("SELECT * FROM sellers WHERE id = ?", [(int)$roll['seller_id']]);
+        $seller = Database::fetchOne(
+            "SELECT * FROM sellers WHERE id = ? AND concern_id = ?",
+            [(int)$roll['seller_id'], $concernId]
+        );
         if (!$seller) {
             if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || !empty($_POST['ajax'])) {
                 Response::json(['success' => false, 'message' => 'Material supplier not found.'], 404);
@@ -2124,7 +2423,10 @@ class ProductionController {
 
         try {
             Database::beginTransaction();
-            $lockedRoll = Database::fetchOne("SELECT quantity, start_seq, end_seq FROM seller_rolls WHERE id = ? FOR UPDATE", [$rollId]);
+            $lockedRoll = Database::fetchOne(
+                "SELECT quantity, start_seq, end_seq FROM seller_rolls WHERE id = ? AND concern_id = ? FOR UPDATE",
+                [$rollId, $concernId]
+            );
             if (!$lockedRoll) {
                 Database::rollback();
                 Response::json(['success' => false, 'message' => 'Fabric roll not found.'], 404);
@@ -2174,7 +2476,10 @@ class ProductionController {
 
             $deleteCount = count($requestedSequences);
             $newQty = $currentQty - $deleteCount;
-            Database::execute("UPDATE seller_rolls SET quantity = ? WHERE id = ?", [$newQty, $rollId]);
+            Database::execute(
+                "UPDATE seller_rolls SET quantity = ? WHERE id = ? AND concern_id = ?",
+                [$newQty, $rollId, $concernId]
+            );
             Database::commit();
         } catch (Throwable $e) {
             Database::rollback();
@@ -2182,19 +2487,7 @@ class ProductionController {
         }
 
         // Recalculate seller summary totals
-        $allRolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ?", [$seller['id']]);
-        $computedRollCount = count($allRolls);
-        $computedTotalWeight = array_sum(array_column($allRolls, 'weight'));
-        $computedTotalPrice = array_sum(array_column($allRolls, 'price'));
-
-        Database::execute(
-            "UPDATE sellers SET 
-                roll_count = ?, 
-                roll_weight = ?, 
-                roll_price = ? 
-             WHERE id = ?",
-            [$computedRollCount, $computedTotalWeight, $computedTotalPrice, $seller['id']]
-        );
+        $this->refreshSupplierRollTotals((int)$seller['id'], $concernId);
 
         AuditService::log('production', 'UPDATE', 'seller_rolls', $rollId, [
             'action'        => 'delete_extra_labels',
@@ -2239,6 +2532,7 @@ class ProductionController {
      * Helper to build sticker array for fabric rolls.
      */
     private function buildStickersForRolls(array $seller, array $rolls): array {
+        $concernId = !empty($seller['concern_id']) ? (int)$seller['concern_id'] : ConcernTransactionService::activeConcernId();
         $stickers = [];
         $supplierName = mb_strtoupper(trim($seller['company'] ?: ($seller['name'] ?? 'GRM FABRIC')));
         foreach ($rolls as &$r) {
@@ -2248,8 +2542,8 @@ class ProductionController {
             if (empty($r['start_code'])) {
                 $seqInfo = ProductionService::getNextFabricRollSequence($qty, $r['created_at'] ?? null);
                 Database::execute(
-                    "UPDATE seller_rolls SET start_seq = ?, end_seq = ?, start_code = ?, end_code = ?, qr_code = ? WHERE id = ?",
-                    [$seqInfo['start_seq'], $seqInfo['end_seq'], $seqInfo['start_code'], $seqInfo['end_code'], $seqInfo['qr_code'], $r['id']]
+                    "UPDATE seller_rolls SET start_seq = ?, end_seq = ?, start_code = ?, end_code = ?, qr_code = ? WHERE id = ? AND concern_id = ?",
+                    [$seqInfo['start_seq'], $seqInfo['end_seq'], $seqInfo['start_code'], $seqInfo['end_code'], $seqInfo['qr_code'], $r['id'], $concernId]
                 );
                 $r['start_seq'] = $seqInfo['start_seq'];
                 $r['end_seq'] = $seqInfo['end_seq'];
@@ -2287,8 +2581,8 @@ class ProductionController {
                     static fn(array $damage): string => strtoupper(trim((string)$damage['qr_code'])),
                     Database::fetchAll(
                         "SELECT qr_code FROM roll_damages
-                         WHERE seller_roll_id = ? AND qr_code IS NOT NULL AND TRIM(qr_code) <> ''",
-                        [(int)$r['id']]
+                         WHERE seller_roll_id = ? AND concern_id = ? AND qr_code IS NOT NULL AND TRIM(qr_code) <> ''",
+                        [(int)$r['id'], $concernId]
                     )
                 ),
                 true
@@ -2335,7 +2629,8 @@ class ProductionController {
     // FABRIC & ROLL DAMAGES / DEFECT MANAGEMENT
     // =========================================================================
 
-    private function getDamageReasonOptions(): array {
+    private function getDamageReasonOptions(?int $concernId = null): array {
+        $concernId = $concernId ?? ConcernTransactionService::activeConcernId();
         $legacyReasons = [
             'Fabric Stain / Oil Dirt',
             'Weaving / Knitting Defect',
@@ -2351,8 +2646,9 @@ class ProductionController {
              UNION
              SELECT DISTINCT TRIM(damage_reason) AS damage_reason
              FROM roll_damages
-             WHERE damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
-             ORDER BY damage_reason ASC"
+             WHERE concern_id = ? AND damage_reason IS NOT NULL AND TRIM(damage_reason) <> ''
+             ORDER BY damage_reason ASC",
+            [$concernId]
         );
 
         $reasonsByNormalizedName = [];
@@ -2372,12 +2668,13 @@ class ProductionController {
     }
 
     public function damageList(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $search = trim($_GET['search'] ?? '');
         $sellerId = !empty($_GET['seller_id']) ? (int)$_GET['seller_id'] : null;
         $reason = trim($_GET['reason'] ?? '');
         $status = trim($_GET['status'] ?? '');
         $resolutionType = trim($_GET['resolution_type'] ?? '');
-        $damageReasons = $this->getDamageReasonOptions();
+        $damageReasons = $this->getDamageReasonOptions($concernId);
 
         $sql = "SELECT rd.*, 
                        s.name as seller_name, 
@@ -2392,14 +2689,14 @@ class ProductionController {
                        u_res.full_name as resolved_by_name,
                        repl_sr.roll_number as replacement_roll_code
                 FROM roll_damages rd
-                JOIN sellers s ON rd.seller_id = s.id
-                JOIN seller_rolls sr ON rd.seller_roll_id = sr.id
+                JOIN sellers s ON rd.seller_id = s.id AND s.concern_id = rd.concern_id
+                JOIN seller_rolls sr ON rd.seller_roll_id = sr.id AND sr.concern_id = rd.concern_id
                 LEFT JOIN users u_rep ON rd.reported_by = u_rep.id
                 LEFT JOIN users u_res ON rd.resolved_by = u_res.id
-                LEFT JOIN seller_rolls repl_sr ON rd.replacement_roll_id = repl_sr.id
-                WHERE 1=1";
+                LEFT JOIN seller_rolls repl_sr ON rd.replacement_roll_id = repl_sr.id AND repl_sr.concern_id = rd.concern_id
+                WHERE rd.concern_id = ?";
         
-        $params = [];
+        $params = [$concernId];
 
         if ($search !== '') {
             $sql .= " AND (
@@ -2444,7 +2741,9 @@ class ProductionController {
         // Overall KPI stats
         $allDamages = Database::fetchAll(
             "SELECT rd.status, rd.resolution_type, rd.damaged_quantity, rd.damaged_weight, rd.loss_amount, rd.refund_amount
-             FROM roll_damages rd"
+             FROM roll_damages rd
+             WHERE rd.concern_id = ?",
+            [$concernId]
         );
 
         $stats = [
@@ -2460,7 +2759,10 @@ class ProductionController {
         ];
 
         // Suppliers list for dropdown
-        $sellers = Database::fetchAll("SELECT id, name, company FROM sellers WHERE seller_type = 'MATERIAL_SUPPLIER' ORDER BY name ASC");
+        $sellers = Database::fetchAll(
+            "SELECT id, name, company FROM sellers WHERE seller_type = 'MATERIAL_SUPPLIER' AND concern_id = ? ORDER BY name ASC",
+            [$concernId]
+        );
 
         Response::view('production.damages.index', [
             'pageTitle'      => 'Fabric & Roll Damage Management',
@@ -2553,6 +2855,7 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $damageItems = [];
         $newDamageCountByRoll = [];
         foreach ($qrCodes as $qrCode) {
@@ -2568,8 +2871,8 @@ class ProductionController {
                 "SELECT sr.*, s.name AS seller_name
                  FROM seller_rolls sr
                  JOIN sellers s ON s.id = sr.seller_id
-                 WHERE sr.start_code LIKE ? AND sr.end_code LIKE ?",
-                [$qrPrefix . '%', $qrPrefix . '%']
+                 WHERE sr.concern_id = ? AND s.concern_id = ? AND sr.start_code LIKE ? AND sr.end_code LIKE ?",
+                [$concernId, $concernId, $qrPrefix . '%', $qrPrefix . '%']
             );
             $matchingRolls = array_values(array_filter($candidates, static function (array $candidate) use ($qrPrefix, $qrSequence): bool {
                 return strtoupper(substr((string)$candidate['start_code'], 0, 6)) === $qrPrefix
@@ -2598,8 +2901,8 @@ class ProductionController {
             }
 
             $existingQrDamage = Database::fetchOne(
-                "SELECT damage_number FROM roll_damages WHERE qr_code = ? LIMIT 1",
-                [$qrCode]
+                "SELECT damage_number FROM roll_damages WHERE qr_code = ? AND concern_id = ? LIMIT 1",
+                [$qrCode, $concernId]
             );
             if ($existingQrDamage) {
                 Session::flash('error', "QR label {$qrCode} is already recorded in damage report {$existingQrDamage['damage_number']}.");
@@ -2635,11 +2938,11 @@ class ProductionController {
                  LEFT JOIN (
                      SELECT seller_roll_id, SUM(damaged_quantity) AS damaged_quantity
                      FROM roll_damages
-                     WHERE status NOT IN ('CLOSED', 'CANCELLED')
+                     WHERE concern_id = ? AND status NOT IN ('CLOSED', 'CANCELLED')
                      GROUP BY seller_roll_id
                  ) dmg ON dmg.seller_roll_id = sr.id
-                 WHERE sr.id = ?",
-                [$sellerRollId]
+                 WHERE sr.id = ? AND sr.concern_id = ?",
+                [$concernId, $sellerRollId, $concernId]
             );
             $availableQuantity = max(0, (int)($roll['available_quantity'] ?? 0));
             if (!$roll || $newCount > $availableQuantity) {
@@ -2676,9 +2979,10 @@ class ProductionController {
                 $temporaryDamageNumber = 'TMP-ROL-' . bin2hex(random_bytes(16));
                 Database::execute(
                     "INSERT INTO roll_damages
-                        (damage_number, seller_id, seller_roll_id, qr_code, damaged_quantity, damaged_weight, loss_amount, damage_reason, defect_notes, photo_url, status, resolution_type, reported_by, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, ?, ?)",
+                        (concern_id, damage_number, seller_id, seller_roll_id, qr_code, damaged_quantity, damaged_weight, loss_amount, damage_reason, defect_notes, photo_url, status, resolution_type, reported_by, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'LOGGED', 'NONE', ?, ?, ?)",
                     [
+                        $concernId,
                         $temporaryDamageNumber,
                         $item['seller_id'],
                         $item['seller_roll_id'],
@@ -2696,8 +3000,8 @@ class ProductionController {
                 $damageId = (int)Database::lastInsertId();
                 $damageNumber = 'DMG-ROL-' . date('Y') . '-' . sprintf('%06d', $damageId) . '-ID' . $damageId;
                 Database::execute(
-                    "UPDATE roll_damages SET damage_number = ? WHERE id = ?",
-                    [$damageNumber, $damageId]
+                    "UPDATE roll_damages SET damage_number = ? WHERE id = ? AND concern_id = ?",
+                    [$damageNumber, $damageId, $concernId]
                 );
                 $totalLossAmount += (float)$item['loss_amount'];
 
@@ -2729,8 +3033,12 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $damageId = (int)$id;
-        $existing = Database::fetchOne("SELECT * FROM roll_damages WHERE id = ?", [$damageId]);
+        $existing = Database::fetchOne(
+            "SELECT * FROM roll_damages WHERE id = ? AND concern_id = ?",
+            [$damageId, $concernId]
+        );
         if (!$existing) {
             Session::flash('error', 'Damage record not found.');
             Response::back();
@@ -2769,7 +3077,13 @@ class ProductionController {
             return;
         }
 
-        $roll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ? AND seller_id = ?", [$sellerRollId, $sellerId]);
+        $roll = Database::fetchOne(
+            "SELECT sr.*
+             FROM seller_rolls sr
+             JOIN sellers s ON s.id = sr.seller_id
+             WHERE sr.id = ? AND sr.seller_id = ? AND sr.concern_id = ? AND s.concern_id = ?",
+            [$sellerRollId, $sellerId, $concernId, $concernId]
+        );
         if (!$roll) {
             Session::flash('error', 'Selected Fabric Roll not found for this supplier.');
             Response::back();
@@ -2779,8 +3093,8 @@ class ProductionController {
         // Allocated rolls can still be damaged; only other active damage records reduce this limit.
         $existingDamages = Database::fetchOne(
             "SELECT COALESCE(SUM(damaged_quantity), 0) as dmg_qty, COALESCE(SUM(damaged_weight), 0.0) as dmg_weight 
-             FROM roll_damages WHERE seller_roll_id = ? AND status NOT IN ('CLOSED', 'CANCELLED') AND id != ?",
-            [$sellerRollId, $damageId]
+             FROM roll_damages WHERE seller_roll_id = ? AND concern_id = ? AND status NOT IN ('CLOSED', 'CANCELLED') AND id != ?",
+            [$sellerRollId, $concernId, $damageId]
         );
         $damagedExistingQty = (int)($existingDamages['dmg_qty'] ?? 0);
         $availQty = max(0, (int)$roll['quantity'] - $damagedExistingQty);
@@ -2832,7 +3146,7 @@ class ProductionController {
                     defect_notes = ?,
                     photo_url = ?,
                     updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ?",
                 [
                     $sellerId,
                     $sellerRollId,
@@ -2842,7 +3156,8 @@ class ProductionController {
                     $damageReason,
                     $defectNotes ?: null,
                     $photoUrl,
-                    $damageId
+                    $damageId,
+                    $concernId
                 ]
             );
 
@@ -2869,8 +3184,12 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $damageId = (int)$id;
-        $damage = Database::fetchOne("SELECT * FROM roll_damages WHERE id = ?", [$damageId]);
+        $damage = Database::fetchOne(
+            "SELECT * FROM roll_damages WHERE id = ? AND concern_id = ?",
+            [$damageId, $concernId]
+        );
         if (!$damage) {
             Session::flash('error', 'Damage record not found.');
             Response::back();
@@ -2902,13 +3221,17 @@ class ProductionController {
             // Optional: If replacement roll is received from supplier and user checked "Add to active rolls"
             $replacementRollId = null;
             if ($status === 'REPLACEMENT_RECEIVED' && !empty($_POST['create_replacement_roll'])) {
-                $origRoll = Database::fetchOne("SELECT * FROM seller_rolls WHERE id = ?", [(int)$damage['seller_roll_id']]);
+                $origRoll = Database::fetchOne(
+                    "SELECT * FROM seller_rolls WHERE id = ? AND concern_id = ?",
+                    [(int)$damage['seller_roll_id'], $concernId]
+                );
                 if ($origRoll) {
                     Database::execute(
                         "INSERT INTO seller_rolls 
-                            (seller_id, roll_number, color, design_name, design_count, quantity, weight, price, notes, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                            (concern_id, seller_id, roll_number, color, design_name, design_count, quantity, weight, price, notes, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
                         [
+                            $concernId,
                             (int)$damage['seller_id'],
                             $replacementRollNumber ?: ($origRoll['roll_number'] . '-REPL'),
                             $origRoll['color'],
@@ -2923,34 +3246,7 @@ class ProductionController {
                     $replacementRollId = (int)Database::lastInsertId();
 
                     // Recalculate seller summary totals
-                    $allSellerRolls = Database::fetchAll("SELECT * FROM seller_rolls WHERE seller_id = ?", [(int)$damage['seller_id']]);
-                    $computedRollCount = count($allSellerRolls);
-                    $computedTotalWeight = array_sum(array_column($allSellerRolls, 'weight'));
-                    $computedTotalPrice = array_sum(array_column($allSellerRolls, 'price'));
-                    $uniqueColors = array_unique(array_filter(array_map('trim', array_column($allSellerRolls, 'color'))));
-                    $uniqueDesigns = array_unique(array_filter(array_map('trim', array_column($allSellerRolls, 'design_name'))));
-
-                    Database::execute(
-                        "UPDATE sellers SET 
-                            roll_count = ?, 
-                            color_count = ?, 
-                            design_count = ?, 
-                            color_design_count = ?, 
-                            roll_weight = ?, 
-                            roll_price = ?, 
-                            colors = ?
-                         WHERE id = ?",
-                        [
-                            $computedRollCount,
-                            count($uniqueColors),
-                            count($uniqueDesigns),
-                            count($uniqueColors) + count($uniqueDesigns),
-                            $computedTotalWeight,
-                            $computedTotalPrice,
-                            !empty($uniqueColors) ? implode(', ', $uniqueColors) : '',
-                            (int)$damage['seller_id']
-                        ]
-                    );
+                    $this->refreshSupplierRollTotals((int)$damage['seller_id'], $concernId);
                 }
             }
 
@@ -2966,7 +3262,7 @@ class ProductionController {
                     resolved_by = ?,
                     resolved_at = NOW(),
                     updated_at = NOW()
-                 WHERE id = ?",
+                 WHERE id = ? AND concern_id = ?",
                 [
                     $status,
                     $resolutionType,
@@ -2976,7 +3272,8 @@ class ProductionController {
                     $replacementRollId ?: $damage['replacement_roll_id'],
                     $resolutionNotes ?: null,
                     $userId,
-                    $damageId
+                    $damageId,
+                    $concernId
                 ]
             );
 
@@ -3001,8 +3298,12 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $damageId = (int)$id;
-        $damage = Database::fetchOne("SELECT * FROM roll_damages WHERE id = ?", [$damageId]);
+        $damage = Database::fetchOne(
+            "SELECT * FROM roll_damages WHERE id = ? AND concern_id = ?",
+            [$damageId, $concernId]
+        );
         if (!$damage) {
             Session::flash('error', 'Damage record not found.');
             Response::back();
@@ -3010,7 +3311,7 @@ class ProductionController {
         }
 
         try {
-            Database::execute("DELETE FROM roll_damages WHERE id = ?", [$damageId]);
+            Database::execute("DELETE FROM roll_damages WHERE id = ? AND concern_id = ?", [$damageId, $concernId]);
             AuditService::log('production', 'delete', 'roll_damages', $damageId, $damage, null);
             Session::flash('success', "Damage record #{$damage['damage_number']} deleted and roll inventory restored.");
             Response::redirect(url('production/damages'));
@@ -3025,6 +3326,7 @@ class ProductionController {
     // =========================================================================
 
     public function catalogList(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $search = trim($_GET['search'] ?? '');
         $categoryId = !empty($_GET['category_id']) ? (int)$_GET['category_id'] : null;
         $subcategoryId = !empty($_GET['subcategory_id']) ? (int)$_GET['subcategory_id'] : null;
@@ -3052,12 +3354,13 @@ class ProductionController {
                            MIN(pv.mrp) as min_mrp,
                            MAX(pv.mrp) as max_mrp
                     FROM product_variants pv
-                    WHERE pv.is_active = 1
+                    WHERE pv.is_active = 1 AND pv.concern_id = ?
                     GROUP BY pv.product_id
                 ) pv_summary ON pv_summary.product_id = p.id
                 WHERE (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL) 
-                  AND p.is_active = 1";
-        $params = [];
+                  AND p.is_active = 1
+                  AND p.concern_id = ?";
+        $params = [$concernId, $concernId];
 
         if (!empty($search)) {
             $sql .= " AND (
@@ -3074,6 +3377,7 @@ class ProductionController {
                 OR EXISTS (
                     SELECT 1 FROM product_variants pv2 
                     WHERE pv2.product_id = p.id 
+                    AND pv2.concern_id = p.concern_id
                     AND (pv2.sku LIKE ? OR pv2.qr_code LIKE ?)
                 )
             )";
@@ -3117,14 +3421,14 @@ class ProductionController {
     }
 
     public function createCatalog(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
         $brands = Database::fetchAll("SELECT * FROM brands WHERE is_active = 1 ORDER BY name ASC");
         $sizes = Database::fetchAll("SELECT * FROM sizes WHERE is_active = 1 ORDER BY sort_order ASC, id ASC");
         $colors = Database::fetchAll("SELECT * FROM colors WHERE is_active = 1 ORDER BY name ASC");
 
-        // Generate auto style code suggestion
-        $count = Database::fetchOne("SELECT COUNT(*) as c FROM products WHERE source_type = 'OWN_PRODUCTION'")['c'] ?? 0;
-        $suggestedCode = 'GRM-STY-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+        // Generate auto style code suggestion scoped to active concern
+        $suggestedCode = ProductionService::generateNextCatalogCode($concernId);
 
         Response::view('production.catalog.create', [
             'pageTitle'     => 'Add Product Style | Production Catalog',
@@ -3144,6 +3448,7 @@ class ProductionController {
     }
 
     public function storeCatalog(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $name = mb_strtoupper(trim($_POST['name'] ?? ''));
         $code = mb_strtoupper(trim($_POST['code'] ?? ''));
         $categoryId = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
@@ -3181,11 +3486,16 @@ class ProductionController {
         }
 
         if (empty($code)) {
-            $count = Database::fetchOne("SELECT COUNT(*) as c FROM products WHERE source_type = 'OWN_PRODUCTION'")['c'] ?? 0;
-            $code = 'GRM-STY-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
-            $existing = Database::fetchOne("SELECT id FROM products WHERE code = ?", [$code]);
-            if ($existing) {
-                $code .= '-' . rand(10, 99);
+            $code = ProductionService::generateNextCatalogCode($concernId);
+        } else {
+            $existingCode = Database::fetchOne(
+                "SELECT id, name FROM products WHERE concern_id = ? AND code = ? LIMIT 1",
+                [$concernId, $code]
+            );
+            if ($existingCode) {
+                Session::flash('error', "Product style code '{$code}' already exists in this concern for Style '{$existingCode['name']}'.");
+                Response::redirect(url('production/catalog/create'));
+                return;
             }
         }
 
@@ -3207,8 +3517,8 @@ class ProductionController {
 
         if (!empty($qrCodePrefix)) {
             $existingQr = Database::fetchOne(
-                "SELECT id, name FROM products WHERE qr_code_prefix = ? LIMIT 1",
-                [$qrCodePrefix]
+                "SELECT id, name FROM products WHERE qr_code_prefix = ? AND concern_id = ? AND is_active = 1 LIMIT 1",
+                [$qrCodePrefix, $concernId]
             );
             if ($existingQr) {
                 Session::flash('error', "The Whole Code for QR Code '{$qrCodePrefix}' already exists for Style '{$existingQr['name']}'. Please customize this code to make it unique.");
@@ -3218,9 +3528,10 @@ class ProductionController {
         }
 
         Database::execute(
-            "INSERT INTO products (name, code, category_id, subcategory_id, sub_subcategory_id, category_code, subcategory_code, sub_subcategory_code, qr_code_prefix, brand_id, source_type, material, description, hsn_code, gst_percentage, min_stock, max_stock, image_url, cloudinary_public_id, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OWN_PRODUCTION', ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            "INSERT INTO products (concern_id, name, code, category_id, subcategory_id, sub_subcategory_id, category_code, subcategory_code, sub_subcategory_code, qr_code_prefix, brand_id, source_type, material, description, hsn_code, gst_percentage, min_stock, max_stock, image_url, cloudinary_public_id, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OWN_PRODUCTION', ?, ?, ?, ?, ?, ?, ?, ?, 1)",
             [
+                $concernId,
                 $name,
                 $code,
                 $categoryId,
@@ -3271,9 +3582,10 @@ class ProductionController {
                 }
 
                 Database::execute(
-                    "INSERT INTO product_variants (product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    "INSERT INTO product_variants (concern_id, product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                     [
+                        $concernId,
                         $productId,
                         $sizeId,
                         $colorId,
@@ -3309,9 +3621,10 @@ class ProductionController {
                     $sku = implode('-', $skuParts);
 
                     Database::execute(
-                        "INSERT INTO product_variants (product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
-                         VALUES (?, ?, ?, ?, 0.00, 0.00, 0.00, 0.00, 1)",
+                        "INSERT INTO product_variants (concern_id, product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
+                         VALUES (?, ?, ?, ?, ?, 0.00, 0.00, 0.00, 0.00, 1)",
                         [
+                            $concernId,
                             $productId,
                             $sizeId,
                             $colorId,
@@ -3328,9 +3641,10 @@ class ProductionController {
             $defaultSelling = max(0.0, (float)($_POST['default_selling_price'] ?? 0));
 
             Database::execute(
-                "INSERT INTO product_variants (product_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, 1)",
+                "INSERT INTO product_variants (concern_id, product_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
                 [
+                    $concernId,
                     $productId,
                     $code . '-STD',
                     $defaultMrp,
@@ -3349,6 +3663,7 @@ class ProductionController {
     }
 
     public function viewCatalog(int $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $product = Database::fetchOne(
             "SELECT p.*, c.name as category_name, sc.name as subcategory_name, ssc.name as sub_subcategory_name, b.name as brand_name
              FROM products p
@@ -3356,8 +3671,8 @@ class ProductionController {
              LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
              LEFT JOIN sub_subcategories ssc ON p.sub_subcategory_id = ssc.id
              LEFT JOIN brands b ON p.brand_id = b.id
-             WHERE p.id = ?",
-            [$id]
+             WHERE p.id = ? AND p.concern_id = ?",
+            [$id, $concernId]
         );
 
         if (!$product) {
@@ -3371,18 +3686,18 @@ class ProductionController {
              FROM product_variants pv
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors col ON pv.color_id = col.id
-             WHERE pv.product_id = ? AND pv.is_active = 1
+             WHERE pv.product_id = ? AND pv.concern_id = ? AND pv.is_active = 1
              ORDER BY s.sort_order ASC, col.name ASC",
-            [$id]
+            [$id, $concernId]
         );
 
         $programs = Database::fetchAll(
             "SELECT pp.*, u.name as unit_name
              FROM production_programs pp
-             LEFT JOIN production_units u ON pp.production_unit_id = u.id
-             WHERE pp.product_id = ?
+             JOIN production_units u ON pp.production_unit_id = u.id
+             WHERE pp.product_id = ? AND u.concern_id = ?
              ORDER BY pp.created_at DESC LIMIT 5",
-            [$id]
+            [$id, $concernId]
         );
 
         Response::view('production.catalog.view', [
@@ -3401,7 +3716,11 @@ class ProductionController {
     }
 
     public function editCatalog(int $id): void {
-        $product = Database::fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $product = Database::fetchOne(
+            "SELECT * FROM products WHERE id = ? AND concern_id = ?",
+            [$id, $concernId]
+        );
         if (!$product) {
             Session::flash('error', 'Product style not found.');
             Response::redirect(url('production/catalog'));
@@ -3420,9 +3739,9 @@ class ProductionController {
              FROM product_variants pv
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors col ON pv.color_id = col.id
-             WHERE pv.product_id = ? AND pv.is_active = 1
+             WHERE pv.product_id = ? AND pv.concern_id = ? AND pv.is_active = 1
              ORDER BY s.sort_order ASC, col.name ASC",
-            [$id]
+            [$id, $concernId]
         );
 
         Response::view('production.catalog.edit', [
@@ -3446,7 +3765,11 @@ class ProductionController {
     }
 
     public function updateCatalog(int $id): void {
-        $product = Database::fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
+        $concernId = ConcernTransactionService::activeConcernId();
+        $product = Database::fetchOne(
+            "SELECT * FROM products WHERE id = ? AND concern_id = ?",
+            [$id, $concernId]
+        );
         if (!$product) {
             Session::flash('error', 'Product style not found.');
             Response::redirect(url('production/catalog'));
@@ -3490,6 +3813,16 @@ class ProductionController {
 
         if (empty($code)) {
             $code = $product['code'];
+        } else {
+            $existingCode = Database::fetchOne(
+                "SELECT id, name FROM products WHERE concern_id = ? AND code = ? AND id != ? LIMIT 1",
+                [$concernId, $code, $id]
+            );
+            if ($existingCode) {
+                Session::flash('error', "Product style code '{$code}' already exists in this concern for Style '{$existingCode['name']}'.");
+                Response::redirect(url('production/catalog/edit/' . $id));
+                return;
+            }
         }
 
         $imageUrl = $product['image_url'];
@@ -3509,8 +3842,8 @@ class ProductionController {
 
         if (!empty($qrCodePrefix)) {
             $existingQr = Database::fetchOne(
-                "SELECT id, name FROM products WHERE qr_code_prefix = ? AND id != ? LIMIT 1",
-                [$qrCodePrefix, $id]
+                "SELECT id, name FROM products WHERE qr_code_prefix = ? AND concern_id = ? AND id != ? AND is_active = 1 LIMIT 1",
+                [$qrCodePrefix, $concernId, $id]
             );
             if ($existingQr) {
                 Session::flash('error', "The Whole Code for QR Code '{$qrCodePrefix}' already exists for Style '{$existingQr['name']}'. Please customize this code to make it unique.");
@@ -3521,7 +3854,7 @@ class ProductionController {
 
         Database::execute(
             "UPDATE products SET name = ?, code = ?, category_id = ?, subcategory_id = ?, sub_subcategory_id = ?, category_code = ?, subcategory_code = ?, sub_subcategory_code = ?, qr_code_prefix = ?, brand_id = ?, material = ?, description = ?, hsn_code = ?, gst_percentage = ?, min_stock = ?, max_stock = ?, image_url = ?, cloudinary_public_id = ?, updated_at = NOW()
-             WHERE id = ?",
+             WHERE id = ? AND concern_id = ?",
             [
                 $name,
                 $code,
@@ -3541,7 +3874,8 @@ class ProductionController {
                 $maxStock,
                 $imageUrl,
                 $cloudinaryPublicId,
-                $id
+                $id,
+                $concernId
             ]
         );
 
@@ -3551,9 +3885,9 @@ class ProductionController {
 
         if (!empty($_POST['variants']) && is_array($_POST['variants'])) {
             try {
-                Database::execute("DELETE FROM product_variants WHERE product_id = ?", [$id]);
+                Database::execute("DELETE FROM product_variants WHERE product_id = ? AND concern_id = ?", [$id, $concernId]);
             } catch (Exception $e) {
-                Database::execute("UPDATE product_variants SET is_active = 0 WHERE product_id = ?", [$id]);
+                Database::execute("UPDATE product_variants SET is_active = 0 WHERE product_id = ? AND concern_id = ?", [$id, $concernId]);
             }
 
             foreach ($_POST['variants'] as $v) {
@@ -3569,10 +3903,11 @@ class ProductionController {
                 }
 
                 Database::execute(
-                    "INSERT INTO product_variants (product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    "INSERT INTO product_variants (concern_id, product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                      ON DUPLICATE KEY UPDATE product_id=VALUES(product_id), size_id=VALUES(size_id), color_id=VALUES(color_id), mrp=VALUES(mrp), purchase_price=VALUES(purchase_price), production_cost=VALUES(production_cost), selling_price=VALUES(selling_price), is_active=1",
                     [
+                        $concernId,
                         $id,
                         $sizeId,
                         $colorId,
@@ -3586,9 +3921,9 @@ class ProductionController {
             }
         } elseif (!empty($selectedSizes) || !empty($selectedColors)) {
             try {
-                Database::execute("DELETE FROM product_variants WHERE product_id = ?", [$id]);
+                Database::execute("DELETE FROM product_variants WHERE product_id = ? AND concern_id = ?", [$id, $concernId]);
             } catch (Exception $e) {
-                Database::execute("UPDATE product_variants SET is_active = 0 WHERE product_id = ?", [$id]);
+                Database::execute("UPDATE product_variants SET is_active = 0 WHERE product_id = ? AND concern_id = ?", [$id, $concernId]);
             }
 
             $sizesList = !empty($selectedSizes) ? $selectedSizes : [null];
@@ -3613,10 +3948,11 @@ class ProductionController {
                     $sku = implode('-', $skuParts);
 
                     Database::execute(
-                        "INSERT INTO product_variants (product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
-                         VALUES (?, ?, ?, ?, 0.00, 0.00, 0.00, 0.00, 1)
+                        "INSERT INTO product_variants (concern_id, product_id, size_id, color_id, sku, mrp, purchase_price, production_cost, selling_price, is_active)
+                         VALUES (?, ?, ?, ?, ?, 0.00, 0.00, 0.00, 0.00, 1)
                          ON DUPLICATE KEY UPDATE product_id=VALUES(product_id), size_id=VALUES(size_id), color_id=VALUES(color_id), is_active=1",
                         [
+                            $concernId,
                             $id,
                             $sizeId,
                             $colorId,
@@ -3633,9 +3969,34 @@ class ProductionController {
     }
 
     public function deleteCatalog(int $id): void {
+        if (!CSRF::validateRequest()) {
+            Session::flash('error', 'Invalid security token. Please try again.');
+            Response::back();
+            return;
+        }
+        $concernId = ConcernTransactionService::activeConcernId();
+        $product = Database::fetchOne(
+            "SELECT id, name FROM products WHERE id = ? AND concern_id = ? AND is_active = 1",
+            [$id, $concernId]
+        );
+        if (!$product) {
+            Session::flash('error', 'Product style not found.');
+            Response::redirect(url('production/catalog'));
+            return;
+        }
         $ts = time();
-        Database::execute("UPDATE products SET is_active = 0, code = CONCAT(code, '_DEL_', ?) WHERE id = ?", [$ts, $id]);
-        Database::execute("UPDATE product_variants SET is_active = 0, sku = CONCAT(sku, '_DEL_', ?), qr_code = CONCAT(qr_code, '_DEL_', ?) WHERE product_id = ?", [$ts, $ts, $id]);
+        Database::execute(
+            "UPDATE products SET is_active = 0, code = CONCAT(code, '_DEL_', ?) WHERE id = ? AND concern_id = ?",
+            [$ts, $id, $concernId]
+        );
+        Database::execute(
+            "UPDATE product_variants
+             SET is_active = 0,
+                 sku = CONCAT(sku, '_DEL_', ?),
+                 qr_code = CASE WHEN qr_code IS NULL THEN NULL ELSE CONCAT(qr_code, '_DEL_', ?) END
+             WHERE product_id = ? AND concern_id = ?",
+            [$ts, $ts, $id, $concernId]
+        );
         AuditService::log('production', 'delete', 'products', (int)$id, null, ['is_active' => 0]);
         Session::flash('success', 'Product style removed from catalog.');
         Response::redirect(url('production/catalog'));
@@ -3647,6 +4008,7 @@ class ProductionController {
 
     public function ajaxCheckQRCode(): void {
         try {
+            $concernId = ConcernTransactionService::activeConcernId();
             $code = mb_strtoupper(trim($_GET['code'] ?? ''));
             $excludeId = !empty($_GET['exclude_id']) ? (int)$_GET['exclude_id'] : 0;
 
@@ -3661,8 +4023,8 @@ class ProductionController {
                       LEFT JOIN categories c ON c.id = p.category_id
                       LEFT JOIN subcategories sc ON sc.id = p.subcategory_id
                       LEFT JOIN sub_subcategories ssc ON ssc.id = p.sub_subcategory_id
-                      WHERE p.qr_code_prefix = ?";
-            $params = [$code];
+                      WHERE p.qr_code_prefix = ? AND p.concern_id = ? AND p.is_active = 1";
+            $params = [$code, $concernId];
             if ($excludeId > 0) {
                 $query .= " AND p.id != ?";
                 $params[] = $excludeId;
@@ -3698,16 +4060,20 @@ class ProductionController {
     public function ajaxCategories(): void {
         try {
             $sql = "SELECT c.id, c.name, c.slug FROM categories c WHERE c.is_active = 1";
+            $params = [];
             if (!empty($_GET['catalog_only'])) {
+                $concernId = ConcernTransactionService::activeConcernId();
                 $sql .= " AND EXISTS (
                     SELECT 1 FROM products p
                     WHERE p.category_id = c.id
+                      AND p.concern_id = ?
                       AND p.is_active = 1
                       AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
                 )";
+                $params[] = $concernId;
             }
             $sql .= " ORDER BY c.sort_order ASC, c.name ASC";
-            $categories = Database::fetchAll($sql);
+            $categories = Database::fetchAll($sql, $params);
             Response::json($categories);
         } catch (\Throwable $e) {
             Response::json(['success' => false, 'message' => $e->getMessage()], 500);
@@ -3800,18 +4166,22 @@ class ProductionController {
         try {
             $sql = "SELECT sc.id, sc.name, sc.slug FROM subcategories sc
                     WHERE sc.category_id = ? AND sc.is_active = 1";
+            $params = [$categoryId];
             if (!empty($_GET['catalog_only'])) {
+                $concernId = ConcernTransactionService::activeConcernId();
                 $sql .= " AND EXISTS (
                     SELECT 1 FROM products p
                     WHERE p.subcategory_id = sc.id
+                      AND p.concern_id = ?
                       AND p.is_active = 1
                       AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
                 )";
+                $params[] = $concernId;
             }
             $sql .= " ORDER BY sc.sort_order ASC, sc.name ASC";
             $subcats = Database::fetchAll(
                 $sql,
-                [$categoryId]
+                $params
             );
             Response::json($subcats);
         } catch (\Throwable $e) {
@@ -3909,18 +4279,22 @@ class ProductionController {
         try {
             $sql = "SELECT ssc.id, ssc.name, ssc.slug FROM sub_subcategories ssc
                     WHERE ssc.subcategory_id = ? AND ssc.is_active = 1";
+            $params = [$subcategoryId];
             if (!empty($_GET['catalog_only'])) {
+                $concernId = ConcernTransactionService::activeConcernId();
                 $sql .= " AND EXISTS (
                     SELECT 1 FROM products p
                     WHERE p.sub_subcategory_id = ssc.id
+                      AND p.concern_id = ?
                       AND p.is_active = 1
                       AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
                 )";
+                $params[] = $concernId;
             }
             $sql .= " ORDER BY ssc.name ASC";
             $subSubcats = Database::fetchAll(
                 $sql,
-                [$subcategoryId]
+                $params
             );
             Response::json($subSubcats);
         } catch (\Throwable $e) {
@@ -4067,19 +4441,21 @@ class ProductionController {
     }
 
     public function searchProducts(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $q = trim($_GET['q'] ?? '');
         $products = Database::fetchAll(
             "SELECT p.id, p.name, p.code, p.material, c.name as category_name
              FROM products p
              LEFT JOIN categories c ON p.category_id = c.id
-             WHERE p.is_active = 1 AND (p.name LIKE ? OR p.code LIKE ?)
+             WHERE p.concern_id = ? AND p.is_active = 1 AND (p.name LIKE ? OR p.code LIKE ?)
              LIMIT 20",
-            ['%' . $q . '%', '%' . $q . '%']
+            [$concernId, '%' . $q . '%', '%' . $q . '%']
         );
         Response::json($products);
     }
 
     public function searchVariants(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $q = trim($_GET['q'] ?? '');
         $variants = Database::fetchAll(
             "SELECT pv.id, pv.sku, pv.production_cost, pv.selling_price, pv.mrp, p.name as product_name, s.code as size_code, col.name as color_name
@@ -4087,9 +4463,9 @@ class ProductionController {
              JOIN products p ON pv.product_id = p.id
              LEFT JOIN sizes s ON pv.size_id = s.id
              LEFT JOIN colors col ON pv.color_id = col.id
-             WHERE pv.is_active = 1 AND (pv.sku LIKE ? OR p.name LIKE ?)
+             WHERE p.concern_id = ? AND pv.concern_id = ? AND pv.is_active = 1 AND (pv.sku LIKE ? OR p.name LIKE ?)
              LIMIT 20",
-            ['%' . $q . '%', '%' . $q . '%']
+            [$concernId, $concernId, '%' . $q . '%', '%' . $q . '%']
         );
         Response::json($variants);
     }
@@ -4142,68 +4518,38 @@ class ProductionController {
     }
 
     public function createProgram(): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
         $defaultUnitId = $scopedUnitId !== null
             ? $scopedUnitId
             : (int)($units[0]['id'] ?? 0);
-        $categories = Database::fetchAll(
-            "SELECT c.* FROM categories c
-             WHERE c.is_active = 1
-               AND EXISTS (
-                   SELECT 1 FROM products p
-                   WHERE p.category_id = c.id
-                     AND p.is_active = 1
-                     AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
-               )
-             ORDER BY c.sort_order ASC, c.name ASC"
-        );
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $categories = $concernId
+            ? Database::fetchAll(
+                "SELECT c.* FROM categories c
+                 WHERE c.is_active = 1
+                   AND EXISTS (
+                       SELECT 1 FROM products p
+                       WHERE p.category_id = c.id
+                         AND p.concern_id = ?
+                         AND p.is_active = 1
+                         AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+                   )
+                 ORDER BY c.sort_order ASC, c.name ASC",
+                [(int)$concernId]
+            )
+            : [];
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
 
-        // Fetch raw material rolls from seller_rolls joined with sellers with live usage, damages, and remaining stock
-        $rolls = Database::fetchAll(
-            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type,
-                    COALESCE(u.used_quantity, 0) as used_quantity,
-                    COALESCE(u.used_weight, 0) as used_weight,
-                    COALESCE(u.used_price, 0) as used_price,
-                    COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
-                    COALESCE(dmg.damaged_weight, 0) as damaged_weight,
-                    COALESCE(dmg.damaged_price, 0) as damaged_price,
-                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
-                    GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight,
-                    GREATEST(0.0, sr.price - COALESCE(u.used_price, 0) - COALESCE(dmg.damaged_price, 0)) as available_price,
-                    dmg.damage_reason,
-                    dmg.damage_status
-             FROM seller_rolls sr
-             JOIN sellers s ON sr.seller_id = s.id
-             LEFT JOIN (
-                 SELECT ppr.seller_roll_id, 
-                        SUM(ppr.roll_qty) as used_quantity,
-                        SUM(ppr.roll_weight) as used_weight,
-                        SUM(ppr.roll_price) as used_price
-                 FROM production_program_rolls ppr
-                 JOIN production_programs pp ON ppr.production_program_id = pp.id
-                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
-                 GROUP BY ppr.seller_roll_id
-             ) u ON sr.id = u.seller_roll_id
-             LEFT JOIN (
-                 SELECT rd.seller_roll_id,
-                        SUM(rd.damaged_quantity) as damaged_quantity,
-                        SUM(rd.damaged_weight) as damaged_weight,
-                        SUM(rd.loss_amount) as damaged_price,
-                        MAX(rd.damage_reason) as damage_reason,
-                        MAX(rd.status) as damage_status
-                 FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                 GROUP BY rd.seller_roll_id
-             ) dmg ON sr.id = dmg.seller_roll_id
-             WHERE s.is_active = 1
-             ORDER BY sr.id DESC"
-        );
+        // Fetch raw material rolls owned by this concern with live usage, damages, and remaining stock
+        $rolls = $this->getConcernSellerRolls($concernId ? (int)$concernId : null, true);
 
         // Auto-generate suggested program code PRG-YYYYMMDD-0001
-        $count = Database::fetchOne("SELECT COUNT(*) as c FROM production_programs")['c'] ?? 0;
-        $suggestedProgramNumber = 'PRG-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+        $suggestedProgramNumber = ProductionService::generateNextSequentialCode(
+            'production_programs',
+            'program_number',
+            'PRG-' . date('Ymd') . '-'
+        )['code'];
 
         Response::view('production.programs.create', [
             'pageTitle'              => 'Create Production Program',
@@ -4231,6 +4577,7 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         if ($scopedUnitId !== null) {
             $_POST['production_unit_id'] = $scopedUnitId;
@@ -4281,7 +4628,7 @@ class ProductionController {
             $rSubcatId = !empty($r['subcategory_id']) ? (int)$r['subcategory_id'] : (!empty($_POST['subcategory_id']) ? (int)$_POST['subcategory_id'] : null);
             $rSubSubcatId = !empty($r['sub_subcategory_id']) ? (int)$r['sub_subcategory_id'] : (!empty($_POST['sub_subcategory_id']) ? (int)$_POST['sub_subcategory_id'] : null);
 
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name, quantity FROM seller_rolls WHERE id = ?", [$rId]);
+            $sellerData = $this->findConcernSellerRoll($rId, $concernId);
 
             if ($sellerData) {
                 if ($rQty <= 0 && !empty($sellerData['quantity'])) $rQty = (int)$sellerData['quantity'];
@@ -4308,7 +4655,7 @@ class ProductionController {
         // Fallback to single roll selection if rolls array was empty
         if (empty($validRolls) && !empty($_POST['seller_roll_id'])) {
             $singleRollId = (int)$_POST['seller_roll_id'];
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name, quantity FROM seller_rolls WHERE id = ?", [$singleRollId]);
+            $sellerData = $this->findConcernSellerRoll($singleRollId, $concernId);
             if ($sellerData) {
                 $rQty = max(0, (int)($_POST['roll_qty'] ?? ($sellerData['quantity'] ?? 0)));
                 $rWeight = max(0.0, (float)($_POST['roll_weight'] ?? $sellerData['weight']));
@@ -4343,36 +4690,11 @@ class ProductionController {
             $rid = (int)$vr['seller_roll_id'];
             $rollUsageMap[$rid] = ($rollUsageMap[$rid] ?? 0) + (int)$vr['roll_qty'];
         }
-
-        foreach ($rollUsageMap as $rid => $reqQty) {
-            $sellerRoll = Database::fetchOne(
-                "SELECT sr.roll_number, sr.quantity,
-                        GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity
-                 FROM seller_rolls sr
-                 LEFT JOIN (
-                     SELECT ppr.seller_roll_id, SUM(ppr.roll_qty) as used_quantity
-                     FROM production_program_rolls ppr
-                     JOIN production_programs pp ON ppr.production_program_id = pp.id
-                     WHERE pp.is_active = 1 AND pp.status != 'CANCELLED'
-                     GROUP BY ppr.seller_roll_id
-                 ) u ON sr.id = u.seller_roll_id
-                 LEFT JOIN (
-                     SELECT rd.seller_roll_id, SUM(rd.damaged_quantity) as damaged_quantity
-                     FROM roll_damages rd
-                     WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                     GROUP BY rd.seller_roll_id
-                 ) dmg ON sr.id = dmg.seller_roll_id
-                 WHERE sr.id = ?",
-                [$rid]
-            );
-            if ($sellerRoll) {
-                $maxStock = (int)($sellerRoll['available_quantity'] ?? $sellerRoll['quantity']);
-                if ($reqQty > $maxStock) {
-                    Session::flash('error', "Total requested quantity ({$reqQty} pcs) for Roll '{$sellerRoll['roll_number']}' exceeds available stock ({$maxStock} pcs after deducting damages and active programs). Please adjust quantities.");
-                    Response::back();
-                    return;
-                }
-            }
+        $stockError = $this->checkConcernRollStockAvailability($concernId, $rollUsageMap);
+        if ($stockError !== null) {
+            Session::flash('error', $stockError);
+            Response::back();
+            return;
         }
 
         $primaryRoll = $validRolls[0];
@@ -4385,24 +4707,16 @@ class ProductionController {
             $subSubcategoryId = $primaryRoll['sub_subcategory_id'];
         }
 
-        // Optional: find or link product_id for backward compatibility
-        $productId = null;
-        if ($subSubcategoryId) {
-            $p = Database::fetchOne("SELECT id FROM products WHERE sub_subcategory_id = ? AND is_active = 1 LIMIT 1", [$subSubcategoryId]);
-            if ($p) $productId = (int)$p['id'];
-        }
-        if (!$productId && $subcategoryId) {
-            $p = Database::fetchOne("SELECT id FROM products WHERE subcategory_id = ? AND is_active = 1 LIMIT 1", [$subcategoryId]);
-            if ($p) $productId = (int)$p['id'];
-        }
-        if (!$productId && $categoryId) {
-            $p = Database::fetchOne("SELECT id FROM products WHERE category_id = ? AND is_active = 1 LIMIT 1", [$categoryId]);
-            if ($p) $productId = (int)$p['id'];
-        }
+        // Optional: find or link product_id for backward compatibility within the active concern
+        $matchedProduct = $this->findConcernProductByHierarchy($concernId, $categoryId, $subcategoryId, $subSubcategoryId);
+        $productId = $matchedProduct ? (int)$matchedProduct['id'] : null;
 
         if (empty($programNumber)) {
-            $count = Database::fetchOne("SELECT COUNT(*) as c FROM production_programs")['c'] ?? 0;
-            $programNumber = 'PRG-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+            $programNumber = ProductionService::generateNextSequentialCode(
+                'production_programs',
+                'program_number',
+                'PRG-' . date('Ymd') . '-'
+            )['code'];
         }
 
         try {
@@ -4446,67 +4760,34 @@ class ProductionController {
     }
 
     public function editProgram(string $id): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $program = ProductionProgram::find((int)$id);
         if (!$program) {
             Response::error(404, 'Program not found.');
+            return;
         }
 
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
-        $categories = Database::fetchAll(
-            "SELECT c.* FROM categories c
-             WHERE c.is_active = 1
-               AND EXISTS (
-                   SELECT 1 FROM products p
-                   WHERE p.category_id = c.id
-                     AND p.is_active = 1
-                     AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
-               )
-             ORDER BY c.sort_order ASC, c.name ASC"
-        );
+        $categories = $concernId
+            ? Database::fetchAll(
+                "SELECT c.* FROM categories c
+                 WHERE c.is_active = 1
+                   AND EXISTS (
+                       SELECT 1 FROM products p
+                       WHERE p.category_id = c.id
+                         AND p.concern_id = ?
+                         AND p.is_active = 1
+                         AND (p.source_type IN ('OWN_PRODUCTION', 'MANUFACTURED', 'IN_HOUSE') OR p.source_type IS NULL)
+                   )
+                 ORDER BY c.sort_order ASC, c.name ASC",
+                [(int)$concernId]
+            )
+            : [];
         $subcategories = $program['category_id'] ? Database::fetchAll("SELECT * FROM subcategories WHERE category_id = ? AND is_active = 1 ORDER BY sort_order ASC, name ASC", [$program['category_id']]) : [];
         $subSubcategories = $program['subcategory_id'] ? Database::fetchAll("SELECT * FROM sub_subcategories WHERE subcategory_id = ? AND is_active = 1 ORDER BY name ASC", [$program['subcategory_id']]) : [];
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
-        $rolls = Database::fetchAll(
-            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type,
-                    COALESCE(u.used_quantity, 0) as used_quantity,
-                    COALESCE(u.used_weight, 0) as used_weight,
-                    COALESCE(u.used_price, 0) as used_price,
-                    COALESCE(dmg.damaged_quantity, 0) as damaged_quantity,
-                    COALESCE(dmg.damaged_weight, 0) as damaged_weight,
-                    COALESCE(dmg.damaged_price, 0) as damaged_price,
-                    GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity,
-                    GREATEST(0.0, sr.weight - COALESCE(u.used_weight, 0) - COALESCE(dmg.damaged_weight, 0)) as available_weight,
-                    GREATEST(0.0, sr.price - COALESCE(u.used_price, 0) - COALESCE(dmg.damaged_price, 0)) as available_price,
-                    dmg.damage_reason,
-                    dmg.damage_status
-             FROM seller_rolls sr
-             JOIN sellers s ON sr.seller_id = s.id
-             LEFT JOIN (
-                 SELECT ppr.seller_roll_id, 
-                        SUM(ppr.roll_qty) as used_quantity,
-                        SUM(ppr.roll_weight) as used_weight,
-                        SUM(ppr.roll_price) as used_price
-                 FROM production_program_rolls ppr
-                 JOIN production_programs pp ON ppr.production_program_id = pp.id
-                 WHERE pp.is_active = 1 AND pp.status != 'CANCELLED' AND pp.id != ?
-                 GROUP BY ppr.seller_roll_id
-             ) u ON sr.id = u.seller_roll_id
-             LEFT JOIN (
-                 SELECT rd.seller_roll_id,
-                        SUM(rd.damaged_quantity) as damaged_quantity,
-                        SUM(rd.damaged_weight) as damaged_weight,
-                        SUM(rd.loss_amount) as damaged_price,
-                        MAX(rd.damage_reason) as damage_reason,
-                        MAX(rd.status) as damage_status
-                 FROM roll_damages rd
-                 WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                 GROUP BY rd.seller_roll_id
-             ) dmg ON sr.id = dmg.seller_roll_id
-             WHERE s.is_active = 1
-             ORDER BY sr.id DESC",
-            [(int)$id]
-        );
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
+        $rolls = $this->getConcernSellerRolls($concernId ? (int)$concernId : null, true, (int)$id);
         $programRolls = ProductionProgram::getRolls((int)$id);
 
         Response::view('production.programs.edit', [
@@ -4538,6 +4819,14 @@ class ProductionController {
             return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
+        $program = ProductionProgram::find((int)$id);
+        if (!$program) {
+            Session::flash('error', 'Program not found.');
+            Response::redirect(url('production/programs'));
+            return;
+        }
+
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         if ($scopedUnitId !== null) {
             $_POST['production_unit_id'] = $scopedUnitId;
@@ -4550,7 +4839,18 @@ class ProductionController {
         $subSubcategoryId = !empty($_POST['sub_subcategory_id']) ? (int)$_POST['sub_subcategory_id'] : null;
         $startDate = !empty($_POST['start_date']) ? $_POST['start_date'] : null;
         $endDate = !empty($_POST['end_date']) ? $_POST['end_date'] : null;
-        $unitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : $scopedUnitId;
+        $unitId = !empty($_POST['production_unit_id'])
+            ? (int)$_POST['production_unit_id']
+            : ($scopedUnitId ?? (int)($program['production_unit_id'] ?? 0));
+        if ($unitId > 0) {
+            try {
+                ConcernTransactionService::assertFacility('PRODUCTION', $unitId);
+            } catch (\Throwable $e) {
+                Session::flash('error', $e->getMessage());
+                Response::back();
+                return;
+            }
+        }
         $priority = $_POST['priority'] ?? 'MEDIUM';
         $assignedTo = !empty($_POST['assigned_to']) ? (int)$_POST['assigned_to'] : null;
         $notes = trim($_POST['notes'] ?? '');
@@ -4579,7 +4879,7 @@ class ProductionController {
             $rSubcatId = !empty($r['subcategory_id']) ? (int)$r['subcategory_id'] : (!empty($_POST['subcategory_id']) ? (int)$_POST['subcategory_id'] : null);
             $rSubSubcatId = !empty($r['sub_subcategory_id']) ? (int)$r['sub_subcategory_id'] : (!empty($_POST['sub_subcategory_id']) ? (int)$_POST['sub_subcategory_id'] : null);
 
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name, quantity FROM seller_rolls WHERE id = ?", [$rId]);
+            $sellerData = $this->findConcernSellerRoll($rId, $concernId);
 
             if ($sellerData) {
                 if ($rQty <= 0 && !empty($sellerData['quantity'])) $rQty = (int)$sellerData['quantity'];
@@ -4605,7 +4905,7 @@ class ProductionController {
 
         if (empty($validRolls) && !empty($_POST['seller_roll_id'])) {
             $singleRollId = (int)$_POST['seller_roll_id'];
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name, quantity FROM seller_rolls WHERE id = ?", [$singleRollId]);
+            $sellerData = $this->findConcernSellerRoll($singleRollId, $concernId);
             if ($sellerData) {
                 $rQty = max(0, (int)($_POST['roll_qty'] ?? ($sellerData['quantity'] ?? 0)));
                 $rWeight = max(0.0, (float)($_POST['roll_weight'] ?? $sellerData['weight']));
@@ -4640,36 +4940,11 @@ class ProductionController {
             $rid = (int)$vr['seller_roll_id'];
             $rollUsageMap[$rid] = ($rollUsageMap[$rid] ?? 0) + (int)$vr['roll_qty'];
         }
-
-        foreach ($rollUsageMap as $rid => $reqQty) {
-            $sellerRoll = Database::fetchOne(
-                "SELECT sr.roll_number, sr.quantity,
-                        GREATEST(0, sr.quantity - COALESCE(u.used_quantity, 0) - COALESCE(dmg.damaged_quantity, 0)) as available_quantity
-                 FROM seller_rolls sr
-                 LEFT JOIN (
-                     SELECT ppr.seller_roll_id, SUM(ppr.roll_qty) as used_quantity
-                     FROM production_program_rolls ppr
-                     JOIN production_programs pp ON ppr.production_program_id = pp.id
-                     WHERE pp.is_active = 1 AND pp.status != 'CANCELLED' AND pp.id != ?
-                     GROUP BY ppr.seller_roll_id
-                 ) u ON sr.id = u.seller_roll_id
-                 LEFT JOIN (
-                     SELECT rd.seller_roll_id, SUM(rd.damaged_quantity) as damaged_quantity
-                     FROM roll_damages rd
-                     WHERE rd.status NOT IN ('CLOSED', 'CANCELLED')
-                     GROUP BY rd.seller_roll_id
-                 ) dmg ON sr.id = dmg.seller_roll_id
-                 WHERE sr.id = ?",
-                [(int)$id, $rid]
-            );
-            if ($sellerRoll) {
-                $maxStock = (int)($sellerRoll['available_quantity'] ?? $sellerRoll['quantity']);
-                if ($reqQty > $maxStock) {
-                    Session::flash('error', "Total requested quantity ({$reqQty} pcs) for Roll '{$sellerRoll['roll_number']}' exceeds available stock ({$maxStock} pcs after deducting damages and other active programs). Please adjust quantities.");
-                    Response::back();
-                    return;
-                }
-            }
+        $stockError = $this->checkConcernRollStockAvailability($concernId, $rollUsageMap, (int)$id);
+        if ($stockError !== null) {
+            Session::flash('error', $stockError);
+            Response::back();
+            return;
         }
 
         $primaryRoll = $validRolls[0];
@@ -4728,6 +5003,7 @@ class ProductionController {
         $timeline = ProductionService::getProgramTimeline((int)$id);
         if (!$timeline['program']) {
             Response::error(404, 'Program not found.');
+            return;
         }
 
         $programRolls = ProductionProgram::getRolls((int)$id);
@@ -4749,6 +5025,13 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+        $program = ProductionProgram::find((int)$id);
+        if (!$program) {
+            Session::flash('error', 'Program not found.');
+            Response::redirect(url('production/programs'));
+            return;
         }
         try {
             $userId = Session::userId();
@@ -4764,12 +5047,20 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+        $program = ProductionProgram::find((int)$id);
+        if (!$program) {
+            Session::flash('error', 'Program not found.');
+            Response::redirect(url('production/programs'));
+            return;
         }
         $status = $_POST['status'] ?? '';
         $allowed = ['DRAFT', 'APPROVED', 'SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'HOLD', 'CANCELLED'];
         if (!in_array($status, $allowed, true)) {
             Session::flash('error', 'Invalid status.');
             Response::back();
+            return;
         }
 
         ProductionProgram::updateStatus((int)$id, $status);
@@ -4833,6 +5124,7 @@ class ProductionController {
     }
 
     public function ajaxProgramDetails(int $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $program = ProductionProgram::find((int)$id);
         if (!$program) {
             Response::json(['success' => false, 'message' => 'Program not found.'], 404);
@@ -4848,50 +5140,32 @@ class ProductionController {
         if (!empty($sellerRolls)) {
             $roll = $sellerRolls[0];
         } elseif (!empty($program['seller_roll_id'])) {
-            $roll = Database::fetchOne(
-                "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
-                 FROM seller_rolls sr
-                 JOIN sellers s ON sr.seller_id = s.id
-                 WHERE sr.id = ?",
-                [$program['seller_roll_id']]
-            );
+            $roll = $this->findConcernSellerRoll((int)$program['seller_roll_id'], $concernId);
         }
 
-        // Fetch all rolls from the same seller or all active rolls for dropdown switching if none assigned
+        // Fetch all rolls from the same seller or active concern rolls for dropdown switching if none assigned
         if (empty($sellerRolls) && !empty($program['seller_id'])) {
             $sellerRolls = Database::fetchAll(
                 "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
                  FROM seller_rolls sr
                  JOIN sellers s ON sr.seller_id = s.id
-                 WHERE sr.seller_id = ?
+                 WHERE sr.seller_id = ? AND sr.concern_id = ? AND s.concern_id = ?
                  ORDER BY sr.id ASC",
-                [$program['seller_id']]
+                [(int)$program['seller_id'], $concernId, $concernId]
             );
         }
         if (empty($sellerRolls)) {
-            $sellerRolls = Database::fetchAll(
-                "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
-                 FROM seller_rolls sr
-                 JOIN sellers s ON sr.seller_id = s.id
-                 WHERE s.is_active = 1
-                 ORDER BY sr.id DESC"
-            );
+            $sellerRolls = $this->getConcernSellerRolls($concernId, false);
         }
 
-        // Find linked product from program or catalog hierarchy
-        $product = null;
-        if (!empty($program['product_id'])) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE id = ?", [$program['product_id']]);
-        }
-        if (!$product && !empty($program['sub_subcategory_id'])) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE sub_subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", [$program['sub_subcategory_id']]);
-        }
-        if (!$product && !empty($program['subcategory_id'])) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", [$program['subcategory_id']]);
-        }
-        if (!$product && !empty($program['category_id'])) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE category_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", [$program['category_id']]);
-        }
+        // Find linked product from program or catalog hierarchy within the active concern
+        $product = $this->findConcernProductByHierarchy(
+            $concernId,
+            !empty($program['category_id']) ? (int)$program['category_id'] : null,
+            !empty($program['subcategory_id']) ? (int)$program['subcategory_id'] : null,
+            !empty($program['sub_subcategory_id']) ? (int)$program['sub_subcategory_id'] : null,
+            !empty($program['product_id']) ? (int)$program['product_id'] : null
+        );
 
         // Enrich program with product category hierarchy if program fields were not explicitly set
         if ($product) {
@@ -5019,13 +5293,7 @@ class ProductionController {
             }
         }
 
-        $allRolls = Database::fetchAll(
-            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
-             FROM seller_rolls sr
-             JOIN sellers s ON sr.seller_id = s.id
-             WHERE s.is_active = 1
-             ORDER BY sr.id DESC"
-        );
+        $allRolls = $this->getConcernSellerRolls($concernId, false);
 
         Response::json([
             'success'          => true,
@@ -5336,20 +5604,30 @@ class ProductionController {
     }
 
     public function ajaxCatalogVariants(): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $categoryId = !empty($_GET['category_id']) ? (int)$_GET['category_id'] : null;
         $subcategoryId = !empty($_GET['subcategory_id']) ? (int)$_GET['subcategory_id'] : null;
         $subSubcategoryId = !empty($_GET['sub_subcategory_id']) ? (int)$_GET['sub_subcategory_id'] : null;
 
-        // Resolve product matching hierarchy
+        // Resolve product matching hierarchy within the active concern
         $product = null;
         if ($subSubcategoryId) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE sub_subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", [$subSubcategoryId]);
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE concern_id = ? AND sub_subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $subSubcategoryId]
+            );
         }
         if (!$product && $subcategoryId) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", [$subcategoryId]);
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE concern_id = ? AND subcategory_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $subcategoryId]
+            );
         }
         if (!$product && $categoryId) {
-            $product = Database::fetchOne("SELECT * FROM products WHERE category_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", [$categoryId]);
+            $product = Database::fetchOne(
+                "SELECT * FROM products WHERE concern_id = ? AND category_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1",
+                [$concernId, $categoryId]
+            );
         }
 
         $parsedSizes = [];
@@ -5361,8 +5639,8 @@ class ProductionController {
                  FROM product_variants pv
                  LEFT JOIN sizes s ON pv.size_id = s.id
                  LEFT JOIN colors c ON pv.color_id = c.id
-                 WHERE pv.product_id = ? AND pv.is_active = 1",
-                [$product['id']]
+                 WHERE pv.product_id = ? AND pv.concern_id = ? AND pv.is_active = 1",
+                [$product['id'], $concernId]
             );
 
             foreach ($pvRows as $pv) {
@@ -5505,18 +5783,15 @@ class ProductionController {
         }
 
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
-        $rolls = Database::fetchAll(
-            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
-             FROM seller_rolls sr
-             JOIN sellers s ON sr.seller_id = s.id
-             WHERE s.is_active = 1
-             ORDER BY sr.id DESC"
-        );
+        $rolls = $this->getConcernSellerRolls($concernId ? (int)$concernId : null, false);
 
-        $count = Database::fetchOne("SELECT COUNT(*) as c FROM cutting_batches")['c'] ?? 0;
-        $suggestedBatchNumber = 'CUT-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+        $suggestedBatchNumber = ProductionService::generateNextSequentialCode(
+            'cutting_batches',
+            'batch_number',
+            'CUT-' . date('Ymd') . '-'
+        )['code'];
 
         Response::view('production.cutting.create', [
             'pageTitle'            => 'New Cutting Batch',
@@ -5543,8 +5818,10 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $name = mb_strtoupper(trim($_POST['name'] ?? ''));
         $programId = (int)($_POST['program_id'] ?? 0);
         $batchNumber = mb_strtoupper(trim($_POST['batch_number'] ?? ''));
@@ -5553,7 +5830,7 @@ class ProductionController {
         $rollPrice = max(0.0, (float)($_POST['roll_price'] ?? 0));
         $wastageWeight = max(0.0, (float)($_POST['wastage_weight'] ?? 0));
         $operatorId = !empty($_POST['operator_id']) ? (int)$_POST['operator_id'] : null;
-        $unitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
+        $submittedUnitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
         $categoryId = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
         $subcategoryId = !empty($_POST['subcategory_id']) ? (int)$_POST['subcategory_id'] : null;
         $subSubcategoryId = !empty($_POST['sub_subcategory_id']) ? (int)$_POST['sub_subcategory_id'] : null;
@@ -5570,14 +5847,29 @@ class ProductionController {
             return;
         }
 
+        $program = ProductionProgram::find($programId);
+        if (!$program) {
+            Session::flash('error', 'Selected production program was not found in the active concern.');
+            Response::back();
+            return;
+        }
+        try {
+            $unitId = $this->resolveWriteProductionUnitId(
+                $submittedUnitId ?: (!empty($program['production_unit_id']) ? (int)$program['production_unit_id'] : null)
+            );
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
+        }
+
         // Prevent duplicate cutting of the same program
         $existingCutting = Database::fetchOne(
             "SELECT id, batch_number, name FROM cutting_batches WHERE program_id = ?",
             [$programId]
         );
         if ($existingCutting) {
-            $progInfo = ProductionProgram::find($programId);
-            $progNum = $progInfo['program_number'] ?? ('#' . $programId);
+            $progNum = $program['program_number'] ?? ('#' . $programId);
             Session::flash('error', "Validation Error: Production Program ({$progNum}) has already been assigned to Cutting Batch {$existingCutting['batch_number']}. Duplicate cutting of the same program is not allowed.");
             Response::back();
             return;
@@ -5603,7 +5895,7 @@ class ProductionController {
             $rSubcatId = !empty($r['subcategory_id']) ? (int)$r['subcategory_id'] : (!empty($_POST['subcategory_id']) ? (int)$_POST['subcategory_id'] : null);
             $rSubSubcatId = !empty($r['sub_subcategory_id']) ? (int)$r['sub_subcategory_id'] : (!empty($_POST['sub_subcategory_id']) ? (int)$_POST['sub_subcategory_id'] : null);
 
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ?", [$rId]);
+            $sellerData = $this->findConcernSellerRoll($rId, $concernId);
 
             if ($sellerData) {
                 if ($rWeight <= 0) $rWeight = (float)$sellerData['weight'];
@@ -5629,7 +5921,7 @@ class ProductionController {
         // Fallback to single roll if rolls array wasn't passed
         if (empty($validRolls) && !empty($_POST['seller_roll_id'])) {
             $singleRollId = (int)$_POST['seller_roll_id'];
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ?", [$singleRollId]);
+            $sellerData = $this->findConcernSellerRoll($singleRollId, $concernId);
             if ($sellerData) {
                 $rWeight = max(0.0, (float)($_POST['roll_weight'] ?? $sellerData['weight']));
                 $rPrice = max(0.0, (float)($_POST['roll_price'] ?? $sellerData['price']));
@@ -5676,13 +5968,15 @@ class ProductionController {
         $usedWeight = max(0.0, $rollWeight - $wastageWeight);
 
         if (empty($name)) {
-            $program = ProductionProgram::find($programId);
             $name = 'CUTTING - ' . ($program['name'] ?: $program['program_number']);
         }
 
         if (empty($batchNumber)) {
-            $count = Database::fetchOne("SELECT COUNT(*) as c FROM cutting_batches")['c'] ?? 0;
-            $batchNumber = 'CUT-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+            $batchNumber = ProductionService::generateNextSequentialCode(
+                'cutting_batches',
+                'batch_number',
+                'CUT-' . date('Ymd') . '-'
+            )['code'];
         }
 
         $items = [];
@@ -5773,23 +6067,19 @@ class ProductionController {
     }
 
     public function editCutting(string $id): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $batch = CuttingBatch::find((int)$id);
         if (!$batch) {
             Response::error(404, 'Cutting batch not found.');
+            return;
         }
 
         $batchRolls = CuttingBatch::getRolls((int)$id);
-        $rolls = Database::fetchAll(
-            "SELECT sr.*, s.name as seller_name, s.company as seller_company, s.material_type
-             FROM seller_rolls sr
-             JOIN sellers s ON sr.seller_id = s.id
-             WHERE s.is_active = 1
-             ORDER BY sr.id DESC"
-        );
+        $rolls = $this->getConcernSellerRolls($concernId ? (int)$concernId : null, false);
 
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
         $items = CuttingBatch::getItems((int)$id);
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
         $units = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
         Response::view('production.cutting.edit', [
@@ -5816,6 +6106,15 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+
+        $concernId = ConcernTransactionService::activeConcernId();
+        $existingBatch = CuttingBatch::find((int)$id);
+        if (!$existingBatch) {
+            Session::flash('error', 'Cutting batch not found.');
+            Response::redirect(url('production/cutting'));
+            return;
         }
 
         $name = mb_strtoupper(trim($_POST['name'] ?? ''));
@@ -5823,7 +6122,16 @@ class ProductionController {
         $rollPrice = max(0.0, (float)($_POST['roll_price'] ?? 0));
         $wastageWeight = max(0.0, (float)($_POST['wastage_weight'] ?? 0));
         $operatorId = !empty($_POST['operator_id']) ? (int)$_POST['operator_id'] : null;
-        $unitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
+        $submittedUnitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
+        try {
+            $unitId = $this->resolveWriteProductionUnitId(
+                $submittedUnitId ?: (!empty($existingBatch['production_unit_id']) ? (int)$existingBatch['production_unit_id'] : null)
+            );
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
+        }
         $status = $_POST['status'] ?? 'IN_PROGRESS';
         $notes = trim($_POST['notes'] ?? '');
 
@@ -5854,7 +6162,7 @@ class ProductionController {
             $rSubcatId = !empty($r['subcategory_id']) ? (int)$r['subcategory_id'] : (!empty($_POST['subcategory_id']) ? (int)$_POST['subcategory_id'] : null);
             $rSubSubcatId = !empty($r['sub_subcategory_id']) ? (int)$r['sub_subcategory_id'] : (!empty($_POST['sub_subcategory_id']) ? (int)$_POST['sub_subcategory_id'] : null);
 
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ?", [$rId]);
+            $sellerData = $this->findConcernSellerRoll($rId, $concernId);
 
             if ($sellerData) {
                 if ($rWeight <= 0) $rWeight = (float)$sellerData['weight'];
@@ -5879,13 +6187,13 @@ class ProductionController {
 
         if (empty($validRolls) && !empty($_POST['seller_roll_id'])) {
             $singleRollId = (int)$_POST['seller_roll_id'];
-            $sellerData = Database::fetchOne("SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ?", [$singleRollId]);
+            $sellerData = $this->findConcernSellerRoll($singleRollId, $concernId);
             if ($sellerData) {
                 $rWeight = max(0.0, (float)($_POST['roll_weight'] ?? $sellerData['weight']));
                 $rPrice = max(0.0, (float)($_POST['roll_price'] ?? $sellerData['price']));
                 $rWastageWeight = max(0.0, (float)($_POST['wastage_weight'] ?? 0));
                 $rRate = $rWeight > 0 ? ($rPrice / $rWeight) : 0;
-                $rWastageCost = max(0.0, (float)($r['wastage_cost'] ?? round($rWastageWeight * $rRate, 2)));
+                $rWastageCost = max(0.0, (float)($_POST['wastage_cost'] ?? round($rWastageWeight * $rRate, 2)));
 
                 $validRolls[] = [
                     'seller_roll_id'     => $singleRollId,
@@ -6008,6 +6316,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $batch = CuttingBatch::find((int)$id);
@@ -6096,7 +6405,7 @@ class ProductionController {
         }
 
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
 
         $selectedProgram = null;
         $selectedCutting = null;
@@ -6136,8 +6445,11 @@ class ProductionController {
             $selectedProgram = ProductionProgram::find((int)$programId);
         }
 
-        $count = Database::fetchOne("SELECT COUNT(*) as c FROM stitching_batches")['c'] ?? 0;
-        $suggestedBatchNumber = 'STCH-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+        $suggestedBatchNumber = ProductionService::generateNextSequentialCode(
+            'stitching_batches',
+            'batch_number',
+            'STCH-' . date('Ymd') . '-'
+        )['code'];
 
         Response::view('production.stitching.create', [
             'pageTitle'            => 'New Stitching Batch',
@@ -6163,21 +6475,28 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $programId = !empty($_POST['program_id']) ? (int)$_POST['program_id'] : null;
         $cuttingBatchId = !empty($_POST['cutting_batch_id']) ? (int)$_POST['cutting_batch_id'] : null;
 
-        if (!$programId && $cuttingBatchId) {
+        if ($cuttingBatchId) {
             $cb = CuttingBatch::find($cuttingBatchId);
-            if ($cb) {
+            if (!$cb) {
+                Session::flash('error', 'Selected cutting batch was not found in the active concern.');
+                Response::back();
+                return;
+            }
+            if (!$programId) {
                 $programId = (int)$cb['program_id'];
             }
         }
 
-        if (!$programId) {
-            Session::flash('error', 'Please select a Production Program.');
+        if (!$programId || !($prog = ProductionProgram::find($programId))) {
+            Session::flash('error', 'Please select a valid Production Program in the active concern.');
             Response::back();
+            return;
         }
 
         $name = mb_strtoupper(trim($_POST['name'] ?? ''));
@@ -6224,7 +6543,6 @@ class ProductionController {
                 [$programId]
             );
             if ($existingStitchingProg) {
-                $prog = ProductionProgram::find($programId);
                 $progNum = $prog['program_number'] ?? ('#' . $programId);
                 Session::flash('error', "Validation Error: Production Program ({$progNum}) has already been assigned to Stitching Batch {$existingStitchingProg['batch_number']}. Duplicate stitching is not allowed.");
                 Response::back();
@@ -6233,8 +6551,11 @@ class ProductionController {
         }
 
         if (empty($batchNumber)) {
-            $count = Database::fetchOne("SELECT COUNT(*) as c FROM stitching_batches")['c'] ?? 0;
-            $batchNumber = 'STCH-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+            $batchNumber = ProductionService::generateNextSequentialCode(
+                'stitching_batches',
+                'batch_number',
+                'STCH-' . date('Ymd') . '-'
+            )['code'];
         }
 
         $items = [];
@@ -6350,28 +6671,46 @@ class ProductionController {
     }
 
     public function editStitching(string $id): void {
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
         $batch = StitchingBatch::find((int)$id);
         if (!$batch) {
             Response::error(404, 'Stitching batch not found.');
+            return;
         }
 
-        $programs = Database::fetchAll(
-            "SELECT pp.*, p.name as product_name, p.code as product_code, pu.name as unit_name
-             FROM production_programs pp
-             LEFT JOIN products p ON pp.product_id = p.id
-             LEFT JOIN production_units pu ON pp.production_unit_id = pu.id
-             WHERE pp.is_active = 1
-             ORDER BY pp.id DESC"
-        );
+        $programs = [];
+        $cuttingBatches = [];
+        if ($concernId !== null && $scopedUnitId !== 0) {
+            $scopeParams = [(int)$concernId];
+            $progUnitClause = '';
+            $cutUnitClause = '';
+            if ($scopedUnitId !== null) {
+                $progUnitClause = ' AND pp.production_unit_id = ?';
+                $cutUnitClause = ' AND COALESCE(cb.production_unit_id, pp.production_unit_id) = ?';
+                $scopeParams[] = (int)$scopedUnitId;
+            }
+            $programs = Database::fetchAll(
+                "SELECT pp.*, p.name as product_name, p.code as product_code, pu.name as unit_name
+                 FROM production_programs pp
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 JOIN production_units pu ON pp.production_unit_id = pu.id
+                 WHERE pu.concern_id = ? AND pp.is_active = 1{$progUnitClause}
+                 ORDER BY pp.id DESC",
+                $scopeParams
+            );
 
-        $cuttingBatches = Database::fetchAll(
-            "SELECT cb.*, pp.program_number, pp.name as program_name, p.name as product_name
-             FROM cutting_batches cb
-             LEFT JOIN production_programs pp ON cb.program_id = pp.id
-             LEFT JOIN products p ON pp.product_id = p.id
-             WHERE (cb.is_active = 1 OR cb.is_active IS NULL)
-             ORDER BY cb.id DESC"
-        );
+            $cuttingBatches = Database::fetchAll(
+                "SELECT cb.*, pp.program_number, pp.name as program_name, p.name as product_name
+                 FROM cutting_batches cb
+                 LEFT JOIN production_programs pp ON cb.program_id = pp.id
+                 JOIN production_units pu ON COALESCE(cb.production_unit_id, pp.production_unit_id) = pu.id
+                 LEFT JOIN products p ON pp.product_id = p.id
+                 WHERE pu.concern_id = ? AND (cb.is_active = 1 OR cb.is_active IS NULL){$cutUnitClause}
+                 ORDER BY cb.id DESC",
+                $scopeParams
+            );
+        }
 
         $categories = Database::fetchAll("SELECT * FROM categories WHERE is_active = 1 ORDER BY name ASC");
         $items = StitchingBatch::getItems((int)$id);
@@ -6423,7 +6762,7 @@ class ProductionController {
             'sub_subcategory_id' => $batch['sub_subcategory_id'] ?? null,
         ], 'stitched_qty');
 
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
 
         Response::view('production.stitching.edit', [
             'pageTitle'           => 'Edit Stitching Batch — ' . ($batch['name'] ?: $batch['batch_number']),
@@ -6451,10 +6790,28 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+
+        $existingBatch = StitchingBatch::find((int)$id);
+        if (!$existingBatch) {
+            Session::flash('error', 'Stitching batch not found.');
+            Response::redirect(url('production/stitching'));
+            return;
         }
 
         $programId = !empty($_POST['program_id']) ? (int)$_POST['program_id'] : null;
         $cuttingBatchId = !empty($_POST['cutting_batch_id']) ? (int)$_POST['cutting_batch_id'] : null;
+        if ($programId && !ProductionProgram::find($programId)) {
+            Session::flash('error', 'Selected production program was not found in the active concern.');
+            Response::back();
+            return;
+        }
+        if ($cuttingBatchId && !CuttingBatch::find($cuttingBatchId)) {
+            Session::flash('error', 'Selected cutting batch was not found in the active concern.');
+            Response::back();
+            return;
+        }
         $name = mb_strtoupper(trim($_POST['name'] ?? ''));
         $categoryId = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
         $subcategoryId = !empty($_POST['subcategory_id']) ? (int)$_POST['subcategory_id'] : null;
@@ -6543,7 +6900,6 @@ class ProductionController {
         }
 
         // Validate Stitching Weight against Source Cutting Batch Usable Weight
-        $existingBatch = StitchingBatch::find((int)$id);
         $targetCuttingId = $cuttingBatchId ?: ($existingBatch['cutting_batch_id'] ?? null);
         if ($targetCuttingId) {
             $cb = CuttingBatch::find((int)$targetCuttingId);
@@ -6589,6 +6945,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $batchId = (int)$id;
@@ -6642,10 +6999,14 @@ class ProductionController {
             return;
         }
 
-        $rows = Database::fetchAll("SELECT code FROM production_deleted_label_codes");
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+        if (!$concernId) {
+            Response::json(['success' => false, 'message' => 'Select an active concern before reading deleted label codes.', 'codes' => []], 400);
+            return;
+        }
         Response::json([
             'success' => true,
-            'codes' => array_column($rows, 'code'),
+            'codes' => ProductionService::getDeletedLabelCodesForConcern((int)$concernId),
         ]);
     }
 
@@ -6926,8 +7287,11 @@ class ProductionController {
         }
         unset($it);
 
-        $count = Database::fetchOne("SELECT COUNT(*) as c FROM label_batches")['c'] ?? 0;
-        $suggestedBatchNumber = 'LBL-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+        $suggestedBatchNumber = ProductionService::generateNextSequentialCode(
+            'label_batches',
+            'batch_number',
+            'LBL-' . date('Ymd') . '-'
+        )['code'];
 
         Response::view('production.labels.create', [
             'pageTitle'            => 'New Label Batch & QR Generator',
@@ -6954,6 +7318,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $stitchingBatchId = !empty($_POST['stitching_batch_id']) ? (int)$_POST['stitching_batch_id'] : null;
@@ -6967,15 +7332,18 @@ class ProductionController {
             return;
         }
 
-        if (!$programId && $stitchingBatchId) {
-            $sb = StitchingBatch::find($stitchingBatchId);
-            if ($sb) {
-                $programId = (int)$sb['program_id'];
-            }
+        $sb = StitchingBatch::find($stitchingBatchId);
+        if (!$sb) {
+            Session::flash('error', 'Selected stitching batch was not found in the active concern.');
+            Response::back();
+            return;
+        }
+        if (!$programId) {
+            $programId = (int)$sb['program_id'];
         }
 
-        if (!$programId) {
-            Session::flash('error', 'Please select a valid Stitching Batch linked to a Production Program.');
+        if (!$programId || !($prog = ProductionProgram::find($programId))) {
+            Session::flash('error', 'Please select a valid Stitching Batch linked to a Production Program in the active concern.');
             Response::back();
             return;
         }
@@ -6987,7 +7355,6 @@ class ProductionController {
                 [$stitchingBatchId]
             );
             if ($existingLabel) {
-                $sb = StitchingBatch::find($stitchingBatchId);
                 $sbNum = $sb['batch_number'] ?? ('#' . $stitchingBatchId);
                 Session::flash('error', "Validation Error: Stitching Batch ({$sbNum}) has already been assigned to Label Batch {$existingLabel['batch_number']}. Duplicate label generation is not allowed.");
                 Response::back();
@@ -7001,7 +7368,6 @@ class ProductionController {
                 [$programId]
             );
             if ($existingLabelProg) {
-                $prog = ProductionProgram::find($programId);
                 $progNum = $prog['program_number'] ?? ('#' . $programId);
                 Session::flash('error', "Validation Error: Production Program ({$progNum}) has already been assigned to Label Batch {$existingLabelProg['batch_number']}. Duplicate label generation is not allowed.");
                 Response::back();
@@ -7010,8 +7376,11 @@ class ProductionController {
         }
 
         if (empty($batchNumber)) {
-            $count = Database::fetchOne("SELECT COUNT(*) as c FROM label_batches")['c'] ?? 0;
-            $batchNumber = 'LBL-' . date('Ymd') . '-' . str_pad((string)($count + 1), 4, '0', STR_PAD_LEFT);
+            $batchNumber = ProductionService::generateNextSequentialCode(
+                'label_batches',
+                'batch_number',
+                'LBL-' . date('Ymd') . '-'
+            )['code'];
         }
 
         $items = [];
@@ -7086,6 +7455,7 @@ class ProductionController {
         $batch = LabelBatch::find((int)$id);
         if (!$batch) {
             Response::error(404, 'Label batch not found.');
+            return;
         }
 
         $items = LabelBatch::getItems((int)$id);
@@ -7156,6 +7526,13 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
+        }
+        $batch = LabelBatch::find((int)$id);
+        if (!$batch) {
+            Session::flash('error', 'Label batch not found.');
+            Response::redirect(url('production/labels'));
+            return;
         }
         $items = [];
         if (!empty($_POST['items']) && is_array($_POST['items'])) {
@@ -7423,6 +7800,32 @@ class ProductionController {
             }
         }
 
+        $sourceMode = strtolower(trim((string)($_GET['source_mode'] ?? '')));
+        $requestedSourceLoc = trim((string)($_GET['source_location'] ?? ''));
+        $inwardLocations = ProductionService::getAvailableInwardLocationsForPacking(
+            $sourceConcernId ? (int)$sourceConcernId : null,
+            $scopedUnitId
+        );
+
+        if ($qcBatchId) {
+            $sourceMode = 'qc';
+        } elseif (!in_array($sourceMode, ['qc', 'inward'], true)) {
+            $sourceMode = (empty($qcBatches) && !empty($inwardLocations)) ? 'inward' : 'qc';
+        }
+
+        $selectedInward = null;
+        if ($sourceMode === 'inward' && !empty($inwardLocations)) {
+            foreach ($inwardLocations as $loc) {
+                if ($requestedSourceLoc === '' || $loc['location_key'] === $requestedSourceLoc) {
+                    $selectedInward = $loc;
+                    break;
+                }
+            }
+            if ($selectedInward !== null) {
+                $items = $selectedInward['items'];
+            }
+        }
+
         $destinationConcerns = $sourceConcernId
             ? Database::fetchAll(
                 "SELECT c.id, c.name
@@ -7438,15 +7841,18 @@ class ProductionController {
             : [];
 
         Response::view('production.batches.create', [
-            'pageTitle'       => 'Pack Production Batch',
-            'activeModule'    => 'production',
-            'activeMenu'      => 'batches',
-            'qcBatches'       => $qcBatches,
-            'selectedQC'      => $selectedQC,
-            'existingBatches' => $existingBatches ?? [],
-            'items'           => $items,
+            'pageTitle'           => 'Pack Production Batch',
+            'activeModule'        => 'production',
+            'activeMenu'          => 'batches',
+            'sourceMode'          => $sourceMode,
+            'qcBatches'           => $qcBatches,
+            'selectedQC'          => $selectedQC,
+            'inwardLocations'     => $inwardLocations,
+            'selectedInward'      => $selectedInward,
+            'existingBatches'     => $existingBatches ?? [],
+            'items'               => $items,
             'destinationConcerns' => $destinationConcerns,
-            'breadcrumb'      => [
+            'breadcrumb'          => [
                 ['label' => 'Production', 'url' => url('production/dashboard')],
                 ['label' => 'Batches', 'url' => url('production/batches')],
                 ['label' => 'Pack Batch'],
@@ -7460,11 +7866,18 @@ class ProductionController {
             Response::back();
             return;
         }
-        $validator = Validator::make($_POST, [
-            'destination_concern_id'  => 'required|numeric',
-            'qc_batch_id'              => 'required|numeric',
-            'box_count'                => 'required|numeric',
-        ]);
+        $sourceMode = strtolower(trim((string)($_POST['source_mode'] ?? (!empty($_POST['qc_batch_id']) ? 'qc' : 'inward'))));
+        if (!in_array($sourceMode, ['qc', 'inward'], true)) {
+            $sourceMode = 'qc';
+        }
+        $rules = [
+            'destination_concern_id' => 'required|numeric',
+            'box_count'              => 'required|numeric',
+        ];
+        if ($sourceMode === 'qc') {
+            $rules['qc_batch_id'] = 'required|numeric';
+        }
+        $validator = Validator::make($_POST, $rules);
 
         if ($validator->fails()) {
             Session::flash('error', $validator->firstError());
@@ -7472,29 +7885,16 @@ class ProductionController {
             return;
         }
 
-        $qcBatchId = (int)$_POST['qc_batch_id'];
         $sourceConcernId = function_exists('currentConcernId') ? currentConcernId() : null;
         $scopedUnitId = function_exists('currentProductionUnitId') ? currentProductionUnitId() : null;
-        $ownedQC = $sourceConcernId
-            ? Database::fetchOne(
-                "SELECT qb.id
-                 FROM qc_batches qb
-                 JOIN production_programs pp ON pp.id = qb.program_id
-                 JOIN production_units pu ON pu.id = pp.production_unit_id
-                 WHERE qb.id = ? AND pu.concern_id = ?"
-                 . ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : ''),
-                [$qcBatchId, $sourceConcernId]
-            )
-            : null;
-        $qcBatch = $ownedQC ? QCBatch::find($qcBatchId) : null;
-        if (!$qcBatch) {
-            Session::flash('error', 'Selected QC Inspection Batch does not belong to the active concern.');
+        if (!$sourceConcernId || $scopedUnitId === 0) {
+            Session::flash('error', 'Your active concern or unit scope does not permit packing batches.');
             Response::back();
             return;
         }
 
         $destinationConcernId = (int)($_POST['destination_concern_id'] ?? 0);
-        $destinationConcern = $sourceConcernId && $destinationConcernId !== $sourceConcernId
+        $destinationConcern = $sourceConcernId && $destinationConcernId !== (int)$sourceConcernId
             ? Database::fetchOne(
                 "SELECT c.id
                  FROM concerns c
@@ -7512,10 +7912,96 @@ class ProductionController {
             return;
         }
 
+        $items = [];
+        if ($sourceMode === 'inward') {
+            $rawSourceLoc = trim((string)($_POST['source_location'] ?? ''));
+            if (!preg_match('/^(CONCERN|PRODUCTION_UNIT):(\d+)$/i', $rawSourceLoc, $locMatch)) {
+                Session::flash('error', 'Select a valid inward inventory source location.');
+                Response::back();
+                return;
+            }
+            $sourceLocType = strtoupper($locMatch[1]);
+            $sourceLocId = (int)$locMatch[2];
+            try {
+                StockService::assertLocationBelongsToActiveConcern($sourceLocType, $sourceLocId);
+                if ($scopedUnitId !== null && $sourceLocType === 'PRODUCTION_UNIT' && $sourceLocId !== (int)$scopedUnitId) {
+                    throw new InvalidArgumentException('Selected inward inventory belongs to another production unit.');
+                }
+            } catch (\Throwable $e) {
+                Session::flash('error', $e->getMessage());
+                Response::back();
+                return;
+            }
+
+            if (!empty($_POST['items']) && is_array($_POST['items'])) {
+                foreach ($_POST['items'] as $vals) {
+                    $qty = (int)($vals['quantity'] ?? 0);
+                    $variantId = (int)($vals['variant_id'] ?? 0);
+                    if ($qty <= 0 || $variantId <= 0) {
+                        continue;
+                    }
+                    $pieceTags = isset($vals['piece_tags']) && is_array($vals['piece_tags']) ? $vals['piece_tags'] : [];
+                    $items[] = [
+                        'variant_id' => $variantId,
+                        'quantity'   => $qty,
+                        'qc_item_id' => 0,
+                        'piece_tags' => $pieceTags,
+                    ];
+                }
+            }
+
+            if (empty($items)) {
+                Session::flash('error', 'Please select at least 1 inward item and QR code(s) to pack.');
+                Response::back();
+                return;
+            }
+
+            try {
+                $user = Session::get('user');
+                $userId = !empty($user['id']) ? (int)$user['id'] : (int)(Database::fetchOne("SELECT id FROM users LIMIT 1")['id'] ?? 2);
+                ProductionService::createProductionBatch([
+                    'program_id'               => null,
+                    'qc_batch_id'              => null,
+                    'source_type'              => 'INWARD',
+                    'source_location_type'     => $sourceLocType,
+                    'source_location_id'       => $sourceLocId,
+                    'concern_id'               => (int)$sourceConcernId,
+                    'destination_warehouse_id' => null,
+                    'destination_concern_id'   => $destinationConcernId,
+                    'box_count'                => max(1, (int)($_POST['box_count'] ?? 1)),
+                    'status'                   => 'PREPARING',
+                ], $items, $userId);
+
+                Session::flash('success', 'Inward inventory batch packed and reserved successfully.');
+                Response::redirect(url('production/batches'));
+                return;
+            } catch (\Throwable $e) {
+                Session::flash('error', $e->getMessage());
+                Response::back();
+                return;
+            }
+        }
+
+        $qcBatchId = (int)$_POST['qc_batch_id'];
+        $ownedQC = Database::fetchOne(
+            "SELECT qb.id
+             FROM qc_batches qb
+             JOIN production_programs pp ON pp.id = qb.program_id
+             JOIN production_units pu ON pu.id = pp.production_unit_id
+             WHERE qb.id = ? AND pu.concern_id = ?"
+             . ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : ''),
+            [$qcBatchId, (int)$sourceConcernId]
+        );
+        $qcBatch = $ownedQC ? QCBatch::find($qcBatchId) : null;
+        if (!$qcBatch) {
+            Session::flash('error', 'Selected QC Inspection Batch does not belong to the active concern.');
+            Response::back();
+            return;
+        }
+
         $programId = (int)($qcBatch['program_id'] ?? ($_POST['program_id'] ?? 0));
         $productId = ProductionService::findOrCreateProductForProgram($programId);
 
-        $items = [];
         if (!empty($_POST['items']) && is_array($_POST['items'])) {
             foreach ($_POST['items'] as $key => $vals) {
                 $qty = (int)($vals['quantity'] ?? 0);
@@ -7582,9 +8068,11 @@ class ProductionController {
             $batchId = ProductionService::createProductionBatch([
                 'program_id'               => $programId,
                 'qc_batch_id'              => !empty($_POST['qc_batch_id']) ? (int)$_POST['qc_batch_id'] : null,
+                'source_type'              => 'QC',
+                'concern_id'               => (int)$sourceConcernId,
                 'destination_warehouse_id' => null,
                 'destination_concern_id'   => $destinationConcernId,
-                'box_count'                => (int)($_POST['box_count'] ?? 1),
+                'box_count'                => max(1, (int)($_POST['box_count'] ?? 1)),
                 'status'                   => 'PREPARING',
             ], $items, $userId);
 
@@ -7656,21 +8144,24 @@ class ProductionController {
 
         $unitClause = $scopedUnitId === 0
             ? ' AND 1 = 0'
-            : ($scopedUnitId !== null ? ' AND pp.production_unit_id = ' . (int)$scopedUnitId : '');
+            : ($scopedUnitId !== null
+                ? " AND (pp.production_unit_id = " . (int)$scopedUnitId . " OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = " . (int)$scopedUnitId . ")))"
+                : '');
         $warehouseClause = $warehouseId > 0 ? ' AND pb.destination_warehouse_id = ' . $warehouseId : '';
         $searchClause = '';
         $batchParams = [];
         if ($search !== '') {
-            $searchClause = " AND (pb.batch_number LIKE ? OR pp.program_number LIKE ? OR p.name LIKE ? OR w.name LIKE ? OR dc.name LIKE ?)";
+            $searchClause = " AND (pb.batch_number LIKE ? OR COALESCE(pp.program_number, '') LIKE ? OR COALESCE(p.name, pp.name, '') LIKE ? OR COALESCE(w.name, '') LIKE ? OR COALESCE(dc.name, '') LIKE ?)";
             $searchTerm = '%' . $search . '%';
             $batchParams = array_fill(0, 5, $searchTerm);
         }
         $approvedBatches = $concernId !== null && $scopedUnitId !== 0
             ? Database::fetchAll(
-                "SELECT pb.*, pp.program_number, COALESCE(p.name, pp.name, 'General Apparel') as product_name,
+                "SELECT pb.*, pp.program_number,
+                        COALESCE(p.name, pp.name, (SELECT GROUP_CONCAT(DISTINCT bp.name SEPARATOR ', ') FROM production_batch_items bpbi JOIN product_variants bpv ON bpv.id = bpbi.variant_id JOIN products bp ON bp.id = bpv.product_id WHERE bpbi.production_batch_id = pb.id), 'Finished Product') as product_name,
                         w.name as warehouse_name, dc.name as destination_concern_name
                  FROM production_batches pb
-                 JOIN production_programs pp ON pb.program_id = pp.id
+                 LEFT JOIN production_programs pp ON pb.program_id = pp.id
                  LEFT JOIN products p ON pp.product_id = p.id
                  LEFT JOIN warehouses w ON pb.destination_warehouse_id = w.id
                  LEFT JOIN concerns dc ON pb.destination_concern_id = dc.id
@@ -7850,12 +8341,14 @@ class ProductionController {
         }
         $sql = "SELECT pb.id
                 FROM production_batches pb
-                JOIN production_programs pp ON pp.id = pb.program_id
-                JOIN production_units pu ON pu.id = pp.production_unit_id
-                WHERE pb.id = ? AND pb.concern_id = ? AND pu.concern_id = ?";
+                LEFT JOIN production_programs pp ON pp.id = pb.program_id
+                LEFT JOIN production_units pu ON pu.id = pp.production_unit_id
+                WHERE pb.id = ? AND pb.concern_id = ?
+                  AND ((pb.source_type = 'INWARD' AND pb.program_id IS NULL) OR pu.concern_id = ?)";
         $params = [$batchId, $concernId, $concernId];
         if ($unitId !== null) {
-            $sql .= ' AND pp.production_unit_id = ?';
+            $sql .= " AND (pp.production_unit_id = ? OR (pb.source_type = 'INWARD' AND (pb.source_location_type = 'CONCERN' OR pb.source_location_id = ?)))";
+            $params[] = $unitId;
             $params[] = $unitId;
         }
         return (bool)Database::fetchOne($sql, $params);
@@ -7913,15 +8406,26 @@ class ProductionController {
 
         $productionUnits = function_exists('getScopedProductionUnits') ? getScopedProductionUnits() : [];
 
-        $allVariants = Database::fetchAll(
-            "SELECT pv.id, pv.sku, p.name as product_name, s.name as size_name, c.name as color_name
-             FROM product_variants pv
-             JOIN products p ON pv.product_id = p.id
-             LEFT JOIN sizes s ON pv.size_id = s.id
-             LEFT JOIN colors c ON pv.color_id = c.id
-             WHERE pv.is_active = 1
-             ORDER BY p.name ASC, pv.sku ASC LIMIT 500"
-        );
+        $allVariants = ($concernId !== null && $scopedUnitId !== 0)
+            ? Database::fetchAll(
+                "SELECT pv.id, pv.sku, p.name as product_name, s.name as size_name, c.name as color_name
+                 FROM product_variants pv
+                 JOIN products p ON pv.product_id = p.id
+                 LEFT JOIN sizes s ON pv.size_id = s.id
+                 LEFT JOIN colors c ON pv.color_id = c.id
+                 WHERE pv.is_active = 1
+                   AND (
+                       pv.concern_id = ?
+                       OR p.concern_id = ?
+                       OR EXISTS (
+                           SELECT 1 FROM stock_balances sb
+                           WHERE sb.variant_id = pv.id AND sb.concern_id = ?
+                       )
+                   )
+                 ORDER BY p.name ASC, pv.sku ASC LIMIT 500",
+                [(int)$concernId, (int)$concernId, (int)$concernId]
+            )
+            : [];
 
         Response::view('production.rework.index', [
             'pageTitle'         => 'Rework from Warehouse',
@@ -7949,6 +8453,14 @@ class ProductionController {
 
     public function lookupBatchVariantsAjax(string $batchId): void {
         $bId = (int)$batchId;
+        if (!$this->currentConcernOwnsBatch($bId)) {
+            Response::json([
+                'success'  => false,
+                'message'  => 'Production batch not found in the active concern.',
+                'variants' => [],
+            ], 404);
+            return;
+        }
         $items = Database::fetchAll(
             "SELECT pbi.variant_id, pbi.quantity, pv.sku, p.name as product_name, p.id as product_id,
                     s.name as size_name, c.name as color_name
@@ -7989,8 +8501,10 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
+        $concernId = ConcernTransactionService::activeConcernId();
         $warehouseId = (int)($_POST['warehouse_id'] ?? 0);
         $variantId = (int)($_POST['variant_id'] ?? 0);
         $quantity = max(1, (int)($_POST['quantity'] ?? 1));
@@ -8000,14 +8514,79 @@ class ProductionController {
         if ($warehouseId <= 0 || $variantId <= 0 || empty($damageReason)) {
             Session::flash('error', 'Please select a warehouse, product variant, and provide the damage reason.');
             Response::back();
+            return;
         }
 
         $batchId = !empty($_POST['production_batch_id']) ? (int)$_POST['production_batch_id'] : null;
         $outwardId = !empty($_POST['production_outward_id']) ? (int)$_POST['production_outward_id'] : null;
+        $submittedUnitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null;
 
-        if ($batchId && !$outwardId) {
-            $po = Database::fetchOne("SELECT id FROM production_outwards WHERE production_batch_id = ?", [$batchId]);
-            if ($po) $outwardId = (int)$po['id'];
+        try {
+            ConcernTransactionService::assertFacility('WAREHOUSE', $warehouseId);
+            if ($batchId !== null && !$this->currentConcernOwnsBatch($batchId)) {
+                throw new InvalidArgumentException('Selected production batch does not belong to the active concern.');
+            }
+            if ($submittedUnitId === null && $batchId !== null) {
+                $batchUnitRow = Database::fetchOne(
+                    "SELECT pp.production_unit_id
+                     FROM production_batches pb
+                     JOIN production_programs pp ON pp.id = pb.program_id
+                     WHERE pb.id = ? AND pb.concern_id = ?",
+                    [$batchId, $concernId]
+                );
+                $submittedUnitId = !empty($batchUnitRow['production_unit_id']) ? (int)$batchUnitRow['production_unit_id'] : null;
+            }
+            $unitId = $this->resolveWriteProductionUnitId($submittedUnitId);
+
+            if ($outwardId !== null) {
+                $validOutward = Database::fetchOne(
+                    "SELECT po.id
+                     FROM production_outwards po
+                     JOIN production_batches pb ON pb.id = po.production_batch_id
+                     WHERE po.id = ? AND pb.concern_id = ?",
+                    [$outwardId, $concernId]
+                );
+                if (!$validOutward) {
+                    throw new InvalidArgumentException('Selected outward dispatch does not belong to the active concern.');
+                }
+            } elseif ($batchId !== null) {
+                $po = Database::fetchOne(
+                    "SELECT po.id
+                     FROM production_outwards po
+                     JOIN production_batches pb ON pb.id = po.production_batch_id
+                     WHERE po.production_batch_id = ? AND pb.concern_id = ?",
+                    [$batchId, $concernId]
+                );
+                if ($po) {
+                    $outwardId = (int)$po['id'];
+                }
+            }
+
+            $validVariant = Database::fetchOne(
+                "SELECT pv.id
+                 FROM product_variants pv
+                 JOIN products p ON p.id = pv.product_id
+                 WHERE pv.id = ?
+                   AND (
+                       pv.concern_id = ?
+                       OR p.concern_id = ?
+                       OR EXISTS (
+                           SELECT 1
+                           FROM production_batch_items pbi
+                           JOIN production_batches pb ON pb.id = pbi.production_batch_id
+                           WHERE pbi.variant_id = pv.id AND pb.concern_id = ?
+                       )
+                   )
+                 LIMIT 1",
+                [$variantId, $concernId, $concernId, $concernId]
+            );
+            if (!$validVariant) {
+                throw new InvalidArgumentException('Selected product variant does not belong to the active concern.');
+            }
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
         }
 
         $photoUrl = null;
@@ -8036,7 +8615,7 @@ class ProductionController {
                 'received_date'         => !empty($_POST['received_date']) ? $_POST['received_date'] : date('Y-m-d'),
                 'received_by'           => $userId,
                 'assigned_to'           => trim($_POST['assigned_to'] ?? ''),
-                'production_unit_id'    => !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : null,
+                'production_unit_id'    => $unitId,
                 'photo_url'             => $photoUrl,
                 'status'                => !empty($_POST['start_immediately']) && hasPermission('warehouse_rework', 'edit') ? 'IN_REWORK' : 'RECEIVED',
                 'created_by'            => $userId,
@@ -8054,6 +8633,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token.');
             Response::back();
+            return;
         }
 
         $reworkId = (int)$id;
@@ -8061,11 +8641,19 @@ class ProductionController {
         if (!$rework) {
             Session::flash('error', 'Rework record not found.');
             Response::back();
+            return;
         }
 
         $newStatus = trim($_POST['status'] ?? '');
         $assignedTo = trim($_POST['assigned_to'] ?? ($rework['assigned_to'] ?? ''));
-        $unitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : ($rework['production_unit_id'] ?? null);
+        $submittedUnitId = !empty($_POST['production_unit_id']) ? (int)$_POST['production_unit_id'] : (!empty($rework['production_unit_id']) ? (int)$rework['production_unit_id'] : null);
+        try {
+            $unitId = $this->resolveWriteProductionUnitId($submittedUnitId);
+        } catch (\Throwable $e) {
+            Session::flash('error', $e->getMessage());
+            Response::back();
+            return;
+        }
         $notes = trim($_POST['repair_notes'] ?? ($rework['repair_notes'] ?? ''));
 
         $updateData = [
@@ -8084,6 +8672,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token.');
             Response::back();
+            return;
         }
 
         $reworkId = (int)$id;
@@ -8091,6 +8680,7 @@ class ProductionController {
         if (!$rework) {
             Session::flash('error', 'Rework record not found.');
             Response::back();
+            return;
         }
 
         $totalQty = (int)$rework['quantity'];
@@ -8101,11 +8691,13 @@ class ProductionController {
         if (($repairedQty + $scrappedQty) <= 0) {
             Session::flash('error', 'Please enter a valid repaired or scrapped quantity.');
             Response::back();
+            return;
         }
 
         if (($repairedQty + $scrappedQty) > $totalQty) {
             Session::flash('error', "Total repaired ({$repairedQty}) and scrapped ({$scrappedQty}) cannot exceed returned quantity ({$totalQty}).");
             Response::back();
+            return;
         }
 
         $finalStatus = ($repairedQty > 0) ? 'REPAIRED' : 'SCRAPPED';
@@ -8126,6 +8718,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token.');
             Response::back();
+            return;
         }
 
         $reworkId = (int)$id;
@@ -8133,6 +8726,7 @@ class ProductionController {
         if (!$rework) {
             Session::flash('error', 'Rework record not found.');
             Response::back();
+            return;
         }
 
         $vehicle = trim($_POST['redispatched_vehicle'] ?? 'Direct Courier / Handover');
@@ -8166,6 +8760,14 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token.');
             Response::back();
+            return;
+        }
+
+        $rework = ProductionWarehouseRework::find((int)$id);
+        if (!$rework) {
+            Session::flash('error', 'Rework record not found.');
+            Response::redirect(url('production/warehouse-rework'));
+            return;
         }
 
         ProductionWarehouseRework::delete((int)$id);
@@ -8244,7 +8846,7 @@ class ProductionController {
             );
         }
 
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
 
         $selectedStitching = null;
         $selectedLabel = null;
@@ -8396,6 +8998,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $stitchingBatchId = !empty($_POST['stitching_batch_id']) ? (int)$_POST['stitching_batch_id'] : null;
@@ -8417,9 +9020,10 @@ class ProductionController {
             if ($lb) $programId = $lb['program_id'];
         }
 
-        if (!$programId) {
+        if (!$programId || !ProductionProgram::find((int)$programId)) {
             Session::flash('error', 'Please select a valid Stitching or Label Batch.');
             Response::back();
+            return;
         }
 
         // Prevent duplicate QC inspection
@@ -8563,7 +9167,8 @@ class ProductionController {
 
         $items = QCBatch::getItems($batchId);
         $lockedPieces = $this->getQCLockedPieceStates($batch, $items);
-        $users = Database::fetchAll("SELECT id, full_name FROM users WHERE is_active = 1 ORDER BY full_name ASC");
+        $concernId = function_exists('currentConcernId') ? currentConcernId() : (!empty($batch['concern_id']) ? (int)$batch['concern_id'] : null);
+        $users = $this->getConcernActiveUsers($concernId ? (int)$concernId : null);
 
         $rolls = !empty($batch['stitching_batch_id']) ? StitchingBatch::getRolls((int)$batch['stitching_batch_id']) : (!empty($batch['program_id']) ? ProductionProgram::getRolls((int)$batch['program_id']) : []);
 
@@ -8778,6 +9383,7 @@ class ProductionController {
         if (!CSRF::validateRequest()) {
             Session::flash('error', 'Invalid security token. Please try again.');
             Response::back();
+            return;
         }
 
         $batchId = (int)$id;
@@ -10005,6 +10611,10 @@ class ProductionController {
             }
         }
 
+        $quarantinedConcernTags = (class_exists('ProductionInventoryDamage') && method_exists('ProductionInventoryDamage', 'getUnavailableConcernTags'))
+            ? ProductionInventoryDamage::getUnavailableConcernTags((int)$concernId)
+            : [];
+
         $pieces = [];
         $seenPieceTags = [];
         $verifiedCount = 0;
@@ -10025,7 +10635,7 @@ class ProductionController {
                 }
                 if (isset($missingCodeSet[$code])) {
                     $status = 'MISSING';
-                } elseif (isset($damagedCodes[$code])) {
+                } elseif (isset($damagedCodes[$code]) || isset($quarantinedConcernTags[$code])) {
                     $status = 'DAMAGED';
                 } elseif (isset($billedTagStatus[$code])) {
                     $status = $billedTagStatus[$code];
@@ -10597,9 +11207,11 @@ class ProductionController {
         }
 
         // Generate sequential sale number e.g. WST-2026-0001
-        $count = Database::fetchOne("SELECT COUNT(*) as cnt FROM wastage_sales");
-        $nextSeq = (int)($count['cnt'] ?? 0) + 1;
-        $saleNumber = 'WST-' . date('Y') . '-' . sprintf("%04d", $nextSeq);
+        $saleNumber = ProductionService::generateNextSequentialCode(
+            'wastage_sales',
+            'sale_number',
+            'WST-' . date('Y') . '-'
+        )['code'];
 
         $userId = (int)(Session::get('user_id') ?? 1);
 
@@ -11203,7 +11815,7 @@ class ProductionController {
         }
 
         $stitchingBatch = Database::fetchOne(
-            "SELECT sb.id, sb.program_id, sb.production_unit_id
+            "SELECT sb.id, sb.batch_number, sb.name, sb.program_id, sb.production_unit_id
              FROM stitching_batches sb
              JOIN production_units pu ON pu.id = sb.production_unit_id
              WHERE sb.id = ? AND pu.concern_id = ?",
@@ -11224,8 +11836,7 @@ class ProductionController {
             [$stitchingBatchId, $concernId]
         );
         if ($alreadySold) {
-            $sb = Database::fetchOne("SELECT batch_number, name FROM stitching_batches WHERE id = ?", [$stitchingBatchId]);
-            $sbNum = $sb['batch_number'] ?? ('#' . $stitchingBatchId);
+            $sbNum = $stitchingBatch['batch_number'] ?? ('#' . $stitchingBatchId);
             Session::flash('error', "Validation Error: Stitching Batch [{$sbNum}] wastage has already been sold under Sale #{$alreadySold['sale_number']} ({$alreadySold['quantity']} {$alreadySold['unit_type']} on {$alreadySold['sale_date']}). Duplicate sale of the same stitching batch wastage is not allowed.");
             Response::back();
             return;
@@ -11326,9 +11937,11 @@ class ProductionController {
         }
 
         // Generate sequential sale number e.g. STW-2026-0001
-        $count = Database::fetchOne("SELECT COUNT(*) as cnt FROM stitching_wastage_sales");
-        $nextSeq = (int)($count['cnt'] ?? 0) + 1;
-        $saleNumber = 'STW-' . date('Y') . '-' . sprintf("%04d", $nextSeq);
+        $saleNumber = ProductionService::generateNextSequentialCode(
+            'stitching_wastage_sales',
+            'sale_number',
+            'STW-' . date('Y') . '-'
+        )['code'];
 
         $userId = (int)(Session::get('user_id') ?? 1);
 
@@ -11419,7 +12032,7 @@ class ProductionController {
             return;
         }
         $stitchingBatch = Database::fetchOne(
-            "SELECT sb.id, sb.program_id, sb.production_unit_id
+            "SELECT sb.id, sb.batch_number, sb.name, sb.program_id, sb.production_unit_id
              FROM stitching_batches sb
              JOIN production_units pu ON pu.id = sb.production_unit_id
              WHERE sb.id = ? AND pu.concern_id = ?",
@@ -11441,8 +12054,7 @@ class ProductionController {
             [$stitchingBatchId, $concernId, $saleId]
         );
         if ($alreadySold) {
-            $sb = Database::fetchOne("SELECT batch_number, name FROM stitching_batches WHERE id = ?", [$stitchingBatchId]);
-            $sbNum = $sb['batch_number'] ?? ('#' . $stitchingBatchId);
+            $sbNum = $stitchingBatch['batch_number'] ?? ('#' . $stitchingBatchId);
             Session::flash('error', "Validation Error: Stitching Batch [{$sbNum}] wastage has already been sold under Sale #{$alreadySold['sale_number']} ({$alreadySold['quantity']} {$alreadySold['unit_type']} on {$alreadySold['sale_date']}). Duplicate sale of the same stitching batch wastage is not allowed.");
             Response::back();
             return;
@@ -12003,12 +12615,16 @@ class ProductionController {
             if (!Database::beginTransaction()) {
                 throw new \RuntimeException('Could not start expense transaction.');
             }
-            $count = Database::fetchOne("SELECT COUNT(*) as cnt FROM production_expenses");
-            $nextSeq = (int)($count['cnt'] ?? 0) + 1;
+            $expensePrefix = 'EXP-' . date('Y') . '-';
+            $nextSeq = ProductionService::generateNextSequentialCode(
+                'production_expenses',
+                'expense_number',
+                $expensePrefix
+            )['seq'];
             $expenseNumbers = [];
 
             foreach ($expenseLines as $line) {
-                $expenseNumber = 'EXP-' . date('Y') . '-' . sprintf("%04d", $nextSeq++);
+                $expenseNumber = $expensePrefix . sprintf("%04d", $nextSeq++);
                 Database::execute(
                     "INSERT INTO production_expenses
                         (expense_number, concern_id, production_unit_id, production_unit, category, item_name,
@@ -12320,19 +12936,20 @@ class ProductionController {
     }
 
     public function viewDamage(string $id): void {
+        $concernId = ConcernTransactionService::activeConcernId();
         $damage = Database::fetchOne(
             "SELECT rd.*, s.name AS seller_name, s.company AS seller_company,
                     sr.roll_number, sr.color AS roll_color, sr.design_name AS roll_design,
                     u_rep.full_name AS reported_by_name, u_res.full_name AS resolved_by_name,
                     repl_sr.roll_number AS replacement_roll_code
              FROM roll_damages rd
-             JOIN sellers s ON rd.seller_id = s.id
-             JOIN seller_rolls sr ON rd.seller_roll_id = sr.id
+             JOIN sellers s ON rd.seller_id = s.id AND s.concern_id = rd.concern_id
+             JOIN seller_rolls sr ON rd.seller_roll_id = sr.id AND sr.concern_id = rd.concern_id
              LEFT JOIN users u_rep ON rd.reported_by = u_rep.id
              LEFT JOIN users u_res ON rd.resolved_by = u_res.id
-             LEFT JOIN seller_rolls repl_sr ON rd.replacement_roll_id = repl_sr.id
-             WHERE rd.id = ?",
-            [(int)$id]
+             LEFT JOIN seller_rolls repl_sr ON rd.replacement_roll_id = repl_sr.id AND repl_sr.concern_id = rd.concern_id
+             WHERE rd.id = ? AND rd.concern_id = ?",
+            [(int)$id, $concernId]
         );
         if (!$damage) {
             Response::error(404, 'Damage record not found.');

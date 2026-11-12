@@ -13,15 +13,26 @@ class SystemController {
     // AUDIT LOGS
     // =========================================================================
 
+    private function resolveAuditScopeFilters(array $filters): array {
+        $isSuper = function_exists('isSuperAdmin') && isSuperAdmin();
+        $concernId = function_exists('currentConcernId') ? (int)(currentConcernId() ?? 0) : 0;
+        if (!$isSuper) {
+            $filters['concern_id'] = $concernId > 0 ? $concernId : -1;
+        } elseif ($concernId > 0) {
+            $filters['concern_id'] = $concernId;
+        }
+        return $filters;
+    }
+
     public function auditLogs(): void {
-        $filters = [
+        $filters = $this->resolveAuditScopeFilters([
             'search'    => $_GET['search'] ?? '',
             'module'    => $_GET['module'] ?? '',
             'action'    => $_GET['action'] ?? '',
             'user_id'   => $_GET['user_id'] ?? '',
             'date_from' => $_GET['date_from'] ?? '',
             'date_to'   => $_GET['date_to'] ?? '',
-        ];
+        ]);
 
         $page = max(1, (int)($_GET['page'] ?? 1));
         $limit = 50;
@@ -29,13 +40,41 @@ class SystemController {
 
         $logs = AuditService::getLogs($filters, $limit, $offset);
         $totalLogs = AuditService::count($filters);
-        $stats = AuditService::getStats();
-        $users = Database::fetchAll("SELECT id, full_name, username FROM users ORDER BY full_name ASC");
+        $stats = AuditService::getStats($filters);
 
+        $isSuper = function_exists('isSuperAdmin') && isSuperAdmin();
+        $scopeConcernId = isset($filters['concern_id']) ? (int)$filters['concern_id'] : 0;
+        $userWhereParts = ['1=1'];
+        $userParams = [];
+        if (!$isSuper) {
+            if ($scopeConcernId > 0) {
+                $userWhereParts[] = 'EXISTS (SELECT 1 FROM user_concerns uc WHERE uc.user_id = u.id AND uc.concern_id = ?)';
+                $userParams[] = $scopeConcernId;
+            } else {
+                $userWhereParts[] = '1 = 0';
+            }
+            $userWhereParts[] = "(u.role_id != 1 AND LOWER(COALESCE(r.slug, '')) != 'super_admin')";
+        } elseif ($scopeConcernId > 0) {
+            $userWhereParts[] = 'EXISTS (SELECT 1 FROM user_concerns uc WHERE uc.user_id = u.id AND uc.concern_id = ?)';
+            $userParams[] = $scopeConcernId;
+        }
+        $userWhere = implode(' AND ', $userWhereParts);
+
+        $users = Database::fetchAll(
+            "SELECT u.id, u.full_name, u.username
+             FROM users u
+             LEFT JOIN roles r ON u.role_id = r.id
+             WHERE {$userWhere}
+             ORDER BY u.full_name ASC",
+            $userParams
+        );
+
+        $puJoinCond = $scopeConcernId > 0 ? 'pu.id = u.production_unit_id AND pu.concern_id = ?' : 'pu.id = u.production_unit_id';
+        $profileParams = $scopeConcernId > 0 ? array_merge([$scopeConcernId], $userParams) : $userParams;
         $staffProfiles = Database::fetchAll(
             "SELECT u.id, u.username, u.emp_id, u.full_name, u.email, u.phone, u.department, u.is_active, u.last_login,
                     r.name as role_name, r.slug as role_slug,
-                    pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name,
+                    pu.name as production_unit_name, NULL as warehouse_name, NULL as shop_name,
                     COUNT(al.id) as log_count,
                     SUM(CASE WHEN al.action = 'CREATE' THEN 1 ELSE 0 END) as create_count,
                     SUM(CASE WHEN al.action = 'UPDATE' THEN 1 ELSE 0 END) as update_count,
@@ -46,12 +85,12 @@ class SystemController {
                     (SELECT al2.reference_type FROM audit_logs al2 WHERE al2.user_id = u.id ORDER BY al2.id DESC LIMIT 1) as last_ref_type
              FROM users u
              LEFT JOIN roles r ON u.role_id = r.id
-             LEFT JOIN production_units pu ON u.production_unit_id = pu.id
-             LEFT JOIN warehouses w ON u.warehouse_id = w.id
-             LEFT JOIN shops s ON u.shop_id = s.id
+             LEFT JOIN production_units pu ON {$puJoinCond}
              LEFT JOIN audit_logs al ON al.user_id = u.id
-             GROUP BY u.id, u.username, u.emp_id, u.full_name, u.email, u.phone, u.department, u.is_active, u.last_login, r.name, r.slug, pu.name, w.name, s.name
-             ORDER BY log_count DESC, u.full_name ASC"
+             WHERE {$userWhere}
+             GROUP BY u.id, u.username, u.emp_id, u.full_name, u.email, u.phone, u.department, u.is_active, u.last_login, r.name, r.slug, pu.name
+             ORDER BY log_count DESC, u.full_name ASC",
+            $profileParams
         );
 
         $selectedStaff = null;
@@ -85,14 +124,14 @@ class SystemController {
     }
 
     public function exportAuditLogs(): void {
-        $filters = [
+        $filters = $this->resolveAuditScopeFilters([
             'search'    => $_GET['search'] ?? '',
             'module'    => $_GET['module'] ?? '',
             'action'    => $_GET['action'] ?? '',
             'user_id'   => $_GET['user_id'] ?? '',
             'date_from' => $_GET['date_from'] ?? '',
             'date_to'   => $_GET['date_to'] ?? '',
-        ];
+        ]);
         AuditService::exportCsv($filters);
     }
 
@@ -352,9 +391,38 @@ class SystemController {
     // SYSTEM NOTIFICATIONS
     // =========================================================================
 
+    private function notificationScopeSql(string $alias = 'n'): array {
+        $userId = (int)(Session::userId() ?? 0);
+        $isSuper = function_exists('isSuperAdmin') && isSuperAdmin();
+        $concernId = function_exists('currentConcernId') ? (int)(currentConcernId() ?? 0) : 0;
+
+        if ($isSuper) {
+            if ($concernId > 0) {
+                return [
+                    "({$alias}.user_id IS NULL OR {$alias}.user_id = ? OR EXISTS (SELECT 1 FROM user_concerns uc WHERE uc.user_id = {$alias}.user_id AND uc.concern_id = ?))",
+                    [$userId, $concernId],
+                ];
+            }
+            return ['1 = 1', []];
+        }
+
+        if ($userId <= 0 || $concernId <= 0) {
+            return ['1 = 0', []];
+        }
+
+        return [
+            "({$alias}.user_id = ? AND EXISTS (SELECT 1 FROM user_concerns uc WHERE uc.user_id = {$alias}.user_id AND uc.concern_id = ?))",
+            [$userId, $concernId],
+        ];
+    }
+
     public function notifications(): void {
-        $notifications = Database::fetchAll("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 100");
-        
+        [$scopeSql, $scopeParams] = $this->notificationScopeSql('n');
+        $notifications = Database::fetchAll(
+            "SELECT n.* FROM notifications n WHERE {$scopeSql} ORDER BY n.created_at DESC, n.id DESC LIMIT 100",
+            $scopeParams
+        );
+
         Response::view('system.notifications', [
             'pageTitle'     => 'System Notifications',
             'activeModule'  => 'system',
@@ -367,7 +435,78 @@ class SystemController {
         ]);
     }
 
+    public function markRead(string $id): void {
+        $isJson = str_contains(strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? '')), 'application/json');
+        if (!CSRF::validateRequest()) {
+            if ($isJson) {
+                Response::json(['success' => false, 'message' => 'Invalid security token.'], 403);
+                return;
+            }
+            Session::setFlash('error', 'Invalid security token. Please try again.');
+            Response::redirect(url('system/notifications'));
+            return;
+        }
+
+        $notifId = (int)$id;
+        [$scopeSql, $scopeParams] = $this->notificationScopeSql('notifications');
+        $affected = 0;
+        if ($notifId > 0) {
+            $affected = Database::execute(
+                "UPDATE notifications SET is_read = 1 WHERE id = ? AND {$scopeSql}",
+                array_merge([$notifId], $scopeParams)
+            );
+        }
+
+        if ($isJson) {
+            Response::json(['success' => $affected > 0]);
+            return;
+        }
+        Session::setFlash($affected > 0 ? 'success' : 'error', $affected > 0 ? 'Notification marked as read.' : 'Notification not found.');
+        Response::redirect(url('system/notifications'));
+    }
+
+    public function markAllRead(): void {
+        $isJson = str_contains(strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? '')), 'application/json');
+        if (!CSRF::validateRequest()) {
+            if ($isJson) {
+                Response::json(['success' => false, 'message' => 'Invalid security token.'], 403);
+                return;
+            }
+            Session::setFlash('error', 'Invalid security token. Please try again.');
+            Response::redirect(url('system/notifications'));
+            return;
+        }
+
+        [$scopeSql, $scopeParams] = $this->notificationScopeSql('notifications');
+        $affected = Database::execute(
+            "UPDATE notifications SET is_read = 1 WHERE is_read = 0 AND {$scopeSql}",
+            $scopeParams
+        );
+
+        if ($isJson) {
+            Response::json(['success' => true, 'updated' => $affected]);
+            return;
+        }
+        Session::setFlash('success', $affected > 0 ? 'All notifications marked as read.' : 'No unread notifications to update.');
+        Response::redirect(url('system/notifications'));
+    }
+
     public function unreadNotifications(): void {
-        Response::json(['count' => 0, 'notifications' => []]);
+        [$scopeSql, $scopeParams] = $this->notificationScopeSql('n');
+        $countRow = Database::fetchOne(
+            "SELECT COUNT(*) AS cnt FROM notifications n WHERE n.is_read = 0 AND {$scopeSql}",
+            $scopeParams
+        );
+        $items = Database::fetchAll(
+            "SELECT n.id, n.type, n.title, n.message, n.link, n.created_at
+             FROM notifications n
+             WHERE n.is_read = 0 AND {$scopeSql}
+             ORDER BY n.created_at DESC, n.id DESC LIMIT 10",
+            $scopeParams
+        );
+        Response::json([
+            'count'         => (int)($countRow['cnt'] ?? 0),
+            'notifications' => $items,
+        ]);
     }
 }

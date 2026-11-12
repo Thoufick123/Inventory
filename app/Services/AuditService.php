@@ -43,21 +43,24 @@ class AuditService {
         }
     }
 
-    /**
-     * Get audit logs with filters and pagination.
-     */
-    public static function getLogs(array $filters = [], int $limit = 50, int $offset = 0): array {
-        $sql = "SELECT al.*, u.full_name as user_name, u.username, u.department, u.email as user_email, u.phone as user_phone,
-                       r.name as role_name,
-                       pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name
-                FROM audit_logs al 
-                LEFT JOIN users u ON al.user_id = u.id 
-                LEFT JOIN roles r ON u.role_id = r.id 
-                LEFT JOIN production_units pu ON u.production_unit_id = pu.id
-                LEFT JOIN warehouses w ON u.warehouse_id = w.id
-                LEFT JOIN shops s ON u.shop_id = s.id
-                WHERE 1=1";
-        $params = [];
+    private static function appendScopeAndFilters(string $sql, array &$params, array $filters): string {
+        $concernId = isset($filters['concern_id']) ? (int)$filters['concern_id'] : null;
+        $isSuper = function_exists('isSuperAdmin') && isSuperAdmin();
+        if (!$isSuper && ($concernId === null || $concernId <= 0)) {
+            $concernId = function_exists('currentConcernId') ? (int)(currentConcernId() ?? 0) : 0;
+        }
+        if (!$isSuper && $concernId <= 0) {
+            $sql .= ' AND 1 = 0';
+        } elseif ($concernId !== null && $concernId > 0) {
+            $sql .= ' AND EXISTS (SELECT 1 FROM user_concerns uc WHERE uc.user_id = al.user_id AND uc.concern_id = ?)';
+            $params[] = $concernId;
+        }
+        if (!$isSuper) {
+            $sql .= " AND (al.user_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM users su LEFT JOIN roles sr ON sr.id = su.role_id
+                WHERE su.id = al.user_id AND (su.role_id = 1 OR LOWER(COALESCE(sr.slug, '')) = 'super_admin')
+            ))";
+        }
 
         if (!empty($filters['search'])) {
             $sql .= " AND (al.module LIKE ? OR al.action LIKE ? OR al.reference_type LIKE ? OR u.full_name LIKE ? OR u.username LIKE ?)";
@@ -84,6 +87,26 @@ class AuditService {
             $sql .= " AND al.created_at <= ?";
             $params[] = $filters['date_to'] . ' 23:59:59';
         }
+
+        return $sql;
+    }
+
+    /**
+     * Get audit logs with filters and pagination.
+     */
+    public static function getLogs(array $filters = [], int $limit = 50, int $offset = 0): array {
+        $sql = "SELECT al.*, u.full_name as user_name, u.username, u.department, u.email as user_email, u.phone as user_phone,
+                       r.name as role_name,
+                       pu.name as production_unit_name, w.name as warehouse_name, s.name as shop_name
+                FROM audit_logs al
+                LEFT JOIN users u ON al.user_id = u.id
+                LEFT JOIN roles r ON u.role_id = r.id
+                LEFT JOIN production_units pu ON u.production_unit_id = pu.id
+                LEFT JOIN warehouses w ON u.warehouse_id = w.id
+                LEFT JOIN shops s ON u.shop_id = s.id
+                WHERE 1=1";
+        $params = [];
+        $sql = self::appendScopeAndFilters($sql, $params, $filters);
 
         $sql .= " ORDER BY al.created_at DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
 
@@ -114,32 +137,7 @@ class AuditService {
                 LEFT JOIN users u ON al.user_id = u.id 
                 WHERE 1=1";
         $params = [];
-
-        if (!empty($filters['search'])) {
-            $sql .= " AND (al.module LIKE ? OR al.action LIKE ? OR al.reference_type LIKE ? OR u.full_name LIKE ? OR u.username LIKE ?)";
-            $s = '%' . $filters['search'] . '%';
-            $params = array_merge($params, [$s, $s, $s, $s, $s]);
-        }
-        if (!empty($filters['module'])) {
-            $sql .= " AND LOWER(al.module) = LOWER(?)";
-            $params[] = $filters['module'];
-        }
-        if (!empty($filters['action'])) {
-            $sql .= " AND UPPER(al.action) = UPPER(?)";
-            $params[] = $filters['action'];
-        }
-        if (!empty($filters['user_id'])) {
-            $sql .= " AND al.user_id = ?";
-            $params[] = $filters['user_id'];
-        }
-        if (!empty($filters['date_from'])) {
-            $sql .= " AND al.created_at >= ?";
-            $params[] = $filters['date_from'] . ' 00:00:00';
-        }
-        if (!empty($filters['date_to'])) {
-            $sql .= " AND al.created_at <= ?";
-            $params[] = $filters['date_to'] . ' 23:59:59';
-        }
+        $sql = self::appendScopeAndFilters($sql, $params, $filters);
 
         $result = Database::fetchOne($sql, $params);
         return (int) ($result['cnt'] ?? 0);
@@ -148,12 +146,14 @@ class AuditService {
     /**
      * Get key metrics summary statistics.
      */
-    public static function getStats(): array {
-        $total = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs")['c'] ?? 0);
-        $updates = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs WHERE action IN ('UPDATE', 'EDIT', 'MODIFY')")['c'] ?? 0);
-        $deletions = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs WHERE action IN ('DELETE', 'REMOVE', 'PURGE')")['c'] ?? 0);
-        $logins = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs WHERE action IN ('LOGIN', 'LOGOUT', 'PASSWORD_CHANGE')")['c'] ?? 0);
-        $modules = Database::fetchAll("SELECT DISTINCT LOWER(module) as module FROM audit_logs WHERE module IS NOT NULL AND module != '' ORDER BY module ASC");
+    public static function getStats(array $filters = []): array {
+        $baseParams = [];
+        $baseWhere = self::appendScopeAndFilters('WHERE 1=1', $baseParams, $filters);
+        $total = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {$baseWhere}", $baseParams)['c'] ?? 0);
+        $updates = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {$baseWhere} AND al.action IN ('UPDATE', 'EDIT', 'MODIFY')", $baseParams)['c'] ?? 0);
+        $deletions = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {$baseWhere} AND al.action IN ('DELETE', 'REMOVE', 'PURGE')", $baseParams)['c'] ?? 0);
+        $logins = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {$baseWhere} AND al.action IN ('LOGIN', 'LOGOUT', 'PASSWORD_CHANGE')", $baseParams)['c'] ?? 0);
+        $modules = Database::fetchAll("SELECT DISTINCT LOWER(al.module) as module FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {$baseWhere} AND al.module IS NOT NULL AND al.module != '' ORDER BY module ASC", $baseParams);
 
         return [
             'total'     => $total,

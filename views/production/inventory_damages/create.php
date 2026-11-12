@@ -1,6 +1,6 @@
 <div class="d-flex align-items-center gap-2 mb-4">
     <a class="btn btn-outline-secondary btn-sm" href="<?= url('production/inventory-damages') ?>" title="Back to damage cases"><i class="bi bi-arrow-left"></i></a>
-    <div><h2 class="h4 mb-0 fw-bold">Report Finished Goods Damage</h2><small class="text-muted">Scan QC-passed pieces that are still available in Production.</small></div>
+    <div><h2 class="h4 mb-0 fw-bold">Report Finished Goods Damage</h2><small class="text-muted">Scan QC-passed or inwarded concern pieces currently available in Production.</small></div>
 </div>
 
 <form id="productionDamageForm" enctype="multipart/form-data">
@@ -56,13 +56,17 @@
             rows.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Scan a piece to begin.</td></tr>';
             return;
         }
-        rows.innerHTML = [...pieces.entries()].map(([tag, piece]) => `<tr>
+        rows.innerHTML = [...pieces.entries()].map(([tag, piece]) => {
+            const sourceTitle = piece.qc_batch_number || piece.location_label || 'Inward Concern Stock';
+            const sourceMeta = piece.program_number || (piece.source_kind === 'INWARD' ? 'Inward Stock' : '');
+            return `<tr>
             <td class="font-monospace fw-semibold">${escapeHtml(tag)}</td>
             <td>${escapeHtml(piece.product_name)}<small class="d-block text-muted">${escapeHtml(piece.size_name || 'Std')} / ${escapeHtml(piece.color_name || 'Std')}</small></td>
-            <td>${escapeHtml(piece.qc_batch_number || '')}<small class="d-block text-muted">${escapeHtml(piece.program_number || '')}</small></td>
+            <td>${escapeHtml(sourceTitle)}<small class="d-block text-muted">${escapeHtml(sourceMeta)}</small></td>
             <td class="text-end">₹${Number(piece.unit_value || 0).toFixed(2)}</td>
             <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" data-remove-tag="${escapeHtml(tag)}" title="Remove piece"><i class="bi bi-x-lg"></i></button></td>
-        </tr>`).join('');
+        </tr>`;
+        }).join('');
     }
 
     function escapeHtml(value) {
@@ -83,7 +87,8 @@
             pieces.set(normalized, piece);
             tagInput.value = '';
             renderPieces();
-            showMessage(`${normalized} added from QC batch ${piece.qc_batch_number}.`, 'success');
+            const sourceNote = piece.qc_batch_number ? `QC batch ${piece.qc_batch_number}` : (piece.location_label || 'Inward stock');
+            showMessage(`${normalized} added from ${sourceNote}.`, 'success');
             tagInput.focus();
         } catch (error) {
             showMessage(error.message, 'danger');

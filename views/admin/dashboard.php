@@ -53,16 +53,21 @@
     <div class="col-lg-8">
         <div class="card border-0 shadow-sm rounded-3 h-100">
             <div class="card-header bg-white border-bottom p-3 d-flex align-items-center justify-content-between">
-                <h6 class="mb-0 fw-700 text-dark"><i class="bi bi-clock-history me-2 text-primary"></i>Recent In-Store & Multi-Channel Sales</h6>
-                <a href="<?= url('reports/sales') ?>" class="btn btn-sm btn-outline-primary">View All Reports</a>
+                <h6 class="mb-0 fw-700 text-dark"><i class="bi bi-clock-history me-2 text-primary"></i>Recent Production &amp; Concern Bills</h6>
+                <div class="d-flex gap-2">
+                    <?php if (hasPermission('production_billing', 'view')): ?>
+                        <a href="<?= url('production/billing') ?>" class="btn btn-sm btn-outline-secondary">All Bills</a>
+                    <?php endif; ?>
+                    <a href="<?= url('reports/sales') ?>" class="btn btn-sm btn-outline-primary">Sales Reports</a>
+                </div>
             </div>
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0">
                     <thead class="table-light small text-uppercase text-muted">
                         <tr>
-                            <th class="ps-3">Invoice</th>
-                            <th>Channel</th>
-                            <th>Customer</th>
+                            <th class="ps-3">Bill #</th>
+                            <th>Mode</th>
+                            <th>Buyer</th>
                             <th>Amount</th>
                             <th>Status</th>
                             <th class="pe-3">Date</th>
@@ -72,7 +77,13 @@
                         <?php if (!empty($recentSales)): ?>
                             <?php foreach ($recentSales as $sale): ?>
                             <tr>
-                                <td class="ps-3 fw-bold text-dark font-monospace"><?= e($sale['invoice_number']) ?></td>
+                                <td class="ps-3 fw-bold text-dark font-monospace">
+                                    <?php if (!empty($sale['id']) && hasPermission('production_billing', 'view')): ?>
+                                        <a href="<?= url('production/billing/view/' . (int)$sale['id']) ?>" class="text-decoration-none"><?= e($sale['invoice_number']) ?></a>
+                                    <?php else: ?>
+                                        <?= e($sale['invoice_number']) ?>
+                                    <?php endif; ?>
+                                </td>
                                 <td><span class="badge bg-light text-dark border"><?= e($sale['sale_type']) ?></span></td>
                                 <td><?= e($sale['customer_name'] ?? 'Walk-in Customer') ?></td>
                                 <td class="fw-bold text-success"><?= formatCurrency($sale['total_amount']) ?></td>

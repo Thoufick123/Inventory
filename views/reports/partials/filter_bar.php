@@ -14,6 +14,7 @@ $reportPermissionModules = [
     'sales' => 'reports_sales',
     'sales_pos' => 'reports_sales',
     'sales_warehouse' => 'reports_sales',
+    'sales_production' => 'reports_sales',
     'sales_website' => 'reports_website',
     'sales_whatsapp' => 'reports_whatsapp',
     'website' => 'reports_website',

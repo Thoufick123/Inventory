@@ -48,7 +48,7 @@ class ProductionWarehouseRework {
              LEFT JOIN production_units pu ON pwr.production_unit_id = pu.id
              LEFT JOIN users u_rec ON pwr.received_by = u_rec.id
              LEFT JOIN users u_cre ON pwr.created_by = u_cre.id
-             WHERE pwr.id = ? AND COALESCE(pu.concern_id, pb.concern_id) = ?{$unitClause}",
+             WHERE pwr.id = ? AND COALESCE(pu.concern_id, pb.concern_id, w.concern_id) = ?{$unitClause}",
             $params
         );
     }
@@ -88,7 +88,7 @@ class ProductionWarehouseRework {
                 LEFT JOIN production_units pu ON pwr.production_unit_id = pu.id
                 LEFT JOIN users u_rec ON pwr.received_by = u_rec.id
                 LEFT JOIN users u_cre ON pwr.created_by = u_cre.id
-                WHERE COALESCE(pu.concern_id, pb.concern_id) = ?";
+                WHERE COALESCE(pu.concern_id, pb.concern_id, w.concern_id) = ?";
         $params = [$concernId];
 
         if (!empty($filters['status'])) {
@@ -151,8 +151,14 @@ class ProductionWarehouseRework {
      */
     public static function create(array $data): int {
         if (empty($data['rework_number'])) {
-            $baseCount = (int)(Database::fetchOne("SELECT COUNT(*) as c FROM production_warehouse_reworks")['c'] ?? 0);
-            $data['rework_number'] = 'RWK-WH-' . date('Ymd') . '-' . str_pad((string)($baseCount + 1), 4, '0', STR_PAD_LEFT);
+            if (!class_exists('ProductionService')) {
+                require_once BASE_PATH . '/app/Services/ProductionService.php';
+            }
+            $data['rework_number'] = ProductionService::generateNextSequentialCode(
+                'production_warehouse_reworks',
+                'rework_number',
+                'RWK-WH-' . date('Ymd') . '-'
+            )['code'];
         }
 
         // Auto determine product_id from variant if missing
@@ -232,6 +238,9 @@ class ProductionWarehouseRework {
      * Delete rework record.
      */
     public static function delete(int $id): bool {
+        if (!self::find($id)) {
+            return false;
+        }
         return Database::execute("DELETE FROM production_warehouse_reworks WHERE id = ?", [$id]);
     }
 
@@ -283,9 +292,10 @@ class ProductionWarehouseRework {
                 COALESCE(SUM(CASE WHEN pwr.status = 'RE_DISPATCHED' THEN 1 ELSE 0 END), 0) as count_redispatched,
                 COALESCE(SUM(CASE WHEN pwr.status = 'RE_DISPATCHED' THEN pwr.quantity ELSE 0 END), 0) as qty_redispatched
              FROM production_warehouse_reworks pwr
+             LEFT JOIN warehouses w ON pwr.warehouse_id = w.id
              LEFT JOIN production_units pu ON pwr.production_unit_id = pu.id
              LEFT JOIN production_batches pb ON pwr.production_batch_id = pb.id
-             WHERE COALESCE(pu.concern_id, pb.concern_id) = ?{$unitClause}",
+             WHERE COALESCE(pu.concern_id, pb.concern_id, w.concern_id) = ?{$unitClause}",
             $params
         );
 

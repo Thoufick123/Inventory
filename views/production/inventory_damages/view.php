@@ -10,10 +10,10 @@
             <div class="card-body">
                 <dl class="row mb-0">
                     <dt class="col-sm-4 text-muted">QR tag</dt><dd class="col-sm-8 font-monospace fw-semibold"><?= e($damage['tag_code']) ?></dd>
-                    <dt class="col-sm-4 text-muted">Product</dt><dd class="col-sm-8"><?= e($damage['product_name'] ?? $damage['program_name']) ?> · <?= e($damage['size_name'] ?? 'Std') ?> / <?= e($damage['color_name'] ?? 'Std') ?></dd>
-                    <dt class="col-sm-4 text-muted">QC batch</dt><dd class="col-sm-8"><?= e($damage['qc_batch_number'] ?? '-') ?></dd>
-                    <dt class="col-sm-4 text-muted">Production program</dt><dd class="col-sm-8"><?= e($damage['program_number'] ?? '-') ?> · <?= e($damage['program_name'] ?? '') ?></dd>
-                    <dt class="col-sm-4 text-muted">Production unit</dt><dd class="col-sm-8"><?= e($damage['production_unit_name'] ?? 'Production') ?></dd>
+                    <dt class="col-sm-4 text-muted">Product</dt><dd class="col-sm-8"><?= e($damage['product_name'] ?? $damage['program_name'] ?? 'Finished Product') ?> · <?= e($damage['size_name'] ?? 'Std') ?> / <?= e($damage['color_name'] ?? 'Std') ?></dd>
+                    <dt class="col-sm-4 text-muted">QC batch / Source</dt><dd class="col-sm-8"><?= e($damage['qc_batch_number'] ?? (!empty($damage['stock_location_type']) ? ('Inward Stock (' . $damage['stock_location_type'] . ')') : '-')) ?></dd>
+                    <dt class="col-sm-4 text-muted">Program / SKU</dt><dd class="col-sm-8"><?= e(!empty($damage['program_number']) ? ($damage['program_number'] . (!empty($damage['program_name']) ? ' · ' . $damage['program_name'] : '')) : ($damage['sku'] ?? '-')) ?></dd>
+                    <dt class="col-sm-4 text-muted">Location / Unit</dt><dd class="col-sm-8"><?= e($damage['production_unit_name'] ?? 'Concern Inventory') ?></dd>
                     <dt class="col-sm-4 text-muted">Found at</dt><dd class="col-sm-8"><?= e(str_replace('_', ' ', $damage['source_stage'])) ?></dd>
                     <dt class="col-sm-4 text-muted">Reason</dt><dd class="col-sm-8 text-danger fw-semibold"><?= e($damage['damage_reason']) ?></dd>
                     <dt class="col-sm-4 text-muted">Value at risk</dt><dd class="col-sm-8">₹<?= number_format((float)$damage['unit_value'], 2) ?></dd>

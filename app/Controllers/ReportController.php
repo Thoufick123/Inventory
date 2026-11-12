@@ -5,6 +5,7 @@
  * with Monthly, Yearly, and Custom Date Range filtering and Excel / Print Export.
  */
 
+require_once BASE_PATH . '/app/Services/AssetService.php';
 require_once BASE_PATH . '/app/Services/ExpenseService.php';
 require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
@@ -22,6 +23,7 @@ class ReportController {
             'sales' => 'reports_sales',
             'sales_pos' => 'reports_sales',
             'sales_warehouse' => 'reports_sales',
+            'sales_production' => 'reports_sales',
             'production' => 'reports_production',
             'warehouse' => 'reports_warehouse',
             'purchase' => 'reports_purchase',
@@ -1074,6 +1076,8 @@ class ReportController {
      */
     private function getProfitabilityMetrics(string $startDate, string $endDate): array {
         $concernId = ConcernTransactionService::activeConcernId();
+        $startDay = substr($startDate, 0, 10);
+        $endDay = substr($endDate, 0, 10);
         // 1. REVENUE
         // A. Direct Customer Purchases in Warehouse
         $whSales = Database::fetchOne(
@@ -1107,7 +1111,7 @@ class ReportController {
                     COUNT(id) as count
              FROM wastage_sales
              WHERE concern_id = ? AND (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
         // D. Stitching Wastage Sales
@@ -1117,23 +1121,39 @@ class ReportController {
                     COUNT(id) as count
              FROM stitching_wastage_sales
              WHERE concern_id = ? AND (sale_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
-        $grossRevenue = (float)$whSales['total'] + (float)$shopSales['total'] + (float)$cuttingWastage['total'] + (float)$stitchingWastage['total'];
-        $totalDiscountGiven = (float)$whSales['discount'] + (float)$shopSales['discount'];
-        $totalTaxCollected = (float)$whSales['tax'] + (float)$shopSales['tax'];
+        // E. Concern Production Billing Sales
+        $prodBills = Database::fetchOne(
+            "SELECT COALESCE(SUM(total_amount), 0) as total,
+                    COALESCE(SUM(discount_amount), 0) as discount,
+                    COALESCE(SUM(tax_amount), 0) as tax,
+                    COALESCE(SUM(CASE WHEN UPPER(COALESCE(payment_status, 'PAID')) = 'PAID' THEN total_amount ELSE 0 END), 0) as paid,
+                    COUNT(id) as count
+             FROM production_bills
+             WHERE concern_id = ? AND (bill_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
+        );
+
+        $grossRevenue = (float)$whSales['total']
+            + (float)$shopSales['total']
+            + (float)$prodBills['total']
+            + (float)$cuttingWastage['total']
+            + (float)$stitchingWastage['total'];
+        $totalDiscountGiven = (float)$whSales['discount'] + (float)$shopSales['discount'] + (float)$prodBills['discount'];
+        $totalTaxCollected = (float)$whSales['tax'] + (float)$shopSales['tax'] + (float)$prodBills['tax'];
 
         // 2. COST OF GOODS SOLD (COGS)
         // A. Production Batches produced
         $prodCost = Database::fetchOne(
-            "SELECT COALESCE(SUM(total_cost), 0) as total_cost,
-                    COALESCE(SUM(total_qty), 0) as total_pieces
+            "SELECT COALESCE(SUM(pb.total_cost), 0) as total_cost,
+                    COALESCE(SUM(pb.total_qty), 0) as total_pieces
              FROM production_batches pb
              JOIN production_programs pp ON pb.program_id = pp.id
              JOIN production_units pu ON pp.production_unit_id = pu.id
-             WHERE pu.concern_id = ? AND pb.created_at BETWEEN ? AND ?",
-            [$concernId, $startDate, $endDate]
+             WHERE pu.concern_id = ? AND (pb.concern_id IS NULL OR pb.concern_id = ?) AND pb.created_at BETWEEN ? AND ?",
+            [$concernId, $concernId, $startDate, $endDate]
         );
 
         // B. External Supplier Purchases
@@ -1154,7 +1174,7 @@ class ReportController {
                     COUNT(id) as count
              FROM production_expenses
              WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
         // B. Shop Cash Expenses
@@ -1175,16 +1195,19 @@ class ReportController {
                     COUNT(id) as count
              FROM expenses
              WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
         // D. Asset Maintenance Costs
+        [$assetScopeSql, $assetScopeParams] = AssetService::assetConcernScope('a');
         $assetMaintenance = Database::fetchOne(
-            "SELECT COALESCE(SUM(service_cost), 0) as total,
-                    COUNT(id) as count
-             FROM asset_maintenance_logs
-             WHERE (service_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
-            [$startDate, $endDate, $startDate, $endDate]
+            "SELECT COALESCE(SUM(m.service_cost), 0) as total,
+                    COUNT(m.id) as count
+             FROM asset_maintenance_logs m
+             JOIN assets a ON a.id = m.asset_id
+             WHERE {$assetScopeSql}
+               AND (m.service_date BETWEEN ? AND ? OR m.created_at BETWEEN ? AND ?)",
+            array_merge($assetScopeParams, [$startDay, $endDay, $startDate, $endDate])
         );
 
         $operatingExpenses = (float)$prodExpenses['total'] + (float)$shopExpenses['total'] + (float)($moduleExpenses['total'] ?? 0) + (float)$assetMaintenance['total'];
@@ -1207,8 +1230,8 @@ class ReportController {
                     COALESCE(SUM(damaged_quantity), 0) as total_meters,
                     COUNT(id) as count
              FROM roll_damages
-             WHERE created_at BETWEEN ? AND ?",
-            [$startDate, $endDate]
+             WHERE concern_id = ? AND created_at BETWEEN ? AND ?",
+            [$concernId, $startDate, $endDate]
         );
 
         // C. Defective Customer Returns
@@ -1234,6 +1257,7 @@ class ReportController {
             'gross_revenue'       => $grossRevenue,
             'wh_sales_revenue'    => (float)$whSales['total'],
             'shop_sales_revenue'  => (float)$shopSales['total'],
+            'prod_sales_revenue'  => (float)$prodBills['total'],
             'wastage_revenue'     => (float)$cuttingWastage['total'] + (float)$stitchingWastage['total'],
             'cutting_wastage_rev' => (float)$cuttingWastage['total'],
             'stitch_wastage_rev'  => (float)$stitchingWastage['total'],
@@ -1257,7 +1281,7 @@ class ReportController {
             'net_profit'          => $netProfit,
             'gross_margin_pct'    => $grossMarginPct,
             'net_margin_pct'      => $netMarginPct,
-            'invoices_count'      => (int)$whSales['count'] + (int)$shopSales['count'],
+            'invoices_count'      => (int)$whSales['count'] + (int)$shopSales['count'] + (int)$prodBills['count'],
         ];
     }
 
@@ -1266,6 +1290,8 @@ class ReportController {
      */
     private function getSalesSummary(string $startDate, string $endDate): array {
         $concernId = ConcernTransactionService::activeConcernId();
+        $startDay = substr($startDate, 0, 10);
+        $endDay = substr($endDate, 0, 10);
         $wh = Database::fetchOne(
             "SELECT COUNT(id) as orders, COALESCE(SUM(total_amount), 0) as revenue
              FROM purchase_orders WHERE concern_id = ? AND created_at BETWEEN ? AND ? AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)",
@@ -1276,9 +1302,14 @@ class ReportController {
              FROM sales WHERE concern_id = ? AND created_at BETWEEN ? AND ?",
             [$concernId, $startDate, $endDate]
         );
+        $prodBills = Database::fetchOne(
+            "SELECT COUNT(id) as orders, COALESCE(SUM(total_amount), 0) as revenue
+             FROM production_bills WHERE concern_id = ? AND (bill_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)",
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
+        );
 
-        $totRevenue = (float)$wh['revenue'] + (float)$pos['revenue'];
-        $totCount = (int)$wh['orders'] + (int)$pos['sales'];
+        $totRevenue = (float)$wh['revenue'] + (float)$pos['revenue'] + (float)$prodBills['revenue'];
+        $totCount = (int)$wh['orders'] + (int)$pos['sales'] + (int)$prodBills['orders'];
         $avgOrder = $totCount > 0 ? round($totRevenue / $totCount, 2) : 0;
 
         return [
@@ -1287,6 +1318,7 @@ class ReportController {
             'avg_order_val' => $avgOrder,
             'wh_revenue'    => (float)$wh['revenue'],
             'pos_revenue'   => (float)$pos['revenue'],
+            'prod_revenue'  => (float)$prodBills['revenue'],
         ];
     }
 
@@ -1424,16 +1456,19 @@ class ReportController {
             $sDate = "{$year}-{$mPadded}-01 00:00:00";
             $lDay = date('t', strtotime($sDate));
             $eDate = "{$year}-{$mPadded}-{$lDay} 23:59:59";
+            $sDay = substr($sDate, 0, 10);
+            $eDay = substr($eDate, 0, 10);
             $monthName = date('M', strtotime($sDate));
 
             $salesRev = Database::fetchOne(
                 "SELECT (
                     COALESCE((SELECT SUM(total_amount) FROM purchase_orders WHERE concern_id = ? AND created_at BETWEEN ? AND ? AND (customer_id IS NOT NULL OR warehouse_supplier_id IS NULL)), 0) +
                     COALESCE((SELECT SUM(total_amount) FROM sales WHERE concern_id = ? AND created_at BETWEEN ? AND ?), 0) +
+                    COALESCE((SELECT SUM(total_amount) FROM production_bills WHERE concern_id = ? AND (bill_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)), 0) +
                     COALESCE((SELECT SUM(total_amount) FROM wastage_sales WHERE concern_id = ? AND sale_date BETWEEN ? AND ?), 0) +
                     COALESCE((SELECT SUM(total_amount) FROM stitching_wastage_sales WHERE concern_id = ? AND sale_date BETWEEN ? AND ?), 0)
                 ) as total_revenue",
-                [$concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDate, $eDate]
+                [$concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDay, $eDay, $sDate, $eDate, $concernId, $sDay, $eDay, $concernId, $sDay, $eDay]
             );
 
             $expenseVal = Database::fetchOne(
@@ -1442,15 +1477,15 @@ class ReportController {
                     COALESCE((SELECT SUM(amount) FROM cash_expenses WHERE concern_id = ? AND created_at BETWEEN ? AND ?), 0) +
                     COALESCE((SELECT SUM(total_cost) FROM expenses WHERE concern_id = ? AND (expense_date BETWEEN ? AND ? OR created_at BETWEEN ? AND ?)), 0)
                 ) as total_expense",
-                [$concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $concernId, $sDate, $eDate, $sDate, $eDate]
+                [$concernId, $sDay, $eDay, $concernId, $sDate, $eDate, $concernId, $sDay, $eDay, $sDate, $eDate]
             );
 
             $lossVal = Database::fetchOne(
                 "SELECT (
                     COALESCE((SELECT SUM(total_loss) FROM warehouse_damages WHERE warehouse_id IN (SELECT id FROM warehouses WHERE concern_id = ?) AND created_at BETWEEN ? AND ?), 0) +
-                    COALESCE((SELECT SUM(loss_amount) FROM roll_damages WHERE created_at BETWEEN ? AND ?), 0)
+                    COALESCE((SELECT SUM(loss_amount) FROM roll_damages WHERE concern_id = ? AND created_at BETWEEN ? AND ?), 0)
                 ) as total_loss",
-                [$concernId, $sDate, $eDate, $sDate, $eDate]
+                [$concernId, $sDate, $eDate, $concernId, $sDate, $eDate]
             );
 
             $rev = (float)($salesRev['total_revenue'] ?? 0);
@@ -1475,6 +1510,8 @@ class ReportController {
      */
     private function getRevenueLineItems(string $startDate, string $endDate): array {
         $concernId = ConcernTransactionService::activeConcernId();
+        $startDay = substr($startDate, 0, 10);
+        $endDay = substr($endDate, 0, 10);
         $whSales = Database::fetchAll(
             "SELECT po.id, po.po_number as ref_no, 'Direct Customer Sale' as source, c.name as customer_name,
                     po.payment_method, po.total_amount, po.discount_amount, po.tax_amount, po.created_at
@@ -1496,16 +1533,28 @@ class ReportController {
             [$concernId, $startDate, $endDate]
         );
 
+        $prodBills = Database::fetchAll(
+            "SELECT pb.id, pb.bill_number as ref_no, 'Production Billing' as source,
+                    COALESCE(NULLIF(pb.company_name, ''), NULLIF(pb.customer_name, ''), 'Walk-in Buyer') as customer_name,
+                    pb.payment_method, pb.total_amount, pb.discount_amount, pb.tax_amount, pb.created_at
+             FROM production_bills pb
+             WHERE pb.concern_id = ? AND (pb.bill_date BETWEEN ? AND ? OR pb.created_at BETWEEN ? AND ?)
+             ORDER BY pb.id DESC LIMIT 50",
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
+        );
+
         $wastage = Database::fetchAll(
             "SELECT ws.id, ws.sale_number as ref_no, 'Cutting Wastage Sale' as source, ws.buyer_name as customer_name,
                     ws.payment_method, ws.total_amount, 0 as discount_amount, 0 as tax_amount, ws.sale_date as created_at
              FROM wastage_sales ws
              WHERE ws.concern_id = ? AND (ws.sale_date BETWEEN ? AND ? OR ws.created_at BETWEEN ? AND ?)
              ORDER BY ws.id DESC LIMIT 50",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
-        return array_merge($whSales, $posSales, $wastage);
+        $rows = array_merge($whSales, $posSales, $prodBills, $wastage);
+        usort($rows, static fn(array $a, array $b): int => strcmp((string)$b['created_at'], (string)$a['created_at']));
+        return $rows;
     }
 
     private function getCostLineItems(string $startDate, string $endDate): array {
@@ -1513,24 +1562,26 @@ class ReportController {
         return Database::fetchAll(
             "SELECT pb.id, pb.batch_number as ref_no, p.name as product_name, pb.total_qty, pb.cost_per_piece, pb.total_cost, pb.created_at
              FROM production_batches pb
-             LEFT JOIN production_programs pp ON pb.program_id = pp.id
+             JOIN production_programs pp ON pb.program_id = pp.id
              JOIN production_units pu ON pp.production_unit_id = pu.id
              LEFT JOIN products p ON pp.product_id = p.id
-             WHERE pu.concern_id = ? AND pb.created_at BETWEEN ? AND ?
+             WHERE pu.concern_id = ? AND (pb.concern_id IS NULL OR pb.concern_id = ?) AND pb.created_at BETWEEN ? AND ?
              ORDER BY pb.id DESC LIMIT 50",
-            [$concernId, $startDate, $endDate]
+            [$concernId, $concernId, $startDate, $endDate]
         );
     }
 
     private function getExpenseLineItems(string $startDate, string $endDate): array {
         $concernId = ConcernTransactionService::activeConcernId();
+        $startDay = substr($startDate, 0, 10);
+        $endDay = substr($endDate, 0, 10);
         $prodExp = Database::fetchAll(
             "SELECT pe.id, pe.expense_number as ref_no, pe.production_unit as facility, pe.category, pe.item_name,
                     pe.total_cost as amount, pe.payment_status, pe.expense_date
              FROM production_expenses pe
              WHERE pe.concern_id = ? AND (pe.expense_date BETWEEN ? AND ? OR pe.created_at BETWEEN ? AND ?)
              ORDER BY pe.id DESC LIMIT 30",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
         $modExp = Database::fetchAll(
@@ -1539,7 +1590,7 @@ class ReportController {
              FROM expenses e
              WHERE e.concern_id = ? AND (e.expense_date BETWEEN ? AND ? OR e.created_at BETWEEN ? AND ?)
              ORDER BY e.id DESC LIMIT 30",
-            [$concernId, $startDate, $endDate, $startDate, $endDate]
+            [$concernId, $startDay, $endDay, $startDate, $endDate]
         );
 
         return array_merge($prodExp, $modExp);
@@ -1576,6 +1627,8 @@ class ReportController {
      */
     private function getDetailedSalesReport(string $startDate, string $endDate, string $channel = 'all', string $paymentMethod = 'all'): array {
         $concernId = ConcernTransactionService::activeConcernId();
+        $startDay = substr($startDate, 0, 10);
+        $endDay = substr($endDate, 0, 10);
         // ─── 1. Warehouse Direct Customer Sales (purchase_orders with customers) ───
         $sql1 = "SELECT po.id, po.po_number as invoice_no, 'Warehouse POS' as channel,
                         c.name as customer_name, c.phone as customer_phone,
@@ -1619,6 +1672,27 @@ class ReportController {
         }
         $sql2 .= " ORDER BY s.id DESC";
         $shopSales = Database::fetchAll($sql2, $params2);
+
+        // ─── 3. Concern Production Billing Sales ───
+        $sql3 = "SELECT pb.id, pb.bill_number as invoice_no, 'Production Billing' as channel,
+                        COALESCE(NULLIF(pb.company_name, ''), NULLIF(pb.customer_name, ''), 'Walk-in Buyer') as customer_name,
+                        COALESCE(NULLIF(pb.company_phone, ''), NULLIF(pb.customer_phone, ''), '-') as customer_phone,
+                        pb.total_amount, pb.discount_amount, pb.tax_amount,
+                        CASE WHEN UPPER(COALESCE(pb.payment_status, 'PAID')) = 'PAID' THEN pb.total_amount ELSE 0 END as paid_amount,
+                        pb.payment_method, pb.payment_status, 'COMPLETED' as status, pb.created_at,
+                        pb.production_unit_id,
+                        COALESCE(pu.name, CONCAT(c.name, ' (Concern Stock)')) as location_name
+                 FROM production_bills pb
+                 LEFT JOIN production_units pu ON pb.production_unit_id = pu.id
+                 LEFT JOIN concerns c ON pb.concern_id = c.id
+                 WHERE pb.concern_id = ? AND (pb.bill_date BETWEEN ? AND ? OR pb.created_at BETWEEN ? AND ?)";
+        $params3 = [$concernId, $startDay, $endDay, $startDate, $endDate];
+        if ($paymentMethod !== 'all') {
+            $sql3 .= " AND pb.payment_method = ?";
+            $params3[] = $paymentMethod;
+        }
+        $sql3 .= " ORDER BY pb.id DESC";
+        $prodBills = Database::fetchAll($sql3, $params3);
 
         // ─── Separate by channel ───
         $whatsappOrders = [];
@@ -1674,8 +1748,27 @@ class ReportController {
             $warehouseBreakdown[$wid]['total_tax'] += (float)$row['tax_amount'];
         }
 
+        // ─── Build per-unit/concern breakdown from production billing ───
+        $productionBreakdown = [];
+        foreach ($prodBills as $row) {
+            $pid = (int)($row['production_unit_id'] ?? 0);
+            $pname = $row['location_name'] ?? 'Concern Stock';
+            if (!isset($productionBreakdown[$pid])) {
+                $productionBreakdown[$pid] = [
+                    'unit_name'      => $pname,
+                    'orders'         => [],
+                    'total_amount'   => 0, 'total_paid' => 0, 'total_discount' => 0, 'total_tax' => 0,
+                ];
+            }
+            $productionBreakdown[$pid]['orders'][] = $row;
+            $productionBreakdown[$pid]['total_amount'] += (float)$row['total_amount'];
+            $productionBreakdown[$pid]['total_paid'] += (float)$row['paid_amount'];
+            $productionBreakdown[$pid]['total_discount'] += (float)$row['discount_amount'];
+            $productionBreakdown[$pid]['total_tax'] += (float)$row['tax_amount'];
+        }
+
         // ─── Merge all for grand totals ───
-        $merged = array_merge($whOrders, $shopSales);
+        $merged = array_merge($whOrders, $shopSales, $prodBills);
         usort($merged, fn($a, $b) => strcmp($b['created_at'], $a['created_at']));
 
         $totAmount = array_sum(array_column($merged, 'total_amount'));
@@ -1717,13 +1810,15 @@ class ReportController {
             'payment_modes'  => $modes,
             // Per-channel breakdowns
             'channels'       => [
-                'warehouse_pos'  => $aggregateChannel($whOrders),
-                'shop_pos'       => $aggregateChannel($retailPOSSales),
-                'whatsapp'       => $aggregateChannel($whatsappOrders),
-                'website'        => $aggregateChannel($websiteOrders),
+                'warehouse_pos'      => $aggregateChannel($whOrders),
+                'shop_pos'           => $aggregateChannel($retailPOSSales),
+                'whatsapp'           => $aggregateChannel($whatsappOrders),
+                'website'            => $aggregateChannel($websiteOrders),
+                'production_billing' => $aggregateChannel($prodBills),
             ],
-            'shop_breakdown'      => $shopBreakdown,
-            'warehouse_breakdown' => $warehouseBreakdown,
+            'shop_breakdown'       => $shopBreakdown,
+            'warehouse_breakdown'  => $warehouseBreakdown,
+            'production_breakdown' => $productionBreakdown,
         ];
     }
 
@@ -2595,11 +2690,13 @@ class ReportController {
             case 'sales':
             case 'sales_pos':
             case 'sales_warehouse':
+            case 'sales_production':
                 $channel = $_GET['channel'] ?? 'all';
                 if ($type === 'sales_whatsapp') $channel = 'whatsapp';
                 if ($type === 'sales_website') $channel = 'website';
                 if ($type === 'sales_pos') $channel = 'shop_pos';
                 if ($type === 'sales_warehouse') $channel = 'warehouse_pos';
+                if ($type === 'sales_production') $channel = 'production_billing';
 
                 $paymentMethod = $_GET['payment_method'] ?? 'all';
                 $data = $this->getDetailedSalesReport($filter['start_date'], $filter['end_date'], $channel, $paymentMethod);
@@ -2614,6 +2711,8 @@ class ReportController {
                     $invoicesList = $data['channels']['shop_pos']['orders'] ?? [];
                 } elseif ($channel === 'warehouse_pos') {
                     $invoicesList = $data['channels']['warehouse_pos']['orders'] ?? [];
+                } elseif ($channel === 'production_billing') {
+                    $invoicesList = $data['channels']['production_billing']['orders'] ?? [];
                 }
 
                 $rows = [];

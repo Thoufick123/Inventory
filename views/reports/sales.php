@@ -10,11 +10,13 @@ $salesReportQuery = http_build_query($salesReportFilters);
 $channels = $salesData['channels'] ?? [];
 $whPOS = $channels['warehouse_pos'] ?? ['orders' => [], 'total_amount' => 0, 'total_paid' => 0, 'total_discount' => 0, 'total_tax' => 0, 'total_pending' => 0, 'count' => 0];
 $shopPOS = $channels['shop_pos'] ?? ['orders' => [], 'total_amount' => 0, 'total_paid' => 0, 'total_discount' => 0, 'total_tax' => 0, 'total_pending' => 0, 'count' => 0];
+$prodBilling = $channels['production_billing'] ?? ['orders' => [], 'total_amount' => 0, 'total_paid' => 0, 'total_discount' => 0, 'total_tax' => 0, 'total_pending' => 0, 'count' => 0];
 $whatsapp = $channels['whatsapp'] ?? ['orders' => [], 'total_amount' => 0, 'total_paid' => 0, 'total_discount' => 0, 'total_tax' => 0, 'total_pending' => 0, 'count' => 0];
 $website = $channels['website'] ?? ['orders' => [], 'total_amount' => 0, 'total_paid' => 0, 'total_discount' => 0, 'total_tax' => 0, 'total_pending' => 0, 'count' => 0];
 
 $shopBreakdown = $salesData['shop_breakdown'] ?? [];
 $warehouseBreakdown = $salesData['warehouse_breakdown'] ?? [];
+$productionBreakdown = $salesData['production_breakdown'] ?? [];
 
 // Helper function for rendering a mini invoice table
 function renderSalesTable(array $invoices, string $emptyMsg = 'No orders found.'): void {
@@ -92,7 +94,7 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
         <h4 class="mb-0 fw-bold text-dark">
             <i class="bi bi-cart-check-fill text-primary me-2"></i>Multi-Channel Sales &amp; Invoice Register
         </h4>
-        <div class="text-muted small mt-1">All sales channels — Warehouse Direct, Shop POS, WhatsApp Orders, Website Orders — with per-location breakdowns</div>
+        <div class="text-muted small mt-1">All sales channels — Warehouse Direct, Shop POS, Production &amp; Concern Billing, WhatsApp Orders, Website Orders — with per-location breakdowns</div>
     </div>
 
     <!-- Channel Navigation Switcher -->
@@ -181,7 +183,7 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
 <!-- ========================================================================= -->
 <div class="row g-3 mb-4">
     <!-- Warehouse Direct -->
-    <div class="col-xl-3 col-sm-6">
+    <div class="col-xl col-sm-6">
         <div class="card border-0 shadow-sm rounded-3 h-100 p-3">
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="badge bg-primary rounded-2 p-2"><i class="bi bi-buildings fs-6"></i></span>
@@ -194,7 +196,7 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
         </div>
     </div>
     <!-- Shop POS -->
-    <div class="col-xl-3 col-sm-6">
+    <div class="col-xl col-sm-6">
         <div class="card border-0 shadow-sm rounded-3 h-100 p-3">
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="badge bg-success rounded-2 p-2"><i class="bi bi-shop fs-6"></i></span>
@@ -206,8 +208,21 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
             <div class="fs-5 fw-bold text-success font-monospace">₹<?= number_format($shopPOS['total_amount'], 2) ?></div>
         </div>
     </div>
+    <!-- Production Billing -->
+    <div class="col-xl col-sm-6">
+        <div class="card border-0 shadow-sm rounded-3 h-100 p-3">
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <span class="badge bg-dark rounded-2 p-2"><i class="bi bi-receipt-cutoff fs-6"></i></span>
+                <div>
+                    <div class="fw-bold text-dark small">Production Billing</div>
+                    <div class="text-muted" style="font-size: 0.7rem;"><?= $prodBilling['count'] ?> bills</div>
+                </div>
+            </div>
+            <div class="fs-5 fw-bold text-dark font-monospace">₹<?= number_format($prodBilling['total_amount'], 2) ?></div>
+        </div>
+    </div>
     <!-- WhatsApp -->
-    <div class="col-xl-3 col-sm-6">
+    <div class="col-xl col-sm-6">
         <div class="card border-0 shadow-sm rounded-3 h-100 p-3">
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="badge rounded-2 p-2" style="background: #25D366;"><i class="bi bi-whatsapp fs-6 text-white"></i></span>
@@ -220,7 +235,7 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
         </div>
     </div>
     <!-- Website -->
-    <div class="col-xl-3 col-sm-6">
+    <div class="col-xl col-sm-6">
         <div class="card border-0 shadow-sm rounded-3 h-100 p-3">
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="badge bg-info rounded-2 p-2"><i class="bi bi-globe2 fs-6 text-white"></i></span>
@@ -421,7 +436,53 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
 </div>
 
 <!-- ========================================================================= -->
-<!-- 8. PRODUCTION UNITS SUMMARY -->
+<!-- 8. PRODUCTION & CONCERN BILLING SECTION -->
+<!-- ========================================================================= -->
+<div class="card border-0 shadow-sm rounded-3 mb-4">
+    <div class="card-header bg-white py-3 px-3.5 border-bottom">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-dark rounded-2 p-2"><i class="bi bi-receipt-cutoff text-white"></i></span>
+                <div>
+                    <h6 class="fw-bold text-dark mb-0">Production &amp; Concern Billing Sales</h6>
+                    <small class="text-muted">Direct finished-goods QR invoices billed across production units and concern stock</small>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-dark-subtle text-dark border border-secondary-subtle px-2.5 py-1 font-monospace">
+                    <?= $prodBilling['count'] ?> Bills &bull; ₹<?= number_format($prodBilling['total_amount'], 2) ?>
+                </span>
+                <button type="button" onclick="triggerPdfDownload(<?= e(json_encode(url('reports/pdf/sales_production') . ($salesReportQuery !== '' ? '?' . $salesReportQuery : ''))) ?>, this)"
+                   class="btn btn-xs btn-outline-danger shadow-xs py-0.5 px-2" title="Download Production Billing PDF">
+                    <i class="bi bi-file-earmark-pdf-fill me-1"></i>PDF
+                </button>
+            </div>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <?php if (empty($productionBreakdown)): ?>
+            <div class="text-center py-4 text-muted"><i class="bi bi-inbox me-1"></i>No production billing invoices found in this period.</div>
+        <?php else: ?>
+            <?php renderChannelKPI($prodBilling['total_amount'], $prodBilling['total_paid'], $prodBilling['total_pending'], $prodBilling['count']); ?>
+            <?php foreach ($productionBreakdown as $pData): ?>
+                <div class="border-top">
+                    <div class="d-flex align-items-center justify-content-between px-3 py-2 bg-light bg-opacity-50">
+                        <span class="fw-semibold text-dark small">
+                            <i class="bi bi-gear-wide-connected text-dark me-1"></i><?= e($pData['unit_name']) ?>
+                        </span>
+                        <span class="small text-muted font-monospace">
+                            <?= count($pData['orders']) ?> bills &bull; ₹<?= number_format($pData['total_amount'], 2) ?>
+                        </span>
+                    </div>
+                    <?php renderSalesTable($pData['orders']); ?>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- ========================================================================= -->
+<!-- 9. PRODUCTION UNITS SUMMARY -->
 <!-- ========================================================================= -->
 <?php if (!empty($productionUnits)): ?>
 <div class="card border-0 shadow-sm rounded-3 mb-4">
@@ -520,6 +581,8 @@ function renderChannelKPI(float $amount, float $paid, float $pending, int $count
                                 <td>
                                     <?php if ($ch === 'Warehouse POS'): ?>
                                         <span class="badge bg-primary-subtle text-primary border border-primary-subtle">Warehouse</span>
+                                    <?php elseif ($ch === 'Production Billing'): ?>
+                                        <span class="badge bg-dark-subtle text-dark border border-secondary-subtle"><i class="bi bi-receipt-cutoff me-1"></i>Production Billing</span>
                                     <?php elseif ($ch === 'WhatsApp'): ?>
                                         <span class="badge border" style="background: rgba(37,211,102,0.12); color: #25D366; border-color: rgba(37,211,102,0.3) !important;"><i class="bi bi-whatsapp me-1"></i>WhatsApp</span>
                                     <?php elseif ($ch === 'Website'): ?>

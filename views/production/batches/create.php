@@ -1,6 +1,11 @@
+<?php
+$sourceMode = $sourceMode ?? 'qc';
+$inwardLocations = $inwardLocations ?? [];
+$selectedInward = $selectedInward ?? null;
+?>
 <div class="page-header mb-4">
     <h2><i class="bi bi-box-seam me-2 text-success"></i>Pack Finished Production Batch</h2>
-    <span class="text-muted">Pack QC-passed goods and choose the concern that will receive them through Production Inward</span>
+    <span class="text-muted">Pack QC-passed or inwarded inventory pieces and choose the concern that will receive them through Production Inward</span>
 </div>
 
 <?php if ($selectedQC && ($selectedQC['remaining_qty'] ?? 1) <= 0 && ($selectedQC['already_packed_qty'] ?? 0) > 0): ?>
@@ -44,6 +49,7 @@
 
 <form method="POST" action="<?= url('production/batches/store') ?>" id="packBatchForm">
     <?= CSRF::field() ?>
+    <input type="hidden" name="source_mode" id="source_mode" value="<?= e($sourceMode) ?>">
 
     <div class="row g-4">
         <div class="col-lg-4">
@@ -52,6 +58,49 @@
                     <h5 class="card-title mb-0 fw-bold"><i class="bi bi-info-circle me-2 text-primary"></i>Packing Details</h5>
                 </div>
                 <div class="card-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Stock Source</label>
+                        <div class="btn-group w-100" role="group" aria-label="Stock source">
+                            <a href="<?= url('production/batches/create?source_mode=qc') ?>"
+                               class="btn btn-sm <?= $sourceMode === 'qc' ? 'btn-primary' : 'btn-outline-primary' ?>">
+                                <i class="bi bi-patch-check me-1"></i>QC Batches
+                            </a>
+                            <a href="<?= url('production/batches/create?source_mode=inward') ?>"
+                               class="btn btn-sm <?= $sourceMode === 'inward' ? 'btn-primary' : 'btn-outline-primary' ?>">
+                                <i class="bi bi-box2-heart me-1"></i>Inwarded Stock
+                            </a>
+                        </div>
+                    </div>
+
+                    <?php if ($sourceMode === 'inward'): ?>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold required">Select Inward Inventory Source <span class="text-danger">*</span></label>
+                            <select name="source_location" id="source_location" class="form-select border-primary" required onchange="handleInwardLocationChange(this.value)">
+                                <option value="">-- Select Inward Location --</option>
+                                <?php foreach ($inwardLocations as $loc): ?>
+                                    <option value="<?= e($loc['location_key']) ?>" <?= ($selectedInward && $selectedInward['location_key'] === $loc['location_key']) ? 'selected' : '' ?>>
+                                        <?= e($loc['location_label']) ?> [<?= number_format((int)$loc['total_qty']) ?> pcs available]
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <div class="form-text small text-muted">Pack QR pieces held in Concern / Unit inward inventory.</div>
+                            <?php if (empty($inwardLocations)): ?>
+                                <div class="alert alert-warning py-2 px-3 small mt-2 mb-0">
+                                    <i class="bi bi-info-circle me-1"></i> No available inwarded stock is currently ready to pack.
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                        <input type="hidden" name="program_id" id="program_id" value="">
+                        <?php if ($selectedInward): ?>
+                            <div class="mb-3 p-3 bg-light rounded border">
+                                <div class="small text-muted fw-semibold">Source Location</div>
+                                <div class="fw-bold text-dark"><?= e($selectedInward['location_label']) ?></div>
+                                <div class="small text-success fw-semibold mt-1">
+                                    <i class="bi bi-check-circle-fill me-1"></i><?= number_format((int)$selectedInward['total_qty']) ?> pcs available across <?= count($items) ?> variant(s)
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                    <?php else: ?>
                     <div class="mb-3">
                         <label class="form-label fw-semibold required">Select QC Inspection Batch <span class="text-danger">*</span></label>
                         <select name="qc_batch_id" id="qc_batch_id" class="form-select <?= empty($selectedQC) ? 'border-primary' : '' ?>" required onchange="handleQCBatchChange(this.value)">
@@ -93,6 +142,7 @@
                     <?php else: ?>
                         <input type="hidden" name="program_id" id="program_id" value="">
                     <?php endif; ?>
+                    <?php endif; ?>
 
                     <div class="mb-3">
                         <label class="form-label fw-semibold required">Destination Concern <span class="text-danger">*</span></label>
@@ -124,15 +174,15 @@
                     <span class="badge bg-success fs-6 px-3 py-2" id="totalPackedBadge">0 pcs Packed</span>
                 </div>
                 <div class="card-body p-0 flex-grow-1">
-                    <?php if (!$selectedQC): ?>
+                    <?php if (($sourceMode === 'inward' && (!$selectedInward || empty($items))) || ($sourceMode !== 'inward' && !$selectedQC)): ?>
                         <div class="p-5 text-center text-muted my-auto">
                             <div class="mb-3">
                                 <div class="d-inline-flex p-3 rounded-circle bg-light">
                                     <i class="bi bi-arrow-left-circle fs-1 text-primary"></i>
                                 </div>
                             </div>
-                            <h5 class="fw-bold text-dark">No QC Batch Selected</h5>
-                            <p class="text-muted mb-0">Please select a QC inspection batch from the dropdown on the left to load the approved variant quantities.</p>
+                            <h5 class="fw-bold text-dark"><?= $sourceMode === 'inward' ? 'No Inwarded Inventory Available' : 'No QC Batch Selected' ?></h5>
+                            <p class="text-muted mb-0"><?= $sourceMode === 'inward' ? 'Select an inward inventory location on the left with available QR pieces to pack.' : 'Please select a QC inspection batch from the dropdown on the left to load the approved variant quantities.' ?></p>
                         </div>
                     <?php else: ?>
                         <div class="table-responsive">
@@ -140,36 +190,48 @@
                                 <thead class="table-light">
                                     <tr>
                                         <th>Variant</th>
-                                        <th>QC Status &amp; Remaining</th>
-                                        <th>Approved QR Code(s) to Pack</th>
+                                        <th><?= $sourceMode === 'inward' ? 'Available Stock' : 'QC Status &amp; Remaining' ?></th>
+                                        <th><?= $sourceMode === 'inward' ? 'Inward QR Code(s) to Pack' : 'Approved QR Code(s) to Pack' ?></th>
                                         <th style="width: 180px;">Quantity to Pack <span class="text-danger">*</span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($items as $idx => $it): 
-                                        $remQty = (int)($it['remaining_qty'] ?? $it['passed_qty']);
-                                        $availablePieceTags = array_values($it['available_piece_tags'] ?? []);
+                                    <?php foreach ($items as $idx => $it):
+                                        if ($sourceMode === 'inward') {
+                                            $remQty = (int)($it['packable_qty'] ?? 0);
+                                            $availablePieceTags = array_values($it['available_piece_tags'] ?? []);
+                                            $packQty = min($remQty, count($availablePieceTags));
+                                            $isZero = ($packQty <= 0);
+                                            $rejectedQty = 0;
+                                            $reworkQty = 0;
+                                            $labelPrefix = trim(($it['product_name'] ?? '') . ' — ');
+                                        } else {
+                                            $remQty = (int)($it['remaining_qty'] ?? $it['passed_qty']);
+                                            $availablePieceTags = array_values($it['available_piece_tags'] ?? []);
+                                            $hasAvailableTags = !empty($availablePieceTags);
+                                            $packQty = $hasAvailableTags ? min($remQty, count($availablePieceTags)) : $remQty;
+                                            $isZero = ($packQty <= 0);
+                                            $rejectedQty = (int)($it['rejected_qty'] ?? 0);
+                                            $reworkQty = (int)($it['rework_qty'] ?? 0);
+                                            $labelPrefix = '';
+                                        }
                                         $hasAvailableTags = !empty($availablePieceTags);
-                                        $packQty = $hasAvailableTags ? min($remQty, count($availablePieceTags)) : $remQty;
-                                        $isZero = ($packQty <= 0);
-                                        $rejectedQty = (int)($it['rejected_qty'] ?? 0);
-                                        $reworkQty = (int)($it['rework_qty'] ?? 0);
                                     ?>
-                                        <tr class="variant-item-row <?= $isZero ? 'table-light opacity-75' : '' ?>" data-variant-name="<?= e($it['size_name'] ?? $it['display_size'] ?? 'Standard') ?> / <?= e($it['color_name'] ?? $it['display_color'] ?? 'Assorted') ?>" data-passed="<?= $packQty ?>" data-is-zero="<?= $isZero ? '1' : '0' ?>">
+                                        <tr class="variant-item-row <?= $isZero ? 'table-light opacity-75' : '' ?>" data-variant-name="<?= e($labelPrefix . ($it['size_name'] ?? $it['display_size'] ?? 'Standard') . ' / ' . ($it['color_name'] ?? $it['display_color'] ?? 'Assorted')) ?>" data-passed="<?= $packQty ?>" data-is-zero="<?= $isZero ? '1' : '0' ?>">
                                             <td>
-                                                <input type="hidden" name="items[<?= $idx ?>][qc_item_id]" value="<?= $it['id'] ?>">
-                                                <input type="hidden" name="items[<?= $idx ?>][variant_id]" value="<?= $it['variant_id'] ?? '' ?>">
+                                                <input type="hidden" name="items[<?= $idx ?>][qc_item_id]" value="<?= (int)($it['id'] ?? 0) ?>">
+                                                <input type="hidden" name="items[<?= $idx ?>][variant_id]" value="<?= e($it['variant_id'] ?? '') ?>">
                                                 <input type="hidden" name="items[<?= $idx ?>][size_name]" value="<?= e($it['size_name'] ?? $it['display_size'] ?? '') ?>">
                                                 <input type="hidden" name="items[<?= $idx ?>][color_name]" value="<?= e($it['color_name'] ?? $it['display_color'] ?? '') ?>">
                                                 <input type="hidden" name="items[<?= $idx ?>][sku]" value="<?= e($it['sku'] ?? '') ?>">
-                                                <div class="fw-bold text-dark"><?= e($it['size_name'] ?? $it['display_size'] ?? 'Standard') ?> / <?= e($it['color_name'] ?? $it['display_color'] ?? 'Assorted') ?></div>
+                                                <div class="fw-bold text-dark"><?= e($labelPrefix . ($it['size_name'] ?? $it['display_size'] ?? 'Standard') . ' / ' . ($it['color_name'] ?? $it['display_color'] ?? 'Assorted')) ?></div>
                                                 <small class="text-muted font-monospace"><?= e($it['sku'] ?? '') ?></small>
                                             </td>
                                             <td>
                                                 <div>
                                                     <?php if ($isZero): ?>
                                                         <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2 py-1">
-                                                            <i class="bi bi-slash-circle me-1"></i>0 pcs Available (Fully Packed)
+                                                            <i class="bi bi-slash-circle me-1"></i>0 pcs Available
                                                         </span>
                                                     <?php else: ?>
                                                         <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
@@ -177,7 +239,11 @@
                                                         </span>
                                                     <?php endif; ?>
                                                 </div>
-                                                <?php if (($it['already_packed'] ?? 0) > 0): ?>
+                                                <?php if ($sourceMode === 'inward'): ?>
+                                                    <small class="text-muted d-block mt-1">
+                                                        Source: <?= e($it['grn_label'] ?: 'Inward Stock') ?>
+                                                    </small>
+                                                <?php elseif (($it['already_packed'] ?? 0) > 0): ?>
                                                     <small class="text-muted d-block mt-1">
                                                         Total Passed: <?= number_format($it['passed_qty']) ?> pcs (<?= number_format($it['already_packed']) ?> already packed)
                                                     </small>
@@ -304,9 +370,17 @@
 <script>
 function handleQCBatchChange(qcBatchId) {
     if (qcBatchId) {
-        window.location.href = '<?= url('production/batches/create') ?>?qc_batch_id=' + encodeURIComponent(qcBatchId);
+        window.location.href = '<?= url('production/batches/create') ?>?source_mode=qc&qc_batch_id=' + encodeURIComponent(qcBatchId);
     } else {
-        window.location.href = '<?= url('production/batches/create') ?>';
+        window.location.href = '<?= url('production/batches/create?source_mode=qc') ?>';
+    }
+}
+
+function handleInwardLocationChange(locationKey) {
+    if (locationKey) {
+        window.location.href = '<?= url('production/batches/create') ?>?source_mode=inward&source_location=' + encodeURIComponent(locationKey);
+    } else {
+        window.location.href = '<?= url('production/batches/create?source_mode=inward') ?>';
     }
 }
 
@@ -394,12 +468,25 @@ document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('packBatchForm');
     if (form) {
         form.addEventListener('submit', function(e) {
+            const sourceModeVal = document.getElementById('source_mode')?.value || 'qc';
             const qcBatchSelect = document.getElementById('qc_batch_id');
+            const sourceLocSelect = document.getElementById('source_location');
             const concernSelect = document.getElementById('destination_concern_id');
             const boxCountInput = document.getElementById('box_count');
 
-            // 1. Validate QC Batch selection
-            if (!qcBatchSelect || !qcBatchSelect.value) {
+            // 1. Validate Stock Source selection
+            if (sourceModeVal === 'inward') {
+                if (!sourceLocSelect || !sourceLocSelect.value) {
+                    e.preventDefault();
+                    alert('Please select an Inward Inventory Source first.');
+                    if (sourceLocSelect) {
+                        sourceLocSelect.classList.add('is-invalid', 'border-danger');
+                        sourceLocSelect.focus();
+                    }
+                    return false;
+                }
+                sourceLocSelect.classList.remove('is-invalid', 'border-danger');
+            } else if (!qcBatchSelect || !qcBatchSelect.value) {
                 e.preventDefault();
                 alert('Please select a QC Inspection Batch first.');
                 if (qcBatchSelect) {

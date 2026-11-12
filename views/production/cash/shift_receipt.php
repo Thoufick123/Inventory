@@ -37,10 +37,14 @@ $closingDenominations = json_decode((string)($register['closing_denominations'] 
         <div class="divider"></div>
         <table>
             <tr><td>Opening float</td><td class="right">₹<?= number_format((float)$register['opening_balance'], 2) ?></td></tr>
+            <tr><td>Cash sales (+)</td><td class="right">₹<?= number_format((float)($register['cash_sales_amount'] ?? 0), 2) ?></td></tr>
             <tr><td>Cash top-ups (+)</td><td class="right">₹<?= number_format((float)$register['cash_in_amount'], 2) ?></td></tr>
             <tr><td>Cash expenses (-)</td><td class="right">₹<?= number_format((float)$register['cash_out_amount'], 2) ?></td></tr>
+            <tr><td>Cash refunds (-)</td><td class="right">₹<?= number_format((float)($register['cash_refund_amount'] ?? 0), 2) ?></td></tr>
             <tr><td>Bank drops (-)</td><td class="right">₹<?= number_format((float)$register['bank_deposit_amount'], 2) ?></td></tr>
             <tr class="bold"><td>Expected till</td><td class="right">₹<?= number_format((float)$register['expected_cash'], 2) ?></td></tr>
+            <?php if ((float)($register['upi_sales_amount'] ?? 0) > 0): ?><tr><td>UPI sales (info)</td><td class="right">₹<?= number_format((float)$register['upi_sales_amount'], 2) ?></td></tr><?php endif; ?>
+            <?php if ((float)($register['card_sales_amount'] ?? 0) > 0): ?><tr><td>Card sales (info)</td><td class="right">₹<?= number_format((float)$register['card_sales_amount'], 2) ?></td></tr><?php endif; ?>
             <?php if ($register['status'] === 'CLOSED'): ?>
                 <tr class="bold"><td>Counted cash</td><td class="right">₹<?= number_format((float)$register['closing_cash_counted'], 2) ?></td></tr>
                 <tr><td>Variance</td><td class="right"><?php if (abs($difference) < 0.01): ?>₹0.00 (MATCH)<?php elseif ($difference > 0): ?>+₹<?= number_format($difference, 2) ?> (OVERAGE)<?php else: ?>-₹<?= number_format(abs($difference), 2) ?> (SHORTAGE)<?php endif; ?></td></tr>

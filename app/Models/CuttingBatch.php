@@ -367,7 +367,13 @@ class CuttingBatch {
             $design = $r['roll_design'] ?? '';
 
             if (!$sellerId || empty($color)) {
-                $sr = Database::fetchOne("SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ?", [$rollId]);
+                $concernId = function_exists('currentConcernId') ? currentConcernId() : null;
+                $sr = $concernId !== null
+                    ? Database::fetchOne(
+                        "SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ? AND concern_id = ?",
+                        [$rollId, (int)$concernId]
+                    )
+                    : Database::fetchOne("SELECT seller_id, weight, price, color, design_name FROM seller_rolls WHERE id = ?", [$rollId]);
                 if ($sr) {
                     if (!$sellerId) $sellerId = (int)$sr['seller_id'];
                     if ($rollWeight <= 0) $rollWeight = (float)$sr['weight'];

@@ -73,11 +73,14 @@ class AdminController {
             'breadcrumb'   => [['label' => 'Dashboard']],
         ];
 
-        // Total products
-        $result = Database::fetchOne("SELECT COUNT(*) as cnt FROM products WHERE is_active = 1");
+        // Total concern catalog products
+        $result = Database::fetchOne(
+            "SELECT COUNT(*) as cnt FROM products WHERE concern_id = ? AND is_active = 1",
+            [$stockConcernId]
+        );
         $data['totalProducts'] = $result['cnt'] ?? 0;
 
-        // Total stock value (across all warehouses and shops)
+        // Total stock value (across concern stock locations)
         $result = Database::fetchOne(
             "SELECT COALESCE(SUM(sb.quantity * pv.selling_price), 0) as total 
              FROM stock_balances sb 
@@ -87,10 +90,10 @@ class AdminController {
         );
         $data['totalStockValue'] = $result['total'] ?? 0;
 
-        // Today's sales
+        // Today's production & concern billing count
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM sales
-             WHERE concern_id = ? AND DATE(created_at) = CURDATE() AND status != 'CANCELLED'",
+            "SELECT COUNT(*) as cnt FROM production_bills
+             WHERE concern_id = ? AND (bill_date = CURDATE() OR DATE(created_at) = CURDATE())",
             [$stockConcernId]
         );
         $data['todaySales'] = $result['cnt'] ?? 0;
@@ -128,28 +131,31 @@ class AdminController {
         );
         $data['pendingQC'] = $result['cnt'] ?? 0;
 
-        // Pending allocation
+        // Pending concern inward receipts
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM warehouse_allocations WHERE concern_id = ? AND status IN ('REQUESTED', 'STOCK_CHECK', 'RESERVED', 'APPROVED')",
+            "SELECT COUNT(*) as cnt
+             FROM production_batches pb
+             JOIN production_outwards po ON po.production_batch_id = pb.id AND po.status = 'DISPATCHED'
+             WHERE pb.destination_concern_id = ? AND pb.status = 'DISPATCHED'",
             [$stockConcernId]
         );
         $data['pendingAllocation'] = $result['cnt'] ?? 0;
 
-        // Pending returns
+        // Recent production billing returns & exchanges
         $result = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM returns
-             WHERE concern_id = ? AND inspection_status IN ('PENDING', 'INSPECTING')",
+            "SELECT COUNT(*) as cnt FROM production_bill_returns WHERE concern_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)",
             [$stockConcernId]
         );
         $data['pendingReturns'] = $result['cnt'] ?? 0;
 
-        // Recent sales
+        // Recent production & concern bills
         $data['recentSales'] = Database::fetchAll(
-            "SELECT s.*, c.name as customer_name 
-             FROM sales s 
-             LEFT JOIN customers c ON s.customer_id = c.id AND c.concern_id = s.concern_id
-             WHERE s.concern_id = ?
-             ORDER BY s.created_at DESC LIMIT 10",
+            "SELECT pb.id, pb.bill_number AS invoice_number, pb.payment_method AS sale_type,
+                    COALESCE(NULLIF(pb.company_name, ''), NULLIF(pb.customer_name, ''), 'Walk-in Buyer') AS customer_name,
+                    pb.total_amount, pb.payment_status AS status, pb.created_at
+             FROM production_bills pb
+             WHERE pb.concern_id = ?
+             ORDER BY pb.created_at DESC, pb.id DESC LIMIT 10",
             [$stockConcernId]
         );
 
@@ -165,9 +171,10 @@ class AdminController {
             [$stockConcernId]
         );
 
-        // Recent Audit Activity Logs
-        $data['recentAuditLogs'] = AuditService::getLogs([], 6, 0);
-        $data['auditStats'] = AuditService::getStats();
+        // Recent Audit Activity Logs (scoped to active concern)
+        $auditFilter = $stockConcernId > 0 ? ['concern_id' => $stockConcernId] : [];
+        $data['recentAuditLogs'] = AuditService::getLogs($auditFilter, 6, 0);
+        $data['auditStats'] = AuditService::getStats($auditFilter);
 
         Response::view('admin.dashboard', $data);
     }

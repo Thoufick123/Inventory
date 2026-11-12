@@ -63,7 +63,11 @@
                                 <td>
                                     <div class="fw-bold text-dark"><?= e($ab['product_name']) ?></div>
                                     <small class="text-muted">
-                                        Program: <a href="<?= url('production/programs/view/' . $ab['program_id']) ?>" class="text-decoration-none fw-semibold"><?= e($ab['program_number']) ?></a>
+                                        <?php if (!empty($ab['program_id'])): ?>
+                                            Program: <a href="<?= url('production/programs/view/' . $ab['program_id']) ?>" class="text-decoration-none fw-semibold"><?= e($ab['program_number']) ?></a>
+                                        <?php else: ?>
+                                            Source: <span class="fw-semibold text-info">Inwarded Inventory</span>
+                                        <?php endif; ?>
                                     </small>
                                 </td>
                                 <td>

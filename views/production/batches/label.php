@@ -93,8 +93,8 @@ $destination = $batch['destination_concern_name'] ?? $batch['warehouse_name'] ??
                 <div class="detail-value"><?= e($batch['product_name'] ?? 'Finished Product') ?></div>
             </div>
             <div>
-                <div class="detail-label">Program</div>
-                <div class="detail-value"><?= e($batch['program_number'] ?? '—') ?></div>
+                <div class="detail-label">Program / Source</div>
+                <div class="detail-value"><?= e($batch['program_number'] ?? 'Inwarded Stock') ?></div>
             </div>
             <div>
                 <div class="detail-label">Destination Concern</div>

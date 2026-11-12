@@ -2,6 +2,7 @@
 
 require_once BASE_PATH . '/app/Services/ProductionBillingService.php';
 require_once BASE_PATH . '/app/Services/ProductionBillingReturnsService.php';
+require_once BASE_PATH . '/app/Services/ProductionCashService.php';
 require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 
 class ProductionBillingController
@@ -279,7 +280,8 @@ class ProductionBillingController
     public function deleteBill(string $id): void
     {
         $billId = (int)$id;
-        if (!$this->findBill($billId)) {
+        $existingBill = $this->findBill($billId);
+        if (!$existingBill) {
             Response::redirect(url('production/billing'), 'error', 'Bill not found in the active production unit.');
             return;
         }
@@ -294,13 +296,16 @@ class ProductionBillingController
                 Response::redirect(url('production/billing'), 'error', 'Bill not found in the active production unit.');
                 return;
             }
+            $userId = (int)(Auth::id() ?? 0);
             Database::beginTransaction();
             ProductionBillingService::restoreBillStock(
                 $billId,
                 $concernId,
-                (int)(Auth::id() ?? 0),
+                $userId,
                 'PRODUCTION_BILL_DELETE'
             );
+            $billUnitId = !empty($existingBill['production_unit_id']) ? (int)$existingBill['production_unit_id'] : null;
+            ProductionCashService::removeBillCollections($billId, $billUnitId, $userId);
             $deleteSql = 'DELETE FROM production_bills WHERE id = ? AND concern_id = ?';
             $deleteParams = [$billId, $concernId];
             if ($assignedUnitId !== null) {
@@ -791,6 +796,19 @@ class ProductionBillingController
             if ($inwardStockDeductions) {
                 ProductionBillingService::decreaseBillStockBuckets($inwardStockDeductions, $billId, $billNumber, $userId);
             }
+            $collectionUnitId = $isNewBill
+                ? $unitId
+                : (!empty($existingBill['production_unit_id']) ? (int)$existingBill['production_unit_id'] : null);
+            ProductionCashService::syncBillCollections($billId, [
+                'production_unit_id' => $collectionUnitId,
+                'bill_number' => $billNumber,
+                'payment_method' => $paymentMethod,
+                'payment_status' => $paymentStatus,
+                'total_amount' => $totals['total_amount'],
+                'cash_amount' => $cashAmount,
+                'upi_amount' => $upiAmount,
+                'upi_reference' => $header[18],
+            ], $userId);
             Database::commit();
             Response::redirect('production/billing/view/' . $billId, 'success', $isNewBill ? 'Production bill created.' : 'Production bill saved.');
         } catch (Throwable $e) {

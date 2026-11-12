@@ -2,6 +2,7 @@
 
 require_once BASE_PATH . '/app/Services/ConcernTransactionService.php';
 require_once BASE_PATH . '/app/Services/ProductionBillingService.php';
+require_once BASE_PATH . '/app/Services/ProductionCashService.php';
 require_once BASE_PATH . '/app/Services/StockService.php';
 
 class ProductionBillingReturnsService {
@@ -427,6 +428,17 @@ class ProductionBillingReturnsService {
                     }
                 }
             }
+
+            $settlementAmount = $action === 'RETURN' ? $refundAmount : abs($difference);
+            $billUnitId = !empty($bill['production_unit_id']) ? (int)$bill['production_unit_id'] : null;
+            ProductionCashService::recordBillReturnSettlement($returnId, [
+                'production_unit_id' => $billUnitId,
+                'return_number' => $returnNumber,
+                'bill_number' => (string)($bill['bill_number'] ?? ('PB-' . $billId)),
+                'payment_action' => $paymentAction,
+                'settlement_mode' => $settlementMode,
+                'amount' => $settlementAmount,
+            ], $userId);
 
             AuditService::log('production_billing', 'PROCESS_RETURN', 'production_bill_returns', $returnId, null, [
                 'return_number' => $returnNumber,

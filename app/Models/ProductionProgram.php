@@ -238,19 +238,25 @@ class ProductionProgram {
 
         $productId = !empty($data['product_id']) ? (int)$data['product_id'] : null;
         if ($productId) {
-            $prod = Database::fetchOne("SELECT id FROM products WHERE id = ?", [$productId]);
+            $prod = $concernId !== null
+                ? Database::fetchOne("SELECT id FROM products WHERE id = ? AND concern_id = ?", [$productId, $concernId])
+                : Database::fetchOne("SELECT id FROM products WHERE id = ?", [$productId]);
             if (!$prod) $productId = null;
         }
 
         $sellerRollId = !empty($data['seller_roll_id']) ? (int)$data['seller_roll_id'] : null;
         if ($sellerRollId) {
-            $sr = Database::fetchOne("SELECT id FROM seller_rolls WHERE id = ?", [$sellerRollId]);
+            $sr = $concernId !== null
+                ? Database::fetchOne("SELECT id FROM seller_rolls WHERE id = ? AND concern_id = ?", [$sellerRollId, $concernId])
+                : Database::fetchOne("SELECT id FROM seller_rolls WHERE id = ?", [$sellerRollId]);
             if (!$sr) $sellerRollId = null;
         }
 
         $sellerId = !empty($data['seller_id']) ? (int)$data['seller_id'] : null;
         if ($sellerId) {
-            $s = Database::fetchOne("SELECT id FROM sellers WHERE id = ?", [$sellerId]);
+            $s = $concernId !== null
+                ? Database::fetchOne("SELECT id FROM sellers WHERE id = ? AND concern_id = ?", [$sellerId, $concernId])
+                : Database::fetchOne("SELECT id FROM sellers WHERE id = ?", [$sellerId]);
             if (!$s) $sellerId = null;
         }
 

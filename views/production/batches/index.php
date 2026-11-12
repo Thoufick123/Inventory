@@ -137,7 +137,7 @@
                                             <?= e($b['program_number'] ?: ('Program #' . $b['program_id'])) ?>
                                         </a>
                                     <?php else: ?>
-                                        <span class="text-muted">—</span>
+                                        <span class="badge bg-info-subtle text-info border border-info-subtle">Inwarded Stock</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -339,7 +339,7 @@ function viewBatchDispatchDetails(batchId) {
             if (elProdName) elProdName.textContent = batch.product_name || 'Finished Product';
 
             const elProgNum = document.getElementById('vbdProgramNumber');
-            if (elProgNum) elProgNum.textContent = batch.program_number || ('Program #' + batch.program_id);
+            if (elProgNum) elProgNum.textContent = batch.program_number || (batch.program_id ? ('Program #' + batch.program_id) : 'Inwarded Stock');
 
             const elWhName = document.getElementById('vbdWarehouseName');
             if (elWhName) elWhName.textContent = batch.destination_concern_name || batch.warehouse_name || 'Unassigned';
