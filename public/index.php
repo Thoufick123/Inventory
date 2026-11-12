@@ -19,7 +19,11 @@ date_default_timezone_set($appConfig['timezone'] ?? 'Asia/Kolkata');
 // Set error display based on environment
 ini_set('display_errors', $appConfig['debug'] ? '1' : '0');
 ini_set('log_errors', '1');
-ini_set('error_log', BASE_PATH . '/storage/logs/error.log');
+$logDir = BASE_PATH . '/storage/logs';
+if (!is_dir($logDir)) {
+    @mkdir($logDir, 0755, true);
+}
+ini_set('error_log', $logDir . '/error.log');
 
 // Autoload helpers
 require_once BASE_PATH . '/app/Helpers/Database.php';

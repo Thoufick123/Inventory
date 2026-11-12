@@ -5,7 +5,7 @@ DirectoryIndex index.php public/index.php
 
 # Block direct access to internal directories
 RewriteRule ^(views|app|config|database|scratch|storage|tests|docs)/ - [F,L]
-RewriteRule ^(\.env|\.git|composer\.(json|lock)|package(-lock)?\.json) - [F,L]
+RewriteRule ^(\.env|\.git|patch\.php|composer\.(json|lock)|package(-lock)?\.json) - [F,L]
 
 # Directly serve uploads and assets from public folder
 RewriteRule ^uploads/(.*)$ public/uploads/$1 [L]
