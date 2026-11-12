@@ -792,7 +792,11 @@ class BatchBillingService
         }
 
         $bill = Database::fetchOne(
-            "SELECT * FROM production_bills WHERE id = ? AND concern_id = ?",
+            "SELECT pb.*, u.full_name AS created_by_name, c.name AS concern_name
+             FROM production_bills pb
+             LEFT JOIN users u ON u.id = pb.created_by
+             LEFT JOIN concerns c ON c.id = pb.concern_id
+             WHERE pb.id = ? AND pb.concern_id = ?",
             [(int)$batch['sale_bill_id'], (int)$batch['source_concern_id']]
         );
         if (!$bill) {
@@ -800,7 +804,12 @@ class BatchBillingService
         }
 
         $items = Database::fetchAll(
-            'SELECT * FROM production_bill_items WHERE bill_id = ? ORDER BY id',
+            "SELECT pbi.*, p.hsn_code
+             FROM production_bill_items pbi
+             LEFT JOIN product_variants pv ON pv.id = pbi.variant_id
+             LEFT JOIN products p ON p.id = pv.product_id
+             WHERE pbi.bill_id = ?
+             ORDER BY pbi.id",
             [(int)$bill['id']]
         );
         $tagRows = Database::fetchAll(

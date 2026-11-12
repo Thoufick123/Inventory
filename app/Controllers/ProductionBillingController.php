@@ -218,10 +218,18 @@ class ProductionBillingController
             return;
         }
 
+        $requestedFormat = strtolower(trim((string)($_GET['format'] ?? '')));
+        if (!in_array($requestedFormat, ['a4', 'pos'], true)) {
+            $requestedFormat = strtoupper((string)($bill['buyer_type'] ?? 'COMPANY')) === 'CUSTOMER' ? 'pos' : 'a4';
+        }
+
         Response::viewOnly('production.billing.print', [
             'bill' => $bill,
             'billItems' => $this->loadBillItems((int)$bill['id']),
             'sellerCompany' => SettingsService::getGroup('company'),
+            'printFormat' => $requestedFormat,
+            'backUrl' => url('production/billing/view/' . (int)$bill['id']),
+            'printBaseUrl' => url('production/billing/print/' . (int)$bill['id']),
         ]);
     }
 
@@ -363,10 +371,14 @@ class ProductionBillingController
         if ($assignedUnitId === 0) {
             return null;
         }
-        $sql = 'SELECT * FROM production_bills WHERE id = ? AND concern_id = ?';
+        $sql = 'SELECT pb.*, u.full_name AS created_by_name, c.name AS concern_name
+                FROM production_bills pb
+                LEFT JOIN users u ON u.id = pb.created_by
+                LEFT JOIN concerns c ON c.id = pb.concern_id
+                WHERE pb.id = ? AND pb.concern_id = ?';
         $params = [$id, $concernId];
         if ($assignedUnitId !== null) {
-            $sql .= ' AND production_unit_id = ?';
+            $sql .= ' AND pb.production_unit_id = ?';
             $params[] = $assignedUnitId;
         }
         return Database::fetchOne($sql, $params);
@@ -386,8 +398,10 @@ class ProductionBillingController
     {
         $concernId = ConcernTransactionService::activeConcernId();
         $items = Database::fetchAll(
-            "SELECT pbi.*
+            "SELECT pbi.*, p.hsn_code
              FROM production_bill_items pbi
+             LEFT JOIN product_variants pv ON pv.id = pbi.variant_id
+             LEFT JOIN products p ON p.id = pv.product_id
              WHERE pbi.bill_id = ?
              ORDER BY pbi.id",
             [$billId]

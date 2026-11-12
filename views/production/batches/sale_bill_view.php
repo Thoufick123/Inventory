@@ -40,8 +40,11 @@ $printUrl = url(($isReceiver ? 'production/inward/sale-bill/print/' : 'productio
                 <i class="bi bi-bag-plus me-1"></i>Put Purchase Bill in Purchases
             </a>
         <?php endif; ?>
-        <a class="btn btn-dark" target="_blank" rel="noopener" href="<?= $printUrl ?>">
-            <i class="bi bi-printer me-1"></i>Print Sale Bill
+        <a class="btn btn-dark" target="_blank" rel="noopener" href="<?= $printUrl ?>?format=a4">
+            <i class="bi bi-file-earmark-text me-1"></i>Print A4 Bill
+        </a>
+        <a class="btn btn-primary" target="_blank" rel="noopener" href="<?= $printUrl ?>?format=pos">
+            <i class="bi bi-receipt me-1"></i>POS Receipt
         </a>
     </div>
 </div>

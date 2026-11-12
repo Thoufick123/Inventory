@@ -67,7 +67,8 @@
                                     <a class="btn btn-sm btn-outline-secondary" title="Edit" href="<?= url('production/billing/edit/' . (int)$bill['id']) ?>"><i class="bi bi-pencil"></i></a>
                                 <?php endif; ?>
                                 <?php if (hasPermission('production_billing', 'print')): ?>
-                                    <a class="btn btn-sm btn-outline-dark" title="Print" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id']) ?>"><i class="bi bi-printer"></i></a>
+                                    <a class="btn btn-sm btn-outline-dark" title="Print A4 Bill" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id'] . '?format=a4') ?>"><i class="bi bi-printer"></i> A4</a>
+                                    <a class="btn btn-sm btn-outline-success" title="Print POS Receipt" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id'] . '?format=pos') ?>"><i class="bi bi-receipt"></i></a>
                                 <?php endif; ?>
                                 <?php if (!$isBatchBill && hasPermission('production_billing', 'delete')): ?>
                                     <form class="d-inline" method="POST" action="<?= url('production/billing/delete/' . (int)$bill['id']) ?>" onsubmit="return confirm('Delete this bill? Its billed QR pieces will become available again.')">

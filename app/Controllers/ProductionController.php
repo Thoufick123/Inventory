@@ -8070,10 +8070,21 @@ class ProductionController {
             Response::error(404, 'Batch Sale Bill not found for the active concern.');
             return;
         }
+        $bill = $data['bill'];
+        $requestedFormat = strtolower(trim((string)($_GET['format'] ?? '')));
+        if (!in_array($requestedFormat, ['a4', 'pos'], true)) {
+            $requestedFormat = strtoupper((string)($bill['buyer_type'] ?? 'COMPANY')) === 'CUSTOMER' ? 'pos' : 'a4';
+        }
+        $isReceiver = !empty($data['isReceiver']);
+        $backRoute = $isReceiver ? 'production/inward/sale-bill/' : 'production/batches/sale-bill/';
+        $printRoute = $isReceiver ? 'production/inward/sale-bill/print/' : 'production/batches/sale-bill/print/';
         Response::viewOnly('production.billing.print', [
-            'bill' => $data['bill'],
+            'bill' => $bill,
             'billItems' => $data['billItems'],
             'sellerCompany' => SettingsService::getGroup('company'),
+            'printFormat' => $requestedFormat,
+            'backUrl' => url($backRoute . (int)$id),
+            'printBaseUrl' => url($printRoute . (int)$id),
         ]);
     }
 

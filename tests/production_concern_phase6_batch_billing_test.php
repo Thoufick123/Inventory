@@ -675,7 +675,7 @@ final class Database
             $bid = (int)$params[0];
             return array_values(array_filter(self::$batchItems, static fn(array $bi): bool => (int)$bi['production_batch_id'] === $bid));
         }
-        if (str_contains($sql, 'FROM production_bill_items WHERE bill_id = ?')) {
+        if (str_contains($sql, 'FROM production_bill_items') && str_contains($sql, 'bill_id = ?')) {
             $billId = (int)$params[0];
             return array_values(array_filter(self::$billItems, static fn(array $it): bool => (int)$it['bill_id'] === $billId));
         }
@@ -946,5 +946,42 @@ foreach (['schema.sql', 'schema_fresh.sql', 'migrations/hostinger_live_upgrade.s
     assertTrue6(str_contains($content, 'FINISHED_GOODS'), "{$schemaFile} includes FINISHED_GOODS purchase item type");
     assertTrue6(str_contains($content, 'sale_bill_id'), "{$schemaFile} includes production_batches.sale_bill_id");
 }
+
+// =========================================================================
+// 7. Dual Print Format (A4 Tax Invoice + POS Thermal Receipt)
+// =========================================================================
+Session::set('active_concern_id', 1);
+$scanBillId = (int)Database::$batches[$scanBatchId]['sale_bill_id']; // CUSTOMER bill
+$_GET = [];
+Response::reset();
+$billCtrl->printBill((string)$scanBillId);
+assertSame6('pos', Response::$lastView['data']['printFormat'] ?? null, 'CUSTOMER bill print defaults to POS thermal receipt format');
+
+$_GET = ['format' => 'a4'];
+Response::reset();
+$billCtrl->printBill((string)$scanBillId);
+assertSame6('a4', Response::$lastView['data']['printFormat'] ?? null, 'Explicit ?format=a4 switches CUSTOMER bill to A4 Tax Invoice');
+
+$_GET = ['format' => 'pos'];
+Response::reset();
+$billCtrl->printBill((string)$qcBillId); // COMPANY bill
+assertSame6('pos', Response::$lastView['data']['printFormat'] ?? null, 'Explicit ?format=pos renders POS receipt even on COMPANY bills');
+
+ob_start();
+$bill = Response::$lastView['data']['bill'];
+$billItems = Response::$lastView['data']['billItems'];
+$sellerCompany = Response::$lastView['data']['sellerCompany'];
+$printFormat = 'pos';
+$backUrl = Response::$lastView['data']['backUrl'];
+$printBaseUrl = Response::$lastView['data']['printBaseUrl'];
+include BASE_PATH . '/views/production/billing/print.php';
+$posHtml = ob_get_clean();
+assertTrue6(str_contains($posHtml, 'Net Amount') && str_contains($posHtml, 'Taxable Base:') && str_contains($posHtml, 'Visit Again'), 'POS receipt view renders expected thermal summary & footer');
+
+ob_start();
+$printFormat = 'a4';
+include BASE_PATH . '/views/production/billing/print.php';
+$a4Html = ob_get_clean();
+assertTrue6(str_contains($a4Html, 'TAX INVOICE') && str_contains($a4Html, 'Taxable subtotal'), 'A4 view renders full Tax Invoice layout');
 
 echo "PASS: Phase 6 Inter-Concern Batch Billing, QR Scan Mode, Cross-Concern Sale Bill & Receiving Purchase Bill checks passed.\n";
