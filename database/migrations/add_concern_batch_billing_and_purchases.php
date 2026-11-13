@@ -231,6 +231,32 @@ try {
         }
     }
 
+    if ($tableExists('permissions')) {
+        Database::execute(
+            "INSERT INTO permissions (module, action, description, slug, created_at)
+             VALUES ('production_billing', 'print', 'Print production tax invoices and POS receipts', 'production_billing.print', NOW())
+             ON DUPLICATE KEY UPDATE description = VALUES(description), slug = VALUES(slug)"
+        );
+        if ($tableExists('role_permissions')) {
+            Database::execute(
+                "INSERT IGNORE INTO role_permissions (role_id, permission_id)
+                 SELECT rp.role_id, p_print.id
+                 FROM role_permissions rp
+                 JOIN permissions p_view ON p_view.id = rp.permission_id AND p_view.module = 'production_billing' AND p_view.action = 'view'
+                 JOIN permissions p_print ON p_print.module = 'production_billing' AND p_print.action = 'print'"
+            );
+        }
+        if ($tableExists('user_permissions')) {
+            Database::execute(
+                "INSERT IGNORE INTO user_permissions (user_id, permission_id)
+                 SELECT up.user_id, p_print.id
+                 FROM user_permissions up
+                 JOIN permissions p_view ON p_view.id = up.permission_id AND p_view.module = 'production_billing' AND p_view.action = 'view'
+                 JOIN permissions p_print ON p_print.module = 'production_billing' AND p_print.action = 'print'"
+            );
+        }
+    }
+
     echo "Phase 6 batch billing, per-concern tag uniqueness, and inter-concern purchase schema updates applied.\n";
 } catch (Throwable $e) {
     fwrite(STDERR, 'Phase 6 migration failed: ' . $e->getMessage() . PHP_EOL);

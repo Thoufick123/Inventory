@@ -16,7 +16,7 @@
         <?php elseif (hasPermission('production_billing', 'edit')): ?>
             <a class="btn btn-outline-primary" href="<?= url('production/billing/edit/' . (int)$bill['id']) ?>"><i class="bi bi-pencil me-1"></i>Edit</a>
         <?php endif; ?>
-        <?php if (hasPermission('production_billing', 'print')): ?>
+        <?php if (hasPermission('production_billing', 'print') || hasPermission('production_billing', 'view')): ?>
             <a class="btn btn-dark" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id'] . '?format=a4') ?>"><i class="bi bi-file-earmark-text me-1"></i>A4 Bill</a>
             <a class="btn btn-primary" target="_blank" href="<?= url('production/billing/print/' . (int)$bill['id'] . '?format=pos') ?>"><i class="bi bi-receipt me-1"></i>POS Receipt</a>
         <?php endif; ?>

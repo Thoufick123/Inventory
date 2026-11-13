@@ -759,7 +759,7 @@ class Router {
         $this->get('production/billing/edit/{id}', 'ProductionBillingController', 'editBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'edit']]);
         $this->post('production/billing/update/{id}', 'ProductionBillingController', 'updateBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'edit']]);
         $this->post('production/billing/delete/{id}', 'ProductionBillingController', 'deleteBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'delete']]);
-        $this->get('production/billing/print/{id}', 'ProductionBillingController', 'printBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'print']]);
+        $this->get('production/billing/print/{id}', 'ProductionBillingController', 'printBill', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing', 'view']]);
         $this->get('api/production/billing/search', 'ProductionBillingController', 'searchInventory', ['AuthMiddleware']);
         $this->get('production/billing/returns', 'ProductionBillingController', 'returnsIndex', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'view']]);
         $this->get('production/billing/returns/lookup', 'ProductionBillingController', 'returnsLookup', ['AuthMiddleware', ['PermissionMiddleware', 'production_billing_returns', 'view']]);

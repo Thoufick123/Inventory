@@ -479,6 +479,8 @@ class Role {
         foreach ($permissions as $action => $permission) {
             if ($action === 'receive' && ($permission['module'] ?? '') === 'production_inward') {
                 $columns['create'][$action] = $permission;
+            } elseif ($action === 'print') {
+                $columns['view'][$action] = $permission;
             } elseif (isset($columns[$action])) {
                 $columns[$action][$action] = $permission;
             }
@@ -488,7 +490,7 @@ class Role {
     }
 
     /**
-     * Keep valid CRUD permissions and the Production Inward receive action.
+     * Keep valid CRUD permissions (plus print) and the Production Inward receive action.
      */
     public static function filterCrudPermissionIds(array $permissionIds): array {
         $permissionIds = array_values(array_unique(array_filter(
@@ -503,7 +505,7 @@ class Role {
         $rows = Database::fetchAll(
             "SELECT id FROM permissions
              WHERE id IN ($placeholders)
-               AND (action IN ('view', 'create', 'edit', 'delete')
+               AND (action IN ('view', 'create', 'edit', 'delete', 'print')
                     OR (module = 'production_inward' AND action = 'receive'))",
             $permissionIds
         );

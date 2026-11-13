@@ -984,4 +984,18 @@ include BASE_PATH . '/views/production/billing/print.php';
 $a4Html = ob_get_clean();
 assertTrue6(str_contains($a4Html, 'TAX INVOICE') && str_contains($a4Html, 'Taxable subtotal'), 'A4 view renders full Tax Invoice layout');
 
+// Check Scan QR all=1 endpoint returns empty cleanly when inventory exhausted or returns matching items
+$_GET = ['all' => '1'];
+Response::reset();
+$prodCtrl->searchBatchInventoryAjax();
+assertTrue6(Response::$lastJson !== null && !empty(Response::$lastJson['success']), 'searchBatchInventoryAjax handles all=1 cleanly');
+
+// Check Role CRUD column mapping & filter preserves print alongside receive
+require_once BASE_PATH . '/app/Models/Role.php';
+$mappedCrud = Role::getCrudPermissionsByAction([
+    'view' => ['id' => 1, 'module' => 'production_billing', 'action' => 'view'],
+    'print' => ['id' => 2, 'module' => 'production_billing', 'action' => 'print'],
+]);
+assertSame6(2, $mappedCrud['view']['print']['id'] ?? null, 'Role matrix exposes print permission under view column');
+
 echo "PASS: Phase 6 Inter-Concern Batch Billing, QR Scan Mode, Cross-Concern Sale Bill & Receiving Purchase Bill checks passed.\n";

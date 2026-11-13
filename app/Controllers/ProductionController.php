@@ -8002,11 +8002,16 @@ class ProductionController {
     public function searchBatchInventoryAjax(): void {
         try {
             $query = trim((string)($_GET['q'] ?? ''));
-            if ($query === '') {
+            $showAll = !empty($_GET['all']) && (string)$_GET['all'] !== '0';
+            if ($query === '' && !$showAll) {
                 Response::json(['success' => true, 'data' => ['items' => []]]);
                 return;
             }
             $items = ProductionBillingService::getAvailableInventory(0);
+            if ($query === '' && $showAll) {
+                Response::json(['success' => true, 'data' => ['items' => array_slice($items, 0, 25)]]);
+                return;
+            }
             $needle = strtoupper($query);
             $matches = [];
             foreach ($items as $item) {

@@ -372,8 +372,11 @@ $defaultBillingOn = $sourceMode === 'scan';
                             <div class="input-group">
                                 <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
                                 <input type="search" id="scanSearchInput" class="form-control" placeholder="Scan QR code and press Enter, or type product name / SKU..." autocomplete="off">
-                                <button type="button" class="btn btn-primary" onclick="runBatchScanSearch()">
+                                <button type="button" class="btn btn-primary" onclick="runBatchScanSearch(false)">
                                     <i class="bi bi-search me-1"></i>Search
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" onclick="runBatchScanSearch(true)">
+                                    <i class="bi bi-list-ul me-1"></i>Show Available
                                 </button>
                             </div>
                             <div class="small text-muted mt-1">Scanning an exact QR code adds it automatically; searching by product or SKU lets you add one or multiple available QR pieces.</div>
@@ -962,17 +965,24 @@ function getAllScannedTagsSet() {
     return set;
 }
 
-function runBatchScanSearch() {
+function runBatchScanSearch(showAll = false) {
     const input = document.getElementById('scanSearchInput');
-    const q = input?.value.trim() || '';
+    const q = showAll ? '' : (input?.value.trim() || '');
     const box = document.getElementById('scanSearchResults');
-    if (!q || !box) {
+    if ((!q && !showAll) || !box) {
         if (box) box.innerHTML = '';
         return;
     }
-    box.innerHTML = '<div class="small text-muted py-1"><span class="spinner-border spinner-border-sm me-1"></span>Searching inventory...</div>';
+    if (showAll && input) {
+        input.value = '';
+    }
+    box.innerHTML = '<div class="small text-muted py-1"><span class="spinner-border spinner-border-sm me-1"></span>Loading available inventory...</div>';
 
-    fetch(BATCH_SCAN_URL + '?q=' + encodeURIComponent(q), { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    const queryUrl = showAll
+        ? (BATCH_SCAN_URL + '?all=1')
+        : (BATCH_SCAN_URL + '?q=' + encodeURIComponent(q));
+
+    fetch(queryUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
         .then(r => r.json())
         .then(payload => {
             if (!payload.success) {
@@ -982,32 +992,37 @@ function runBatchScanSearch() {
             const already = getAllScannedTagsSet();
 
             // Exact single tag scan: add immediately without forcing another click
-            const upperQ = q.toUpperCase();
-            let exactItem = null;
-            let exactTag = null;
-            items.forEach(item => {
-                (item.available_tags || []).forEach(tag => {
-                    if (String(tag).toUpperCase() === upperQ) {
-                        exactItem = item;
-                        exactTag = String(tag).toUpperCase();
-                    }
+            if (q !== '') {
+                const upperQ = q.toUpperCase();
+                let exactItem = null;
+                let exactTag = null;
+                items.forEach(item => {
+                    (item.available_tags || []).forEach(tag => {
+                        if (String(tag).toUpperCase() === upperQ) {
+                            exactItem = item;
+                            exactTag = String(tag).toUpperCase();
+                        }
+                    });
                 });
-            });
 
-            if (exactItem && exactTag) {
-                if (!already.has(exactTag)) {
-                    addScanTagsToCart(exactItem, [exactTag]);
-                    input.value = '';
-                    box.innerHTML = `<div class="alert alert-success py-1 px-2 small mb-0"><i class="bi bi-check-circle me-1"></i>Added QR <strong>${escapeHtml(exactTag)}</strong> (${escapeHtml(exactItem.product_name)})</div>`;
-                } else {
-                    input.select();
-                    box.innerHTML = `<div class="alert alert-warning py-1 px-2 small mb-0">QR <strong>${escapeHtml(exactTag)}</strong> is already in your pack list.</div>`;
+                if (exactItem && exactTag) {
+                    if (!already.has(exactTag)) {
+                        addScanTagsToCart(exactItem, [exactTag]);
+                        input.value = '';
+                        box.innerHTML = `<div class="alert alert-success py-1 px-2 small mb-0"><i class="bi bi-check-circle me-1"></i>Added QR <strong>${escapeHtml(exactTag)}</strong> (${escapeHtml(exactItem.product_name)})</div>`;
+                    } else {
+                        input.select();
+                        box.innerHTML = `<div class="alert alert-warning py-1 px-2 small mb-0">QR <strong>${escapeHtml(exactTag)}</strong> is already in your pack list.</div>`;
+                    }
+                    return;
                 }
-                return;
             }
 
             if (items.length === 0) {
-                box.innerHTML = '<div class="alert alert-secondary py-2 px-3 small mb-0">No available unsold/undamaged QR pieces matched your search.</div>';
+                const emptyText = showAll
+                    ? 'No available unsold/undamaged QR pieces found in the active concern right now.'
+                    : 'No available unsold/undamaged QR pieces matched your search in the active concern.';
+                box.innerHTML = `<div class="alert alert-secondary py-2 px-3 small mb-0">${emptyText}</div>`;
                 return;
             }
 
@@ -1052,7 +1067,8 @@ function addSingleSearchTag(itemIdx, tag) {
     const item = window._scanSearchItems?.[itemIdx];
     if (!item) return;
     addScanTagsToCart(item, [tag]);
-    runBatchScanSearch();
+    const hasQuery = Boolean(document.getElementById('scanSearchInput')?.value.trim());
+    runBatchScanSearch(!hasQuery);
 }
 
 function addAllSearchTags(itemIdx) {
@@ -1063,7 +1079,8 @@ function addAllSearchTags(itemIdx) {
     if (free.length > 0) {
         addScanTagsToCart(item, free);
     }
-    runBatchScanSearch();
+    const hasQuery = Boolean(document.getElementById('scanSearchInput')?.value.trim());
+    runBatchScanSearch(!hasQuery);
 }
 
 function addScanTagsToCart(item, tagsToAdd) {
@@ -1252,9 +1269,10 @@ document.addEventListener('DOMContentLoaded', function() {
         scanInput.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                runBatchScanSearch();
+                runBatchScanSearch(false);
             }
         });
+        runBatchScanSearch(true);
     }
 
     const form = document.getElementById('packBatchForm');

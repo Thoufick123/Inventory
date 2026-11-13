@@ -685,10 +685,23 @@ VALUES
   ('production_cash', 'view', 'View production-unit cash flow and shift records', 'production_cash.view', NOW()),
   ('production_cash', 'create', 'Open shifts and record production cash movements', 'production_cash.create', NOW()),
   ('production_cash', 'close_shift', 'Close and reconcile a production cash shift', 'production_cash.close_shift', NOW()),
-  ('production_cash', 'voucher', 'View and print production cash vouchers', 'production_cash.voucher', NOW())
+  ('production_cash', 'voucher', 'View and print production cash vouchers', 'production_cash.voucher', NOW()),
+  ('production_billing', 'print', 'Print production tax invoices and POS receipts', 'production_billing.print', NOW())
 ON DUPLICATE KEY UPDATE
   `description` = VALUES(`description`),
   `slug` = VALUES(`slug`);
+
+INSERT IGNORE INTO `role_permissions` (`role_id`, `permission_id`)
+SELECT rp.role_id, p_print.id
+FROM `role_permissions` rp
+JOIN `permissions` p_view ON p_view.id = rp.permission_id AND p_view.module = 'production_billing' AND p_view.action = 'view'
+JOIN `permissions` p_print ON p_print.module = 'production_billing' AND p_print.action = 'print';
+
+INSERT IGNORE INTO `user_permissions` (`user_id`, `permission_id`)
+SELECT up.user_id, p_print.id
+FROM `user_permissions` up
+JOIN `permissions` p_view ON p_view.id = up.permission_id AND p_view.module = 'production_billing' AND p_view.action = 'view'
+JOIN `permissions` p_print ON p_print.module = 'production_billing' AND p_print.action = 'print';
 
 -- ----------------------------------------------------------------------------
 -- 10. Phase 6 Workflows: Batch Sale Billing, Scan Mode & Concern Purchase Bills
